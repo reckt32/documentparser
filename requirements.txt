@@ -1,4 +1,6 @@
 Flask
+gunicorn
+pdfplumber
 pandas
 openai
 python-dotenv
