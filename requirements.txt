@@ -1,0 +1,8 @@
+Flask
+pandas
+openai
+python-dotenv
+Flask-Cors
+reportlab
+Flask-Login
+PyMuPDF
