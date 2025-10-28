@@ -7,6 +7,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import os
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 import io
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Frame, PageTemplate
@@ -23,6 +24,9 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+# Respect reverse proxy headers on Render (scheme/host) for correct external URLs
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+app.config['PREFERRED_URL_SCHEME'] = 'https'
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 OUTPUT_DIR = 'output'
@@ -1254,6 +1258,10 @@ def financial_health_analyze():
 def serve_index():
     return send_from_directory('.', 'index.html')
 
+@app.route('/healthz', methods=['GET'])
+def healthz():
+    return jsonify({"status": "ok"}), 200
+
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -1667,5 +1675,6 @@ def generate_pdf_summary(summary_data, output_path):
 
 # --- Main Execution ---
 if __name__ == '__main__':
-    # Use 0.0.0.0 to make it accessible on the network
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Use 0.0.0.0 to make it accessible on the network; respect PORT for Render
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
