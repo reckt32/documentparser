@@ -97,6 +97,104 @@ def init_db():
     _exec("CREATE INDEX IF NOT EXISTS idx_sections_doc_page ON sections(document_id, page_number, y_top)")
     _exec("CREATE INDEX IF NOT EXISTS idx_metrics_doc_key ON metrics(document_id, key)")
 
+    # Questionnaire: core container
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS questionnaires (
+          id INTEGER PRIMARY KEY,
+          user_id TEXT,
+          status TEXT, -- in_progress | completed | archived
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    _exec("CREATE INDEX IF NOT EXISTS idx_questionnaires_user ON questionnaires(user_id, created_at)")
+
+    # Questionnaire sections (normalized per section, JSON blob per row)
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS personal_info (
+          questionnaire_id INTEGER PRIMARY KEY,
+          data_json TEXT NOT NULL,
+          FOREIGN KEY(questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE
+        )
+        """
+    )
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS family_info (
+          questionnaire_id INTEGER PRIMARY KEY,
+          data_json TEXT NOT NULL,
+          FOREIGN KEY(questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE
+        )
+        """
+    )
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS goals (
+          questionnaire_id INTEGER PRIMARY KEY,
+          data_json TEXT NOT NULL,
+          FOREIGN KEY(questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE
+        )
+        """
+    )
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS risk_profile (
+          questionnaire_id INTEGER PRIMARY KEY,
+          data_json TEXT NOT NULL,
+          FOREIGN KEY(questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE
+        )
+        """
+    )
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS insurance (
+          questionnaire_id INTEGER PRIMARY KEY,
+          data_json TEXT NOT NULL,
+          FOREIGN KEY(questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE
+        )
+        """
+    )
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS estate (
+          questionnaire_id INTEGER PRIMARY KEY,
+          data_json TEXT NOT NULL,
+          FOREIGN KEY(questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE
+        )
+        """
+    )
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS lifestyle (
+          questionnaire_id INTEGER PRIMARY KEY,
+          data_json TEXT NOT NULL,
+          FOREIGN KEY(questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    # Link uploaded docs to questionnaire
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS questionnaire_uploads (
+          id INTEGER PRIMARY KEY,
+          questionnaire_id INTEGER NOT NULL,
+          document_id INTEGER,
+          sha256 TEXT,
+          doc_type TEXT,    -- Bank statement | ITR | Insurance document | Mutual fund CAS...
+          filename TEXT,
+          metadata_json TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE,
+          FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE SET NULL
+        )
+        """
+    )
+    _exec("CREATE INDEX IF NOT EXISTS idx_q_uploads_qid ON questionnaire_uploads(questionnaire_id)")
+
 
 def upsert_document(sha256: str, filename: str, page_count: int) -> int:
     rows = _query("SELECT id FROM documents WHERE sha256=?", (sha256,))
@@ -197,6 +295,108 @@ def list_metrics(document_id: int):
         (document_id,),
     )
 
+
+# Questionnaire helpers
+
+def create_questionnaire(user_id: str, status: str = "in_progress") -> int:
+    cur = _exec(
+        "INSERT INTO questionnaires (user_id, status) VALUES (?, ?)",
+        (user_id, status),
+    )
+    return cur.lastrowid
+
+def update_questionnaire_status(qid: int, status: str):
+    _exec(
+        "UPDATE questionnaires SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (status, qid),
+    )
+
+def _upsert_section(table: str, questionnaire_id: int, data: Dict[str, Any]):
+    payload = json.dumps(data or {})
+    # Try insert, if conflict then update (SQLite UPSERT)
+    _exec(
+        f"""
+        INSERT INTO {table} (questionnaire_id, data_json)
+        VALUES (?, ?)
+        ON CONFLICT(questionnaire_id) DO UPDATE SET
+          data_json=excluded.data_json
+        """,
+        (questionnaire_id, payload),
+    )
+
+def save_personal_info(qid: int, data: Dict[str, Any]): _upsert_section("personal_info", qid, data)
+def save_family_info(qid: int, data: Dict[str, Any]): _upsert_section("family_info", qid, data)
+def save_goals(qid: int, data: Dict[str, Any]): _upsert_section("goals", qid, data)
+def save_risk_profile(qid: int, data: Dict[str, Any]): _upsert_section("risk_profile", qid, data)
+def save_insurance(qid: int, data: Dict[str, Any]): _upsert_section("insurance", qid, data)
+def save_estate(qid: int, data: Dict[str, Any]): _upsert_section("estate", qid, data)
+def save_lifestyle(qid: int, data: Dict[str, Any]): _upsert_section("lifestyle", qid, data)
+
+def get_questionnaire(qid: int) -> Dict[str, Any]:
+    # base row
+    rows = _query("SELECT id, user_id, status, created_at, updated_at FROM questionnaires WHERE id=?", (qid,))
+    if not rows:
+        return {}
+    base = dict(rows[0])
+
+    def _fetch_section(table: str) -> Optional[Dict[str, Any]]:
+        srows = _query(f"SELECT data_json FROM {table} WHERE questionnaire_id=?", (qid,))
+        if not srows:
+            return None
+        try:
+            return json.loads(srows[0]["data_json"] or "{}")
+        except Exception:
+            return None
+
+    return {
+        "id": base["id"],
+        "user_id": base["user_id"],
+        "status": base["status"],
+        "created_at": base["created_at"],
+        "updated_at": base["updated_at"],
+        "personal_info": _fetch_section("personal_info"),
+        "family_info": _fetch_section("family_info"),
+        "goals": _fetch_section("goals"),
+        "risk_profile": _fetch_section("risk_profile"),
+        "insurance": _fetch_section("insurance"),
+        "estate": _fetch_section("estate"),
+        "lifestyle": _fetch_section("lifestyle"),
+    }
+
+def get_latest_questionnaire_for_user(user_id: str) -> Optional[int]:
+    rows = _query(
+        "SELECT id FROM questionnaires WHERE user_id=? ORDER BY created_at DESC LIMIT 1",
+        (user_id,),
+    )
+    return rows[0]["id"] if rows else None
+
+def link_questionnaire_upload(
+    questionnaire_id: int,
+    document_id: Optional[int],
+    sha256: Optional[str],
+    doc_type: Optional[str],
+    filename: Optional[str],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> int:
+    cur = _exec(
+        """
+        INSERT INTO questionnaire_uploads (questionnaire_id, document_id, sha256, doc_type, filename, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (questionnaire_id, document_id, sha256, doc_type, filename, json.dumps(metadata or {})),
+    )
+    return cur.lastrowid
+
+def list_questionnaire_uploads(questionnaire_id: int):
+    return _query(
+        """
+        SELECT id, questionnaire_id, document_id, sha256, doc_type, filename, metadata_json, created_at
+        FROM questionnaire_uploads
+        WHERE questionnaire_id=?
+        ORDER BY created_at DESC
+        """,
+        (questionnaire_id,),
+    )
 
 # Initialize schema on import
 init_db()

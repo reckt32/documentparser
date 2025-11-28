@@ -1,0 +1,10 @@
+{
+  "transactions": [],
+  "totals": {
+    "total_inflows": 0,
+    "total_outflows": 0,
+    "opening_balance": null,
+    "closing_balance": null,
+    "count": 0
+  }
+}

@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, url_for, send_from_directory
+from flask import Flask, request, jsonify, url_for, send_from_directory, send_file
 import fitz  # PyMuPDF
 import pdfplumber
 import re
@@ -18,7 +18,24 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from datetime import datetime
 from reportlab.pdfgen import canvas
 from extractors import index_and_extract
-from db import list_sections, list_metrics, get_document_by_sha
+from db import (
+    list_sections,
+    list_metrics,
+    get_document_by_sha,
+    create_questionnaire,
+    update_questionnaire_status,
+    save_personal_info,
+    save_family_info,
+    save_goals,
+    save_risk_profile,
+    save_insurance,
+    save_estate,
+    save_lifestyle,
+    get_questionnaire,
+    get_latest_questionnaire_for_user,
+    link_questionnaire_upload,
+    list_questionnaire_uploads,
+)
 # --- Initialization ---
 load_dotenv()
 
@@ -27,11 +44,27 @@ CORS(app)
 # Respect reverse proxy headers on Render (scheme/host) for correct external URLs
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 app.config['PREFERRED_URL_SCHEME'] = 'https'
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
+    raise RuntimeError("OPENAI_API_KEY is not set")
+client = OpenAI(api_key=openai_api_key)
 
-OUTPUT_DIR = 'output'
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Storage behavior:
+# STORE_REPORTS = "disk" (default) -> write to OUTPUT_DIR and serve via /download/<file>
+# STORE_REPORTS = "memory" -> do not persist; generate to disk, read once, delete, and offer one-time memory download via /download-temp/<token>
+STORE_REPORTS = os.getenv("STORE_REPORTS", "disk").lower()
+# SAVE_TX_JSON = "true"/"false" -> whether to persist extracted bank tx JSON artifacts
+SAVE_TX_JSON = os.getenv("SAVE_TX_JSON", "false").lower() == "true"
+# Simple in-memory store for ephemeral downloads
+TEMP_REPORTS = {}
+
+def _register_temp_download(data: bytes, filename: str, mimetype: str = "application/pdf") -> str:
+    token = os.urandom(16).hex()
+    TEMP_REPORTS[token] = (filename, data, mimetype)
+    return token
 
 # --- Utility Function for Cleaning Numbers ---
 def clean_and_convert_to_float(value_str):
@@ -53,7 +86,34 @@ def clean_and_convert_to_float(value_str):
     except (ValueError, TypeError):
         return "N/A"
 
-
+# PDF text sanitization helper to avoid unsupported glyphs
+def sanitize_pdf_text(s):
+    try:
+        if s is None:
+            return ""
+        t = str(s)
+        # Normalize common unicode symbols to ASCII
+        t = (t.replace("•", "-")
+               .replace("–", "-")
+               .replace("—", "-")
+               .replace("×", "x")
+               .replace("₹", "Rs.")
+               .replace("“", '"')
+               .replace("”", '"')
+               .replace("’", "'")
+               .replace("‘", "'")
+               .replace("≈", "~"))
+        # Remove non-printable/non-ASCII chars (preserve tab/newline/carriage return + printable ASCII 0x20-0x7E)
+        t = re.sub(r"[^\t\n\r -~]", "", t)
+        # Collapse repeated dashes from earlier bullet normalization
+        t = re.sub(r"-{2,}", "-", t)
+        # Soft-break very long unbroken tokens to allow wrapping in PDF tables/paras
+        t = re.sub(r"([A-Za-z0-9:/\.\-_]{30})(?=[A-Za-z0-9:/\.\-_])", r"\1 ", t)
+        # Collapse whitespace
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+    except Exception:
+        return str(s) if s is not None else ""
 # --- Helpers for Dates and Header Normalization ---
 def _normalize_header(h):
     if not h:
@@ -104,7 +164,6 @@ def _normalize_header(h):
         return "balance"
     return h
 
-
 def _parse_date(s):
     if not s:
         return None
@@ -128,7 +187,6 @@ def _parse_date(s):
     except Exception:
         pass
     return None
-
 
 def _to_float_or_none(x):
     v = clean_and_convert_to_float(x)
@@ -220,7 +278,6 @@ def _extract_investment_snapshot(text):
 
     filtered = {k: v for k, v in fields.items() if v is not None}
     return filtered or None
-
 
 # --- Bank Statement Structured Extraction ---
 def extract_bank_statement_transactions(file_like):
@@ -891,7 +948,6 @@ def extract_mutual_fund_cas_hybrid(text):
 
     return data
 
-
 def extract_structured_text_with_tables(file_stream):
     """
     Extracts structured text and tables from a PDF file stream using pdfplumber.
@@ -937,7 +993,6 @@ def extract_structured_text_with_tables(file_stream):
     except Exception as e:
         print(f"Error in extract_structured_text_with_tables: {e}")
         raise
-
 
 # --- Financial Health Analysis Helpers ---
 
@@ -1096,6 +1151,287 @@ def compute_ihs(savings_percent, current_products, allocation):
         }
     }
 
+# --- Advanced Risk Logic Engine (Phases 1–3) ---
+
+_RISK_CATEGORIES = [
+    "Ultra Conservative",
+    "Conservative",
+    "Moderate",
+    "Growth",
+    "Aggressive",
+    "Very Aggressive",
+]
+
+_RISK_EQUITY_BANDS = {
+    "Ultra Conservative": (0, 25),
+    "Conservative": (25, 40),
+    "Moderate": (40, 55),
+    "Growth": (55, 70),
+    "Aggressive": (70, 85),
+    "Very Aggressive": (85, 95),
+}
+
+def _tenure_limit_category(years):
+    if years is None:
+        return "Moderate"
+    try:
+        y = float(years)
+    except Exception:
+        return "Moderate"
+    if y < 3:
+        return "Conservative"
+    if 3 <= y < 5:
+        return "Moderate"
+    if 5 <= y < 7:
+        return "Growth"
+    if 7 <= y < 10:
+        return "Aggressive"
+    return "Very Aggressive"
+
+def _score_to_category(score):
+    if score < 1.8:
+        return "Ultra Conservative"
+    if score < 2.4:
+        return "Conservative"
+    if score < 3.2:
+        return "Moderate"
+    if score < 4.0:
+        return "Growth"
+    if score < 4.6:
+        return "Aggressive"
+    return "Very Aggressive"
+
+def _bucket_loss_tolerance(percent):
+    if percent is None:
+        return 2
+    p = max(0.0, float(percent))
+    if p <= 5: return 1
+    if p <= 10: return 2
+    if p <= 15: return 3
+    if p <= 25: return 4
+    if p <= 35: return 5
+    return 6
+
+def _bucket_savings(percent):
+    if percent is None:
+        return 2
+    p = max(0.0, float(percent))
+    if p < 10: return 1
+    if p < 20: return 2
+    if p < 30: return 3
+    if p < 40: return 4
+    return 5
+
+def _bucket_income_stability(label):
+    if not label:
+        return 3
+    mapping = {
+        "very unstable": 1,
+        "unstable": 2,
+        "average": 3,
+        "stable": 4,
+        "very stable": 5,
+    }
+    return mapping.get(label.strip().lower(), 3)
+
+def _bucket_emergency_fund(months):
+    if months is None:
+        return 2
+    m = max(0.0, float(months))
+    if m < 1: return 1
+    if m < 3: return 2
+    if m < 6: return 3
+    if m < 12: return 4
+    return 5
+
+def _bucket_behavior(label):
+    if not label:
+        return 3
+    mapping = {
+        "sell": 1,
+        "reduce": 2,
+        "hold": 3,
+        "buy": 4,
+        "aggressive buy": 5,
+        "aggressive_buy": 5,
+    }
+    return mapping.get(label.strip().lower(), 3)
+
+def _category_index(cat):
+    try:
+        return _RISK_CATEGORIES.index(cat)
+    except Exception:
+        return _RISK_CATEGORIES.index("Moderate")
+
+def _index_to_category(idx):
+    idx = max(0, min(len(_RISK_CATEGORIES) - 1, idx))
+    return _RISK_CATEGORIES[idx]
+
+def compute_advanced_risk(payload, age):
+    risk = (payload.get("risk") or {})
+    goals = (payload.get("goals") or {})
+    lifestyle = (payload.get("savings") or {})
+    investments = (payload.get("investments") or {})
+    allocation = investments.get("allocation") or {}
+
+    tenure_years = risk.get("goal_tenure_years") or risk.get("primary_horizon_years")
+    if tenure_years is None:
+        horizon_text = risk.get("primary_horizon")
+        if isinstance(horizon_text, str):
+            ht = horizon_text.lower()
+            if ht.startswith("short"):
+                tenure_years = 3
+            elif ht.startswith("med"):
+                tenure_years = 5
+            else:
+                tenure_years = 10
+    try:
+        tenure_years = float(tenure_years) if tenure_years not in (None, "") else None
+    except Exception:
+        tenure_years = None
+
+    flexibility = risk.get("goal_flexibility") or goals.get("flexibility")
+    importance = risk.get("goal_importance") or goals.get("importance")
+    behavior = risk.get("behavior")
+    loss_pct = risk.get("loss_tolerance_percent")
+    try:
+        loss_pct = float(loss_pct) if loss_pct not in (None, "") else None
+    except Exception:
+        loss_pct = None
+    savings_percent = lifestyle.get("savingsPercent") or lifestyle.get("savings_percent")
+    try:
+        savings_percent = float(savings_percent) if savings_percent not in (None, "") else None
+    except Exception:
+        savings_percent = None
+    income_stability = risk.get("income_stability")
+    emergency_months = risk.get("emergency_fund_months")
+    if emergency_months in (None, ""):
+        ef_amt = payload.get("emergencyFundAmount")
+        mexp = (payload.get("income") or {}).get("monthlyExpenses")
+        try:
+            ef_amt_f = float(ef_amt) if ef_amt not in (None, "") else None
+            mexp_f = float(mexp) if mexp not in (None, "") else None
+            if ef_amt_f and mexp_f and mexp_f > 0:
+                emergency_months = ef_amt_f / mexp_f
+        except Exception:
+            emergency_months = None
+    try:
+        emergency_months = float(emergency_months) if emergency_months not in (None, "") else None
+    except Exception:
+        emergency_months = None
+
+    tenure_limit = _tenure_limit_category(tenure_years)
+
+    b_behavior = _bucket_behavior(behavior)
+    b_loss = _bucket_loss_tolerance(loss_pct)
+    b_savings = _bucket_savings(savings_percent)
+    b_income = _bucket_income_stability(income_stability)
+    b_emergency = _bucket_emergency_fund(emergency_months)
+
+    score = (b_behavior * 0.25) + (b_loss * 0.25) + (b_savings * 0.20) + (b_income * 0.15) + (b_emergency * 0.15)
+    appetite_category = _score_to_category(score)
+
+    baseline_category = _index_to_category(min(_category_index(appetite_category), _category_index(tenure_limit)))
+    adjustments = []
+
+    def _goal_adj(value, mapping):
+        if not value:
+            return 0
+        return mapping.get(str(value).strip().lower(), 0)
+
+    flex_adj = _goal_adj(flexibility, {"critical": -1, "fixed": 0, "flexible": 1})
+    imp_adj = _goal_adj(importance, {"essential": -1, "important": 0, "lifestyle": 1})
+    net_goal_adj = flex_adj + imp_adj
+    if net_goal_adj != 0:
+        new_idx = _category_index(baseline_category) + net_goal_adj
+        new_cat = _index_to_category(new_idx)
+        if _category_index(new_cat) > _category_index(tenure_limit):
+            if flex_adj == 1 and imp_adj == 1 and net_goal_adj == 2:
+                new_cat = _index_to_category(_category_index(tenure_limit) + 1)
+            else:
+                new_cat = tenure_limit
+        adjustments.append(f"GoalAdjustment: {baseline_category} -> {new_cat} (net {net_goal_adj})")
+        baseline_category = new_cat
+
+    equity_pct = None
+    try:
+        eq_raw = allocation.get("equity")
+        equity_pct = float(eq_raw) if eq_raw not in (None, "") else None
+    except Exception:
+        equity_pct = None
+
+    if equity_pct is not None:
+        band = _RISK_EQUITY_BANDS.get(baseline_category)
+        if band:
+            band_min, band_max = band
+            nearest_edge_dist = 0
+            if equity_pct < band_min:
+                nearest_edge_dist = band_min - equity_pct
+            elif equity_pct > band_max:
+                nearest_edge_dist = equity_pct - band_max
+            if nearest_edge_dist > 20:
+                forced = "Moderate"
+                if _category_index(baseline_category) > _category_index(forced):
+                    adjustments.append(f"PortfolioForce: {baseline_category} -> {forced} (drift {nearest_edge_dist:.1f}pp)")
+                    baseline_category = forced
+            else:
+                if equity_pct > (band_max + 10):
+                    new_cat = _index_to_category(_category_index(baseline_category) - 1)
+                    adjustments.append(f"PortfolioDowngrade: equity {equity_pct:.1f}% > {band_max + 10}%")
+                    baseline_category = new_cat
+                elif equity_pct < (band_min - 10):
+                    if _category_index(baseline_category) < _category_index(tenure_limit):
+                        new_cat = _index_to_category(_category_index(baseline_category) + 1)
+                        if _category_index(new_cat) > _category_index(tenure_limit):
+                            new_cat = tenure_limit
+                        adjustments.append(f"PortfolioUpgrade: equity {equity_pct:.1f}% < {band_min - 10}%")
+                        baseline_category = new_cat
+
+    final_category = baseline_category
+    if _category_index(final_category) > _category_index(tenure_limit):
+        final_category = tenure_limit
+
+    final_band = _RISK_EQUITY_BANDS.get(final_category)
+    band_mid = None
+    if final_band:
+        band_mid = round((final_band[0] + final_band[1]) / 2, 1)
+
+    reasoning_parts = [
+        f"Score {score:.2f} -> Appetite {appetite_category}",
+        f"Tenure limit {tenure_limit}",
+        f"Baseline after adjustments {baseline_category}",
+    ]
+    if adjustments:
+        reasoning_parts.append("Adjustments: " + "; ".join(adjustments))
+    reasoning_parts.append(f"Final {final_category}")
+    reasoning_text = " | ".join(reasoning_parts)
+
+    return {
+        "score": round(score, 2),
+        "tenureLimitCategory": tenure_limit,
+        "appetiteCategory": appetite_category,
+        "baselineCategory": baseline_category,
+        "finalCategory": final_category,
+        "adjustmentsApplied": adjustments,
+        "recommendedEquityBand": {
+            "min": final_band[0] if final_band else None,
+            "max": final_band[1] if final_band else None,
+        } if final_band else None,
+        "recommendedEquityMid": band_mid,
+        "reasoningText": reasoning_text,
+        "raw": {
+            "tenureYears": tenure_years,
+            "flexibility": flexibility,
+            "importance": importance,
+            "behavior": behavior,
+            "lossTolerancePercent": loss_pct,
+            "savingsPercent": savings_percent,
+            "incomeStability": income_stability,
+            "emergencyFundMonths": emergency_months,
+            "equityAllocationPercent": equity_pct,
+        },
+    }
+
 def generate_flags_and_recommendations(results, inputs):
     flags = []
     recs = []
@@ -1211,15 +1547,20 @@ def analyze_financial_health(payload: dict):
     horizon = goals.get("goalHorizon")
     savings_percent = resolve_savings_percent(savings.get("savingsPercent"), savings.get("savingsBand"))
 
-    risk_profile, risk_score = compute_risk_profile(age, tolerance, horizon)
+    basic_risk_profile, basic_risk_score = compute_risk_profile(age, tolerance, horizon)
     surplus_band = compute_surplus_band(savings_percent)
+    try:
+        advanced_risk = compute_advanced_risk(payload, age)
+    except Exception:
+        advanced_risk = None
     insurance_gap, required_cover = compute_insurance_gap(income.get("annualIncome"), insurance.get("lifeCover"))
     debt_stress, emi_ratio_pct = compute_debt_stress(income.get("monthlyEmi"), income.get("annualIncome"))
     liquidity, liquidity_months = compute_liquidity(income.get("monthlyExpenses"), emergency_fund_amount)
     ihs = compute_ihs(savings_percent, current_products, allocation)
 
     results = {
-        "riskProfile": risk_profile,
+        "riskProfile": (advanced_risk["finalCategory"] if advanced_risk else basic_risk_profile),
+        "advancedRisk": advanced_risk,
         "surplusBand": surplus_band,
         "insuranceGap": insurance_gap,
         "debtStress": debt_stress,
@@ -1227,7 +1568,7 @@ def analyze_financial_health(payload: dict):
         "ihs": ihs,
         # extra diagnostics
         "_diagnostics": {
-            "riskScore": risk_score,
+            "riskScore": basic_risk_score,
             "emiPct": round(emi_ratio_pct, 2),
             "liquidityMonths": round(liquidity_months, 2),
             "requiredLifeCover": required_cover
@@ -1239,20 +1580,56 @@ def analyze_financial_health(payload: dict):
     results["recommendations"] = recs
     return results
 
-# --- Flask Routes ---
-
-@app.route('/financial-health/analyze', methods=['POST'])
-def financial_health_analyze():
-    """Analyzes financial health questionnaire and returns computed metrics, flags, and recommendations."""
+# --- Document insights aggregation (from linked uploads) ---
+def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
+    """
+    Aggregate key metrics from all documents linked to the questionnaire.
+    Returns a dict with 'bank' and 'portfolio' summaries (if available).
+    """
+    uploads = list_questionnaire_uploads(qid) or []
+    doc_ids = [row["document_id"] for row in uploads if row.get("document_id") is not None]
+    bank = {"total_inflows": 0.0, "total_outflows": 0.0, "opening_balance": None, "closing_balance": None}
+    portfolio = {}
+    for did in doc_ids:
+        try:
+            mets = list_metrics(did) or []
+        except Exception:
+            mets = []
+        for m in mets:
+            k = (m["key"] or "").strip()
+            v = m["value_num"]
+            if k in ("total_inflows", "total_outflows"):
+                try:
+                    if k == "total_inflows" and v is not None:
+                        bank["total_inflows"] += float(v)
+                    if k == "total_outflows" and v is not None:
+                        bank["total_outflows"] += float(v)
+                except Exception:
+                    pass
+            elif k in ("opening_balance", "closing_balance"):
+                if v is not None:
+                    bank[k] = float(v)
+            elif k.startswith("portfolio_"):
+                try:
+                    key = k.replace("portfolio_", "")
+                    if v is not None:
+                        portfolio[key] = float(v)
+                except Exception:
+                    pass
     try:
-        data = request.get_json(force=True, silent=True) or {}
+        inflow = float(bank.get("total_inflows") or 0.0)
+        outflow = float(bank.get("total_outflows") or 0.0)
+        bank["net_cashflow"] = inflow - outflow
     except Exception:
-        return jsonify({"error": "Invalid JSON"}), 400
-    try:
-        result = analyze_financial_health(data)
-        return jsonify(result), 200
-    except Exception as e:
-        return jsonify({"error": f"Analysis failed: {str(e)}"}), 500
+        bank["net_cashflow"] = None
+    out = {}
+    if any(v not in (None, 0.0) for v in bank.values()):
+        out["bank"] = bank
+    if portfolio:
+        out["portfolio"] = portfolio
+    return out
+
+# --- Flask Routes ---
 
 @app.route('/')
 def serve_index():
@@ -1277,6 +1654,13 @@ def upload_document():
         if key.startswith('file'):
             files.append(request.files[key])
             types.append(request.form.get(f"type{key[4:]}", "Unknown"))
+    questionnaire_id_raw = request.form.get("questionnaireId") or request.form.get("questionnaire_id")
+    questionnaire_id = None
+    try:
+        if questionnaire_id_raw:
+            questionnaire_id = int(questionnaire_id_raw)
+    except Exception:
+        questionnaire_id = None
 
     if not files:
         return jsonify({"error": "No files uploaded"}), 400
@@ -1295,6 +1679,19 @@ def upload_document():
             # Index and extract deterministic summaries (snapshot/statement) with provenance
             sha, doc_id, summaries = index_and_extract(file_bytes, filename=file.filename or "upload.pdf")
             debug_shas.append(sha)
+            # Link to questionnaire if provided
+            if questionnaire_id:
+                try:
+                    link_questionnaire_upload(
+                        questionnaire_id=questionnaire_id,
+                        document_id=doc_id,
+                        sha256=sha,
+                        doc_type=doc_type,
+                        filename=file.filename,
+                        metadata={"size_bytes": len(file_bytes)}
+                    )
+                except Exception as e:
+                    print(f"Failed linking upload to questionnaire {questionnaire_id}: {e}")
             
             if not text.strip():
                 extracted_data[f"Document {idx+1} ({doc_type})"] = {"error": "No text could be extracted from this PDF."}
@@ -1311,17 +1708,19 @@ def upload_document():
             if doc_type in doc_map:
                 name, func = doc_map[doc_type]
                 if doc_type == "Bank statement":
-                    # Build structured transactions and persist as JSON
+                    # Build structured transactions and optionally persist as JSON
                     tx_payload = extract_bank_statement_transactions(io.BytesIO(file_bytes))
-                    json_name = f"bank_transactions_{os.urandom(6).hex()}.json"
-                    json_path = os.path.join(OUTPUT_DIR, json_name)
-                    try:
-                        with open(json_path, 'w', encoding='utf-8') as jf:
-                            json.dump(tx_payload, jf, ensure_ascii=False, indent=2)
-                        json_url = url_for('download_file', filename=json_name, _external=True)
-                    except Exception as je:
-                        print(f"Failed to save transactions JSON: {je}")
-                        json_url = None
+                    json_url = None
+                    if SAVE_TX_JSON:
+                        json_name = f"bank_transactions_{os.urandom(6).hex()}.json"
+                        json_path = os.path.join(OUTPUT_DIR, json_name)
+                        try:
+                            with open(json_path, 'w', encoding='utf-8') as jf:
+                                json.dump(tx_payload, jf, ensure_ascii=False, indent=2)
+                            json_url = url_for('download_file', filename=json_name, _external=True)
+                        except Exception as je:
+                            print(f"Failed to save transactions JSON: {je}")
+                            json_url = None
 
                     bank_data = func(text, transactions_payload=tx_payload, save_json_path=json_url)
                     # Merge DB-backed summaries if present
@@ -1368,24 +1767,61 @@ def upload_document():
         except Exception as e:
             extracted_data[f"Document {idx+1}"] = {"error": f"Failed to process file: {str(e)}"}
 
-    # Optionally include questionnaire analysis if provided (multipart field 'questionnaire' as JSON)
-    try:
-        q_str = request.form.get('questionnaire')
-        if q_str:
-            q_payload = json.loads(q_str)
-            fha = analyze_financial_health(q_payload)
-            # Attach original inputs for charting in PDF
-            fha["_inputs"] = q_payload
-            extracted_data["Financial Health Analysis"] = fha
-    except Exception as _:
-        pass
+    # If questionnaire_id is present, generate the narrative Financial Plan and return that URL
+    if questionnaire_id:
+        try:
+            q = get_questionnaire(questionnaire_id)
+        except Exception:
+            q = None
+        try:
+            doc_insights = aggregate_doc_insights_for_questionnaire(questionnaire_id)
+        except Exception as e:
+            doc_insights = {"error": str(e)}
+        if isinstance(q, dict):
+            # Ensure q carries its id for missing docs checklist inside PDF
+            q.setdefault("id", questionnaire_id)
+            inputs = _assemble_financial_inputs(q, doc_insights)
+            analysis = analyze_financial_health(inputs)
+            plan_filename = f"FinancialPlan_{os.urandom(8).hex()}.pdf"
+            plan_path = os.path.join(OUTPUT_DIR, plan_filename)
+            generate_financial_plan_pdf(q, analysis, plan_path, doc_insights=doc_insights)
+            if STORE_REPORTS == "memory":
+                with open(plan_path, "rb") as pf:
+                    data = pf.read()
+                token = _register_temp_download(data, plan_filename)
+                try:
+                    os.remove(plan_path)
+                except Exception:
+                    pass
+                plan_url = url_for('download_temp', token=token, _external=True)
+            else:
+                plan_url = url_for('download_file', filename=plan_filename, _external=True)
+            # Backward compatible: frontend expects summary_pdf_url; point it to plan URL
+            return jsonify({
+                "summary_pdf_url": plan_url,
+                "financial_plan_pdf_url": plan_url,
+                "debug_shas": debug_shas,
+                "questionnaire_id": questionnaire_id,
+                "analysis": analysis,
+                "docInsights": doc_insights
+            }), 200
 
-
+    # Fallback to legacy summary report if no questionnaire_id provided
     pdf_filename = f"PortfolioSummary_{os.urandom(8).hex()}.pdf"
     pdf_path = os.path.join(OUTPUT_DIR, pdf_filename)
     generate_pdf_summary(extracted_data, pdf_path)
 
-    download_url = url_for('download_file', filename=pdf_filename, _external=True)
+    if STORE_REPORTS == "memory":
+        with open(pdf_path, "rb") as f:
+            data = f.read()
+        token = _register_temp_download(data, pdf_filename)
+        try:
+            os.remove(pdf_path)
+        except Exception:
+            pass
+        download_url = url_for('download_temp', token=token, _external=True)
+    else:
+        download_url = url_for('download_file', filename=pdf_filename, _external=True)
     return jsonify({
         "summary_pdf_url": download_url,
         "debug_shas": debug_shas
@@ -1394,6 +1830,14 @@ def upload_document():
 @app.route('/download/<filename>')
 def download_file(filename):
     return send_from_directory(OUTPUT_DIR, filename, as_attachment=True)
+
+@app.route('/download-temp/<token>')
+def download_temp(token):
+    item = TEMP_REPORTS.pop(token, None)
+    if not item:
+        return jsonify({"error": "not found"}), 404
+    filename, data, mimetype = item
+    return send_file(io.BytesIO(data), mimetype=mimetype, as_attachment=True, download_name=filename)
 
 # Debug endpoints to inspect indexing and extracted metrics
 @app.route('/debug/docs/<sha>', methods=['GET'])
@@ -1422,53 +1866,607 @@ def debug_list_metrics(sha):
         "metrics": mets
     }), 200
 
+# --- Questionnaire & Financial Plan Endpoints ---
+
+def _questionnaire_section_saver(section: str):
+    mapping = {
+        "personal_info": save_personal_info,
+        "family_info": save_family_info,
+        "goals": save_goals,
+        "risk_profile": save_risk_profile,
+        "insurance": save_insurance,
+        "estate": save_estate,
+        "lifestyle": save_lifestyle,
+    }
+    return mapping.get(section)
+
+def _normalize_risk_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    out = {}
+    # Enumerated fields normalization (lowercase)
+    def _norm_enum(val, allowed):
+        if not isinstance(val, str):
+            return None
+        v = val.strip().lower()
+        return v if v in allowed else None
+
+    out["primary_horizon"] = _norm_enum(payload.get("primary_horizon"), ["short","medium","med","long"])
+    # numeric horizons
+    def _num(v, lo=None, hi=None):
+        try:
+            if v in (None, "", "N/A"):
+                return None
+            n = float(v)
+            if lo is not None: n = max(lo, n)
+            if hi is not None: n = min(hi, n)
+            return n
+        except Exception:
+            return None
+
+    out["primary_horizon_years"] = _num(payload.get("primary_horizon_years"), 0, 100)
+    out["goal_tenure_years"] = _num(payload.get("goal_tenure_years"), 0, 100)
+
+    out["goal_flexibility"] = _norm_enum(payload.get("goal_flexibility"), ["critical","fixed","flexible"])
+    out["goal_importance"] = _norm_enum(payload.get("goal_importance"), ["essential","important","lifestyle"])
+    out["behavior"] = _norm_enum(payload.get("behavior"), ["sell","reduce","hold","buy","aggressive buy","aggressive_buy"])
+    out["income_stability"] = _norm_enum(payload.get("income_stability"), ["very unstable","unstable","average","stable","very stable"])
+
+    out["loss_tolerance_percent"] = _num(payload.get("loss_tolerance_percent"), 0, 100)
+    out["emergency_fund_months"] = _num(payload.get("emergency_fund_months"), 0, 240)
+
+    # Pass through tolerance if present
+    out["tolerance"] = _norm_enum(payload.get("tolerance"), ["low","medium","med","high"])
+
+    # Preserve original raw values for anything not normalized (optional)
+    for k, v in payload.items():
+        if k not in out:
+            out[k] = v
+    return out
+
+def _validate_risk_payload(payload: dict):
+    errs = []
+    if not isinstance(payload, dict):
+        return ["invalid_payload_type"]
+    # Percentage fields
+    for f in ["loss_tolerance_percent", "equity_allocation_percent"]:
+        v = payload.get(f)
+        if v not in (None, ""):
+            try:
+                fv = float(v)
+                if fv < 0 or fv > 100:
+                    errs.append(f"{f}:out_of_range")
+            except Exception:
+                errs.append(f"{f}:not_numeric")
+    # Horizon years
+    hy = payload.get("primary_horizon_years")
+    if hy not in (None, ""):
+        try:
+            hv = float(hy)
+            if hv < 0 or hv > 100:
+                errs.append("primary_horizon_years:out_of_range")
+        except Exception:
+            errs.append("primary_horizon_years:not_numeric")
+    # Emergency fund months
+    efm = payload.get("emergency_fund_months")
+    if efm not in (None, ""):
+        try:
+            emv = float(efm)
+            if emv < 0 or emv > 240:
+                errs.append("emergency_fund_months:out_of_range")
+        except Exception:
+            errs.append("emergency_fund_months:not_numeric")
+    # Enum validations
+    enums = {
+        "goal_importance": {"essential","important","lifestyle"},
+        "goal_flexibility": {"critical","fixed","flexible"},
+        "behavior": {"sell","reduce","hold","buy","aggressive buy","aggressive_buy"},
+        "income_stability": {"very unstable","unstable","average","stable","very stable"},
+        "tolerance": {"low","medium","med","high"},
+        "primary_horizon": {"short","medium","med","long"},
+    }
+    for k, allowed in enums.items():
+        v = payload.get(k)
+        if v not in (None, "") and str(v).lower() not in allowed:
+            errs.append(f"{k}:invalid_value")
+    return errs
+
+@app.route("/questionnaire/start", methods=["POST"])
+def questionnaire_start():
+    data = request.get_json(force=True) or {}
+    user_id = data.get("user_id") or "user"
+    qid = create_questionnaire(user_id=user_id)
+    return jsonify({"questionnaire_id": qid}), 201
+
+@app.route("/questionnaire/<int:qid>/<section>", methods=["PUT"])
+def questionnaire_save_section(qid: int, section: str):
+    saver = _questionnaire_section_saver(section)
+    if not saver:
+        return jsonify({"error": "Unknown section"}), 400
+    payload = request.get_json(force=True) or {}
+
+    # Server-side normalization + validation for risk_profile section
+    if section == "risk_profile":
+        payload = _normalize_risk_payload(payload)
+        errors = _validate_risk_payload(payload)
+        if errors:
+            return jsonify({"error": "validation_failed", "fields": errors}), 400
+
+    saver(qid, payload)
+    update_questionnaire_status(qid, "in_progress")
+    return jsonify({"status": "ok"}), 200
+
+@app.route("/questionnaire/<int:qid>", methods=["GET"])
+def questionnaire_get(qid: int):
+    q = get_questionnaire(qid)
+    if not q:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(q), 200
+
+def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
+    personal = q.get("personal_info") or {}
+    family = q.get("family_info") or {}
+    goals = q.get("goals") or {}
+    risk = q.get("risk_profile") or {}
+    insurance = q.get("insurance") or {}
+    lifestyle = q.get("lifestyle") or {}
+
+    payload = {
+        "personal": {
+            "age": personal.get("age"),
+            "name": personal.get("name"),
+        },
+        "income": {
+            "annualIncome": lifestyle.get("annual_income"),
+            "monthlyExpenses": lifestyle.get("monthly_expenses"),
+            "monthlyEmi": lifestyle.get("monthly_emi"),
+        },
+        "goals": {
+            "goalHorizon": risk.get("primary_horizon"),
+            "items": goals.get("items") or [],
+        },
+        "risk": {
+            "tolerance": risk.get("tolerance"),
+            # Advanced risk raw inputs (persisted in risk_profile JSON)
+            "primary_horizon": risk.get("primary_horizon"),
+            "primary_horizon_years": risk.get("primary_horizon_years"),
+            "goal_tenure_years": risk.get("goal_tenure_years"),
+            "goal_flexibility": risk.get("goal_flexibility"),
+            "goal_importance": risk.get("goal_importance"),
+            "behavior": risk.get("behavior"),
+            "loss_tolerance_percent": risk.get("loss_tolerance_percent"),
+            "income_stability": risk.get("income_stability"),
+            "emergency_fund_months": risk.get("emergency_fund_months"),
+        },
+        "insurance": {
+            "lifeCover": insurance.get("life_cover"),
+            "healthCover": insurance.get("health_cover"),
+        },
+        "savings": {
+            "savingsPercent": lifestyle.get("savings_percent"),
+            "savingsBand": lifestyle.get("savings_band"),
+        },
+        "investments": {
+            "current": lifestyle.get("products") or [],
+            "allocation": lifestyle.get("allocation") or {},
+        },
+        "emergencyFundAmount": lifestyle.get("emergency_fund"),
+    }
+
+    # Merge document-derived signals if questionnaire fields are missing
+    di = doc_insights or {}
+    bank = di.get("bank") or {}
+    try:
+        # Annual income fallback from bank inflows
+        if not payload["income"].get("annualIncome"):
+            inflow = bank.get("total_inflows")
+            if isinstance(inflow, (int, float)) and inflow > 0:
+                payload["income"]["annualIncome"] = inflow
+        # Monthly expenses fallback from bank outflows
+        if not payload["income"].get("monthlyExpenses"):
+            outflow = bank.get("total_outflows")
+            if isinstance(outflow, (int, float)) and outflow > 0:
+                payload["income"]["monthlyExpenses"] = round(outflow / 12.0, 2)
+        # Savings percent fallback from net cashflow
+        if not payload["savings"].get("savingsPercent"):
+            inflow = bank.get("total_inflows")
+            outflow = bank.get("total_outflows")
+            if isinstance(inflow, (int, float)) and inflow > 0 and isinstance(outflow, (int, float)):
+                sp = max(0.0, (inflow - outflow)) / inflow * 100.0
+                payload["savings"]["savingsPercent"] = round(sp, 2)
+    except Exception:
+        pass
+
+    return payload
+
+def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_insights=None):
+    styles = get_custom_styles()
+    doc = SimpleDocTemplate(output_path, pagesize=letter,
+                            rightMargin=inch*0.75, leftMargin=inch*0.75,
+                            topMargin=inch, bottomMargin=inch)
+    story = []
+
+    name = (q.get("personal_info") or {}).get("name") or "Client"
+    age = (q.get("personal_info") or {}).get("age") or "N/A"
+    family = q.get("family_info") or {}
+    spouse = family.get("spouse")
+    children = family.get("children") or []
+    dependents = family.get("dependents") or []
+    goals = (q.get("goals") or {}).get("items") or []
+    lifestyle = (q.get("lifestyle") or {}) or {}
+    di = doc_insights or {}
+    bank = di.get("bank") or {}
+    portfolio = (di.get("portfolio") if di else None) or {}
+    ihs = analysis.get("ihs") or {}
+    advanced_risk = analysis.get("advancedRisk")
+
+    # Page 1 — Client Overview (qualitative, hide raw income/portfolio amounts)
+    story.append(Paragraph("Financial Plan", styles["Title"]))
+    overview_lines = [
+        f"Name: {name}",
+        f"Age: {age}",
+        f"Family: {'Married' if spouse else 'Single'}; Children: {len(children)}; Other dependents: {len(dependents)}",
+        f"Risk Profile: {analysis.get('riskProfile')}",
+        f"Surplus Level: {analysis.get('surplusBand')}",
+    ]
+    for l in overview_lines:
+        story.append(Paragraph(sanitize_pdf_text(l), styles["BodyText"]))
+
+    # Income & Savings (qualitative only)
+    story.append(Paragraph("Income & Savings Summary", styles["h2"]))
+    income_declared = bool(lifestyle.get("annual_income"))
+    expenses_declared = bool(lifestyle.get("monthly_expenses"))
+    netcf = bank.get("net_cashflow")
+    if income_declared:
+        story.append(Paragraph("- Income information provided in questionnaire.", styles["BodyText"]))
+    else:
+        story.append(Paragraph("- Income not declared; derived bands used for surplus assessment.", styles["BodyText"]))
+    if expenses_declared:
+        story.append(Paragraph("- Expense data captured in questionnaire.", styles["BodyText"]))
+    else:
+        story.append(Paragraph("- Expense data not declared; liquidity evaluation may rely on emergency fund only.", styles["BodyText"]))
+    if netcf is not None:
+        story.append(Paragraph(sanitize_pdf_text(f"- Document cashflow indicates a {'surplus' if netcf >= 0 else 'deficit'} pattern."), styles["BodyText"]))
+    else:
+        story.append(Paragraph("- Cashflow pattern cannot be inferred from uploaded statements.", styles["BodyText"]))
+
+    # Goals (show names & horizon, keep target amount as per spec)
+    if goals:
+        story.append(Paragraph("Key Goals (Captured)", styles["h2"]))
+        for g in goals[:8]:
+            desc = g.get("name") or g.get("goal") or "Goal"
+            amt = g.get("target_amount")
+            horizon = g.get("horizon_years") or g.get("horizon")
+            pieces = [desc]
+            if horizon:
+                pieces.append(f"Horizon: {horizon} yrs")
+            if amt:
+                pieces.append(f"Target: Rs. {amt}")
+            story.append(Paragraph(sanitize_pdf_text("- " + " | ".join(pieces)), styles["BodyText"]))
+    else:
+        story.append(Paragraph("No goals entered.", styles["BodyText"]))
+    story.append(PageBreak())
+
+    # Page 2 — Analytical Dashboard (only 5 core metrics, hide raw bank/portfolio numeric rows)
+    story.append(Paragraph("Analytical Dashboard", styles["h1"]))
+    metrics_rows = [
+        ["Surplus Level", analysis.get("surplusBand"), Paragraph( _interpret_surplus(analysis.get("surplusBand")))],
+        ["Insurance Coverage", analysis.get("insuranceGap"), Paragraph( _interpret_insurance(analysis.get("insuranceGap")))],
+        ["Debt Status", analysis.get("debtStress"), Paragraph( _interpret_debt(analysis.get("debtStress")))],
+        ["Liquidity", analysis.get("liquidity"), Paragraph( _interpret_liquidity(analysis.get("liquidity")))],
+        ["Investment Health Score", ihs.get("band"), Paragraph( _interpret_ihs(ihs.get("band")))],
+    ]
+    table = Table(
+        [["Metric", "Result", "Interpretation"]] + metrics_rows,
+        hAlign="LEFT",
+        colWidths=[160, 110, 230],
+    )
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+        ('BOTTOMPADDING',(0,0),(-1,0),8),
+    ]))
+    story.append(table)
+
+    # Advanced Risk Engine Summary
+    if advanced_risk:
+        story.append(Spacer(1, 6))
+        story.append(Paragraph("Advanced Risk Assessment", styles["h2"]))
+        ar_rows = [
+            ["Calculated Score", str(advanced_risk.get("score"))],
+            ["Tenure Limit", advanced_risk.get("tenureLimitCategory")],
+            ["Appetite Category", advanced_risk.get("appetiteCategory")],
+            ["Baseline Category", advanced_risk.get("baselineCategory")],
+            ["Final Category", advanced_risk.get("finalCategory")],
+        ]
+        band = advanced_risk.get("recommendedEquityBand") or {}
+        if band.get("min") is not None and band.get("max") is not None:
+            ar_rows.append(["Recommended Equity Band", f"{band.get('min')}% - {band.get('max')}% (mid {advanced_risk.get('recommendedEquityMid')}%)"])
+        adjustments_list = advanced_risk.get("adjustmentsApplied") or []
+        if adjustments_list:
+            ar_rows.append(["Adjustments Applied", "; ".join(adjustments_list)])
+        ar_rows.append(["Reasoning", advanced_risk.get("reasoningText")])
+
+        ar_table = Table([["Field", "Value"]] + ar_rows, hAlign="LEFT", colWidths=[160, 340])
+        ar_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('BOTTOMPADDING',(0,0),(-1,0),6),
+        ]))
+        story.append(ar_table)
+        story.append(PageBreak())
+
+    flags = analysis.get("flags") or []
+    if flags:
+        story.append(Paragraph("Flags (Attention Areas)", styles["h2"]))
+        for f in flags:
+            sanitized = re.sub(r"₹?\s?[0-9][0-9,]*", "Rs. ***", f)
+            story.append(Paragraph(sanitize_pdf_text(f"! {sanitized}"), styles["BodyText"]))
+    else:
+        story.append(Paragraph("No critical flags identified.", styles["BodyText"]))
+    story.append(PageBreak())
+
+    # Page 3 — Recommendations (Categorized narrative)
+    story.append(Paragraph("Recommendations", styles["h1"]))
+    categorized = _categorize_recommendations(analysis.get("recommendations") or [])
+    for cat, items in categorized.items():
+        story.append(Paragraph(cat, styles["h2"]))
+        for it in items:
+            story.append(Paragraph(sanitize_pdf_text(f"- {it}"), styles["BodyText"]))
+    story.append(PageBreak())
+
+    # Page 4 — Goal Mapping Table
+    story.append(Paragraph("Goal Mapping", styles["h1"]))
+    goal_rows = []
+    for g in goals[:15]:
+        nm = g.get("name") or g.get("goal") or "Goal"
+        amt = g.get("target_amount") or ""
+        horizon = g.get("horizon_years") or g.get("horizon") or ""
+        strategy = g.get("suggested_strategy") or _default_strategy_for_goal(g)
+        goal_rows.append([nm, f"{amt}", f"{horizon}", Paragraph(strategy)])
+    if goal_rows:
+        g_table = Table(
+            [["Goal", "Target Amount", "Time Horizon", "Suggested Strategy"]] + goal_rows,
+            hAlign="LEFT",
+            colWidths=[160, 100, 80, 160],
+        )
+        g_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1D3557')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('BOTTOMPADDING',(0,0),(-1,0),8),
+        ]))
+        story.append(g_table)
+    else:
+        story.append(Paragraph("No goals recorded.", styles["BodyText"]))
+    story.append(PageBreak())
+
+    # Page 5 — Summary & Disclaimers
+    story.append(Paragraph("Summary & Disclaimers", styles["h1"]))
+    summary_points = [
+        f"Risk Profile: {analysis.get('riskProfile')}",
+        f"Surplus Level: {analysis.get('surplusBand')}",
+        f"Insurance Status: {analysis.get('insuranceGap')}",
+        f"Debt Position: {analysis.get('debtStress')}",
+        f"Liquidity: {analysis.get('liquidity')}",
+        f"IHS Band: {ihs.get('band')}",
+    ]
+    for sp in summary_points:
+        story.append(Paragraph(sanitize_pdf_text(f"- {sp}"), styles["BodyText"]))
+
+    story.append(Paragraph("Recommendation Categories", styles["h2"]))
+    for cat in categorized.keys():
+        story.append(Paragraph(sanitize_pdf_text(f"- {cat}"), styles["BodyText"]))
+
+    story.append(Paragraph("Missing Documents", styles["h2"]))
+    uploads = list_questionnaire_uploads(q.get("id"))
+    present_types = {row["doc_type"] for row in uploads}
+    expected_types = {
+        "Bank statement",
+        "ITR",
+        "Insurance document",
+        "Mutual fund CAS (Consolidated Account Statement)",
+    }
+    missing = expected_types - present_types
+    if missing:
+        for m in sorted(missing):
+            story.append(Paragraph(sanitize_pdf_text(f"- {m}"), styles["BodyText"]))
+    else:
+        story.append(Paragraph("All core documents provided.", styles["BodyText"]))
+
+    disclaimers = [
+        "Indicative plan; not a legally binding advisory document.",
+        "Market and regulatory changes can impact recommendations.",
+        "Revisit annually or after major life events.",
+    ]
+    story.append(Paragraph("Disclaimers", styles["h2"]))
+    for d in disclaimers:
+        story.append(Paragraph(f"- {d}", styles["BodyText"]))
+
+    class FPCanvas(canvas.Canvas):
+        page_fn = footer
+    doc.build(story, onFirstPage=header, onLaterPages=header, canvasmaker=FPCanvas)
+
+# --- Narrative helpers for qualitative interpretations ---
+
+def _interpret_surplus(band: str):
+    m = (band or "").lower()
+    if m == "low":
+        return "Limited savings capacity; prioritize increasing systematic savings."
+    if m == "adequate":
+        return "Reasonable surplus; allocate efficiently across priority goals."
+    if m == "strong":
+        return "Healthy surplus enabling acceleration of long-term goals."
+    return "Surplus position unclear; gather more cashflow data."
+
+def _interpret_insurance(status: str):
+    s = (status or "").lower()
+    if s == "underinsured":
+        return "Protection gap exists; increase term coverage to benchmark (~10x income)."
+    if s == "adequate":
+        return "Coverage at or above benchmark; schedule periodic review."
+    return "Coverage status indeterminate; verify policy details."
+
+def _interpret_debt(status: str):
+    s = (status or "").lower()
+    if s == "stressed":
+        return "Debt ratio elevated; restructure or accelerate repayments."
+    if s == "moderate":
+        return "Manageable leverage; monitor to avoid escalation."
+    if s == "healthy":
+        return "Debt load within prudent limits."
+    return "Debt position unclear; capture EMI details."
+
+def _interpret_liquidity(status: str):
+    s = (status or "").lower()
+    if s == "insufficient":
+        return "Emergency reserves below 6 months; build liquid buffer."
+    if s == "adequate":
+        return "Emergency reserve at guideline level."
+    return "Liquidity status unconfirmed; record emergency fund amount."
+
+def _interpret_ihs(band: str):
+    b = (band or "").lower()
+    if b == "poor":
+        return "Structure weak; raise savings rate and diversify holdings."
+    if b == "average":
+        return "Improve allocation balance and goal alignment."
+    if b == "good":
+        return "Solid foundation; refine tax and risk efficiency."
+    if b == "excellent":
+        return "Optimized; maintain discipline and periodic rebalancing."
+    return "Investment health unclear; collect product and allocation details."
+
+def _categorize_recommendations(recs):
+    cats = {
+        "Risk Profile Based Advice": [],
+        "Insurance Improvement": [],
+        "Debt Optimization": [],
+        "Liquidity Management": [],
+        "Investment Health": [],
+        "General Planning": [],
+    }
+    for r in recs:
+        rl = r.lower()
+        if any(k in rl for k in ["equity", "allocation", "volatility", "mix"]):
+            cats["Risk Profile Based Advice"].append(r)
+        elif any(k in rl for k in ["cover", "insurance", "term", "health"]):
+            cats["Insurance Improvement"].append(r)
+        elif any(k in rl for k in ["debt", "emi", "borrow", "refinance"]):
+            cats["Debt Optimization"].append(r)
+        elif any(k in rl for k in ["liquid", "emergency"]):
+            cats["Liquidity Management"].append(r)
+        elif any(k in rl for k in ["savings", "diversify", "portfolio", "rebalance", "products"]):
+            cats["Investment Health"].append(r)
+        else:
+            cats["General Planning"].append(r)
+    return {k: v for k, v in cats.items() if v}
+
+def _default_strategy_for_goal(g):
+    horizon = g.get("horizon_years") or g.get("horizon")
+    try:
+        h = int(horizon)
+    except Exception:
+        h = None
+    if h is None:
+        return "Clarify horizon; then assign blend of equity/debt."
+    if h <= 3:
+        return "High-quality debt & liquid funds."
+    if h <= 7:
+        return "Balanced allocation (~50-60% equity)."
+    if h > 7:
+        return "Growth-oriented (~70-80% equity) with periodic rebalancing."
+    return "Diversified approach."
+
+@app.route("/report/generate", methods=["POST"])
+def report_generate():
+    data = request.get_json(force=True) or {}
+    questionnaire_id = data.get("questionnaire_id")
+    use_llm = bool(data.get("useLLM"))
+    if not questionnaire_id:
+        return jsonify({"error": "questionnaire_id required"}), 400
+    q = get_questionnaire(questionnaire_id)
+    if not q:
+        return jsonify({"error": "questionnaire not found"}), 404
+
+    # Merge questionnaire + linked document insights
+    doc_insights = {}
+    try:
+        doc_insights = aggregate_doc_insights_for_questionnaire(questionnaire_id)
+    except Exception as e:
+        doc_insights = {"error": str(e)}
+
+    inputs = _assemble_financial_inputs(q, doc_insights)
+    analysis = analyze_financial_health(inputs)
+
+    if use_llm:
+        try:
+            llm_prompt = f"Provide refined recommendations for client:\n{json.dumps(analysis, ensure_ascii=False)}"
+            llm_resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a senior financial planner. Return a JSON with key refined_recommendations (array of strings)."},
+                    {"role": "user", "content": llm_prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3,
+            )
+            aug = json.loads(llm_resp.choices[0].message.content)
+            if isinstance(aug.get("refined_recommendations"), list):
+                analysis["recommendations"] = aug["refined_recommendations"]
+        except Exception as e:
+            analysis["llm_error"] = str(e)
+
+    pdf_filename = f"FinancialPlan_{os.urandom(8).hex()}.pdf"
+    pdf_path = os.path.join(OUTPUT_DIR, pdf_filename)
+    generate_financial_plan_pdf(q, analysis, pdf_path, doc_insights=doc_insights)
+    url = url_for("download_file", filename=pdf_filename, _external=True)
+    return jsonify({
+        "financial_plan_pdf_url": url,
+        "summary_pdf_url": url,
+        "report_type": "financial_plan",
+        "questionnaire_id": questionnaire_id,
+        "analysis": analysis,
+        "docInsights": doc_insights
+    }), 200
 
 # --- PDF Generation Logic (Enhanced) ---
 
 def get_custom_styles():
-    """Returns a dictionary of custom ReportLab paragraph styles."""
     styles = getSampleStyleSheet()
-
-    # --- Modify existing styles using their default names ---
-
-    # Modify 'Title'
     title_style = styles['Title']
     title_style.fontSize = 22
     title_style.alignment = TA_CENTER
     title_style.spaceAfter = 20
     title_style.textColor = colors.HexColor('#1D3557')
-
-    # Modify 'h1'
     h1_style = styles['h1']
     h1_style.fontSize = 16
     h1_style.leading = 22
     h1_style.spaceAfter = 12
     h1_style.textColor = colors.HexColor('#457B9D')
-
-    # Modify 'h2'
     h2_style = styles['h2']
     h2_style.fontSize = 12
     h2_style.leading = 18
     h2_style.spaceBefore = 10
     h2_style.spaceAfter = 6
     h2_style.textColor = colors.HexColor('#E63946')
-
-    # Modify 'BodyText'
     body_style = styles['BodyText']
     body_style.fontSize = 10
     body_style.leading = 14
     body_style.spaceAfter = 6
-    
-    # --- Add ONLY new, unique styles ---
+    body_style.wordWrap = 'CJK'
     styles.add(ParagraphStyle(name='Header', fontSize=8, alignment=TA_RIGHT, textColor=colors.grey))
     styles.add(ParagraphStyle(name='Footer', fontSize=8, alignment=TA_CENTER, textColor=colors.grey))
     styles.add(ParagraphStyle(name='TableHead', fontSize=9, fontName='Helvetica-Bold', alignment=TA_LEFT, textColor=colors.white))
-    styles.add(ParagraphStyle(name='TableCell', fontSize=9, alignment=TA_LEFT))
-
+    styles.add(ParagraphStyle(name='TableCell', fontSize=9, alignment=TA_LEFT, wordWrap='CJK'))
     return styles
 
 def header(canvas, doc):
-    """Adds a header to each page."""
     canvas.saveState()
     styles = get_custom_styles()
     p = Paragraph(f"Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles['Header'])
@@ -1477,7 +2475,6 @@ def header(canvas, doc):
     canvas.restoreState()
 
 def footer(canvas, doc):
-    """Adds a footer with page number to each page."""
     canvas.saveState()
     styles = get_custom_styles()
     p = Paragraph(f"Page {doc.page}", styles['Footer'])
@@ -1486,62 +2483,50 @@ def footer(canvas, doc):
     canvas.restoreState()
 
 def build_pdf_story(story, data, doc, styles):
-    """Recursively builds the PDF story from the extracted data dictionary."""
     empty_values = [None, "", "N/A", [], {}]
     if not isinstance(data, dict):
         return
-
     for key, value in data.items():
-        # Skip attaching raw transactions JSON link into nested PDF content
         if key in ["transactions", "transactions_json_path"]:
             if key == "transactions_json_path" and isinstance(value, str):
-                # Print a short line with the link instead
-                story.append(Paragraph(f"Transactions JSON: {value}", styles["BodyText"]))
+                story.append(Paragraph(sanitize_pdf_text(f"Transactions JSON: {value}"), styles["BodyText"]))
                 story.append(Spacer(1, 4))
             continue
         if value in empty_values or key in ['extraction_error', 'llm_error']:
             continue
-        
         key_title = key.replace('_', ' ').title()
-        
         if isinstance(value, list) and value and isinstance(value[0], dict):
-            # It's a list of dictionaries, create a table
             story.append(Spacer(1, 0.1 * inch))
             story.append(Paragraph(key_title, styles['h2']))
             add_dynamic_table(story, value, doc, styles)
         elif isinstance(value, dict):
-            # It's a nested dictionary, recurse
             story.append(Spacer(1, 0.1 * inch))
             story.append(Paragraph(key_title, styles['h2']))
             build_pdf_story(story, value, doc, styles)
         else:
-            # It's a simple key-value pair
-            formatted_value = f"₹ {value:,.2f}" if isinstance(value, (int, float)) else value
+            formatted_value = f"Rs. {value:,.2f}" if isinstance(value, (int, float)) else value
             p_text = f"<b>{key_title}:</b> {formatted_value}"
-            story.append(Paragraph(p_text, styles["BodyText"]))
+            story.append(Paragraph(sanitize_pdf_text(p_text), styles["BodyText"]))
             story.append(Spacer(1, 4))
 
 def add_dynamic_table(story, data_list, doc, styles):
-    """Creates a ReportLab table from a list of dictionaries."""
     filtered_data = [row for row in data_list if any(v not in [None, "", "N/A"] for v in row.values())]
     if not filtered_data:
         return
-
     headers = list(filtered_data[0].keys())
-    header_row = [Paragraph(h.replace('_', ' ').title(), styles['TableHead']) for h in headers]
-    
+    header_row = [Paragraph(sanitize_pdf_text(h.replace('_', ' ').title()), styles['TableHead']) for h in headers]
     table_data = [header_row]
     for row_dict in filtered_data:
         row = []
         for h in headers:
             cell_value = row_dict.get(h, "")
-            # Format numbers in table cells
             if isinstance(cell_value, (int, float)):
-                cell_value = f"₹ {cell_value:,.2f}"
-            row.append(Paragraph(str(cell_value), styles['TableCell']))
+                cell_value = f"Rs. {cell_value:,.2f}"
+            row.append(Paragraph(sanitize_pdf_text(str(cell_value)), styles['TableCell']))
         table_data.append(row)
-
-    table = Table(table_data, hAlign='LEFT', repeatRows=1)
+    col_count = len(headers) if headers else 1
+    col_widths = [doc.width / col_count] * col_count
+    table = Table(table_data, hAlign='LEFT', repeatRows=1, colWidths=col_widths)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#457B9D')),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
@@ -1554,29 +2539,24 @@ def add_dynamic_table(story, data_list, doc, styles):
     story.append(table)
 
 def generate_pdf_summary(summary_data, output_path):
-    """Generates the final PDF summary report."""
     doc = SimpleDocTemplate(output_path, pagesize=letter,
                             rightMargin=inch*0.75, leftMargin=inch*0.75,
                             topMargin=inch, bottomMargin=inch)
     styles = get_custom_styles()
     story = [Paragraph("Holistic Financial Report", styles['Title']), Spacer(1, 0.25 * inch)]
-
     for section_key, section_content in summary_data.items():
         if not section_content or section_content.get("error"):
-            story.append(Paragraph(f"Could not process: {section_key}", styles['h1']))
+            story.append(Paragraph(sanitize_pdf_text(f"Could not process: {section_key}"), styles['h1']))
             if isinstance(section_content, dict) and section_content.get("error"):
                 story.append(Paragraph(f"Reason: {section_content['error']}", styles['BodyText']))
             story.append(Spacer(1, 0.2 * inch))
             continue
-
-        story.append(Paragraph(section_key.replace('_', ' ').title(), styles['h1']))
+        story.append(Paragraph(sanitize_pdf_text(section_key.replace('_', ' ').title()), styles['h1']))
         story.append(Spacer(1, 0.15 * inch))
-        # Charts & insights
         try:
             from reportlab.graphics.shapes import Drawing
             from reportlab.graphics.charts.piecharts import Pie
             key_l = str(section_key).lower()
-
             def _add_pie_chart(title, data_map):
                 items = []
                 for k, v in (data_map or {}).items():
@@ -1602,8 +2582,6 @@ def generate_pdf_summary(summary_data, output_path):
                 d.add(pie)
                 story.append(d)
                 story.append(Spacer(1, 0.1 * inch))
-
-            # Bank Statement: cash flows
             if "bank statement" in key_l:
                 acct = (section_content or {}).get("account_summary") or {}
                 inflows = acct.get("total_inflows")
@@ -1617,12 +2595,10 @@ def generate_pdf_summary(summary_data, output_path):
                         if isinstance(inflows, (int, float)) and isinstance(outflows, (int, float)):
                             net = float(inflows) - float(outflows)
                             note = "Net Cash Surplus" if net >= 0 else "Net Cash Deficit"
-                            story.append(Paragraph(f"{note}: ₹ {abs(net):,.0f}", styles['BodyText']))
+                            story.append(Paragraph(f"{note}: Rs. {abs(net):,.0f}", styles['BodyText']))
                             story.append(Spacer(1, 0.1 * inch))
                     except Exception:
                         pass
-
-            # Mutual Fund CAS: asset allocation
             if "mutual fund cas" in key_l:
                 alloc = (section_content or {}).get("asset_allocation") or {}
                 if any(k in alloc for k in ["equity_percentage", "debt_percentage", "hybrid_percentage"]):
@@ -1631,50 +2607,21 @@ def generate_pdf_summary(summary_data, output_path):
                         "Debt": alloc.get("debt_percentage", 0),
                         "Hybrid": alloc.get("hybrid_percentage", 0),
                     })
-
-            # ITR: income sources
             if key_l.startswith("itr"):
                 inc = (section_content or {}).get("income_sources") or {}
                 if inc:
                     _add_pie_chart("Income Sources (ITR)", inc)
-
-            # Financial Health Analysis: user's allocation from questionnaire
-            if "financial health analysis" in key_l:
-                q_inputs = (section_content or {}).get("_inputs") or {}
-                inv = (q_inputs.get("investments") or {})
-                alloc = inv.get("allocation") or {}
-                if alloc:
-                    _add_pie_chart("Portfolio Allocation (Questionnaire)", {
-                        "Equity": alloc.get("equity", 0),
-                        "Debt": alloc.get("debt", 0),
-                        "Gold": alloc.get("gold", 0),
-                        "Real Estate": alloc.get("realEstate", 0),
-                        "Insurance-linked": alloc.get("insuranceLinked", 0),
-                        "Cash": alloc.get("cash", 0),
-                    })
         except Exception:
-            # Keep PDF generation resilient
             pass
-
         build_pdf_story(story, section_content, doc, styles)
         story.append(PageBreak())
-
-    # Remove the last page break if it exists
     if story and isinstance(story[-1], PageBreak):
         story.pop()
-
-    # --- FIX IS HERE ---
-    # 1. Define the class before it is used.
     class CustomCanvas(canvas.Canvas):
-        """A custom canvas class that knows how to draw the page footer."""
         page_fn = footer
-
-    # 2. Use the EXACT same name (CustomCanvas) as the canvasmaker.
     doc.build(story, onFirstPage=header, onLaterPages=header, canvasmaker=CustomCanvas)
-
 
 # --- Main Execution ---
 if __name__ == '__main__':
-    # Use 0.0.0.0 to make it accessible on the network; respect PORT for Render
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
