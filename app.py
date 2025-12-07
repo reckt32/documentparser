@@ -18,6 +18,7 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from datetime import datetime
 from reportlab.pdfgen import canvas
 from extractors import index_and_extract
+from llm_sections import run_report_sections
 from db import (
     list_sections,
     list_metrics,
@@ -1782,9 +1783,15 @@ def upload_document():
             q.setdefault("id", questionnaire_id)
             inputs = _assemble_financial_inputs(q, doc_insights)
             analysis = analyze_financial_health(inputs)
+            sections = None
+            try:
+                facts = _build_client_facts(q, analysis, doc_insights)
+                sections = run_report_sections(questionnaire_id, facts)
+            except Exception as e:
+                analysis["llm_error"] = str(e)
             plan_filename = f"FinancialPlan_{os.urandom(8).hex()}.pdf"
             plan_path = os.path.join(OUTPUT_DIR, plan_filename)
-            generate_financial_plan_pdf(q, analysis, plan_path, doc_insights=doc_insights)
+            generate_financial_plan_pdf(q, analysis, plan_path, doc_insights=doc_insights, narratives=sections)
             if STORE_REPORTS == "memory":
                 with open(plan_path, "rb") as pf:
                     data = pf.read()
@@ -1803,7 +1810,8 @@ def upload_document():
                 "debug_shas": debug_shas,
                 "questionnaire_id": questionnaire_id,
                 "analysis": analysis,
-                "docInsights": doc_insights
+                "docInsights": doc_insights,
+                "sections": sections
             }), 200
 
     # Fallback to legacy summary report if no questionnaire_id provided
@@ -2079,7 +2087,73 @@ def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
 
     return payload
 
-def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_insights=None):
+def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
+    personal = q.get("personal_info") or {}
+    family = q.get("family_info") or {}
+    lifestyle = q.get("lifestyle") or {}
+    insurance = q.get("insurance") or {}
+    goals = (q.get("goals") or {}).get("items") or []
+
+    dependents_count = (1 if family.get("spouse") else 0) + len(family.get("children") or []) + len(family.get("dependents") or [])
+    di = doc_insights or {}
+    bank = di.get("bank") or {}
+    portfolio = di.get("portfolio") or {}
+
+    facts = {
+        "questionnaire_id": q.get("id"),
+        "personal": {
+            "name": personal.get("name"),
+            "age": personal.get("age"),
+            "dependents_count": dependents_count,
+        },
+        "income": {
+            "annualIncome": lifestyle.get("annual_income"),
+            "monthlyExpenses": lifestyle.get("monthly_expenses"),
+            "monthlyEmi": lifestyle.get("monthly_emi"),
+        },
+        "insurance": {
+            "lifeCover": insurance.get("life_cover"),
+            "healthCover": insurance.get("health_cover"),
+        },
+        "savings": {
+            "savingsPercent": lifestyle.get("savings_percent"),
+        },
+        "goals": [
+            {
+                "name": (g.get("name") or g.get("goal")),
+                "target_amount": g.get("target_amount"),
+                "horizon_years": g.get("horizon_years") or g.get("horizon"),
+            }
+            for g in goals
+        ],
+        "bank": {
+            "total_inflows": bank.get("total_inflows"),
+            "total_outflows": bank.get("total_outflows"),
+            "net_cashflow": bank.get("net_cashflow"),
+        },
+        "portfolio": portfolio,
+        "analysis": analysis,
+    }
+    return facts
+
+def _render_narrative_section(story, styles, section_key, section_obj):
+    try:
+        title = section_obj.get("title") or section_key.replace("_", " ").title()
+        story.append(Paragraph(sanitize_pdf_text(title), styles["h2"]))
+        for b in (section_obj.get("bullets") or [])[:6]:
+            story.append(Paragraph(sanitize_pdf_text(f"• {b}"), styles["BodyText"]))
+        for p in (section_obj.get("paragraphs") or [])[:3]:
+            story.append(Paragraph(sanitize_pdf_text(p), styles["BodyText"]))
+        actions = section_obj.get("actions") or []
+        if actions:
+            story.append(Paragraph("Actions:", styles["BodyText"]))
+            for a in actions[:6]:
+                story.append(Paragraph(sanitize_pdf_text(f"- {a}"), styles["BodyText"]))
+        story.append(Spacer(1, 8))
+    except Exception:
+        pass
+
+def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_insights=None, narratives=None):
     styles = get_custom_styles()
     doc = SimpleDocTemplate(output_path, pagesize=letter,
                             rightMargin=inch*0.75, leftMargin=inch*0.75,
@@ -2322,6 +2396,26 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         story.append(Spacer(1, 4))
     story.append(Spacer(1, 12))
 
+    # Personalized Narrative (LLM-generated)
+    if narratives and isinstance(narratives, dict):
+        story.append(Paragraph("Personalized Narrative", styles["h2"]))
+        section_order = [
+            "executive_summary",
+            "flags_explainer",
+            "protection_plan",
+            "cashflow",
+            "debt_strategy",
+            "liquidity_plan",
+            "risk_rationale",
+            "goals_strategy",
+            "portfolio_rebalance",
+        ]
+        for key in section_order:
+            sec = narratives.get(key)
+            if isinstance(sec, dict):
+                _render_narrative_section(story, styles, key, sec)
+        story.append(Spacer(1, 12))
+
     # Goal Mapping Table (compact)
     story.append(Paragraph("Goal Strategy Mapping", styles["h2"]))
     goal_rows = []
@@ -2458,7 +2552,6 @@ def _default_strategy_for_goal(g):
 def report_generate():
     data = request.get_json(force=True) or {}
     questionnaire_id = data.get("questionnaire_id")
-    use_llm = bool(data.get("useLLM"))
     if not questionnaire_id:
         return jsonify({"error": "questionnaire_id required"}), 400
     q = get_questionnaire(questionnaire_id)
@@ -2475,27 +2568,16 @@ def report_generate():
     inputs = _assemble_financial_inputs(q, doc_insights)
     analysis = analyze_financial_health(inputs)
 
-    if use_llm:
-        try:
-            llm_prompt = f"Provide refined recommendations for client:\n{json.dumps(analysis, ensure_ascii=False)}"
-            llm_resp = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "You are a senior financial planner. Return a JSON with key refined_recommendations (array of strings)."},
-                    {"role": "user", "content": llm_prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.3,
-            )
-            aug = json.loads(llm_resp.choices[0].message.content)
-            if isinstance(aug.get("refined_recommendations"), list):
-                analysis["recommendations"] = aug["refined_recommendations"]
-        except Exception as e:
-            analysis["llm_error"] = str(e)
+    sections = None
+    try:
+        facts = _build_client_facts(q, analysis, doc_insights)
+        sections = run_report_sections(questionnaire_id, facts)
+    except Exception as e:
+        analysis["llm_error"] = str(e)
 
     pdf_filename = f"FinancialPlan_{os.urandom(8).hex()}.pdf"
     pdf_path = os.path.join(OUTPUT_DIR, pdf_filename)
-    generate_financial_plan_pdf(q, analysis, pdf_path, doc_insights=doc_insights)
+    generate_financial_plan_pdf(q, analysis, pdf_path, doc_insights=doc_insights, narratives=sections)
     url = url_for("download_file", filename=pdf_filename, _external=True)
     return jsonify({
         "financial_plan_pdf_url": url,
@@ -2503,7 +2585,8 @@ def report_generate():
         "report_type": "financial_plan",
         "questionnaire_id": questionnaire_id,
         "analysis": analysis,
-        "docInsights": doc_insights
+        "docInsights": doc_insights,
+        "sections": sections
     }), 200
 
 # --- PDF Generation Logic (Enhanced) ---
