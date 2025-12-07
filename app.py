@@ -2099,171 +2099,51 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     portfolio = (di.get("portfolio") if di else None) or {}
     ihs = analysis.get("ihs") or {}
     advanced_risk = analysis.get("advancedRisk")
+    categorized = _categorize_recommendations(analysis.get("recommendations") or [])
 
-    # Page 1 — Client Overview (qualitative, hide raw income/portfolio amounts)
+    # ==========================================================================
+    # PAGE 1: INPUTS & DATA CAPTURED
+    # ==========================================================================
     story.append(Paragraph("Financial Plan", styles["Title"]))
-    overview_lines = [
-        f"Name: {name}",
-        f"Age: {age}",
-        f"Family: {'Married' if spouse else 'Single'}; Children: {len(children)}; Other dependents: {len(dependents)}",
-        f"Risk Profile: {analysis.get('riskProfile')}",
-        f"Surplus Level: {analysis.get('surplusBand')}",
+    story.append(Paragraph("Page 1: Inputs & Data Captured", styles["h1"]))
+
+    # Client Profile Section
+    story.append(Paragraph("Client Profile", styles["h2"]))
+    profile_rows = [
+        ["Name", name],
+        ["Age", str(age)],
+        ["Marital Status", "Married" if spouse else "Single"],
+        ["Children", str(len(children))],
+        ["Other Dependents", str(len(dependents))],
     ]
-    for l in overview_lines:
-        story.append(Paragraph(sanitize_pdf_text(l), styles["BodyText"]))
-
-    # Income & Savings (qualitative only)
-    story.append(Paragraph("Income & Savings Summary", styles["h2"]))
-    income_declared = bool(lifestyle.get("annual_income"))
-    expenses_declared = bool(lifestyle.get("monthly_expenses"))
-    netcf = bank.get("net_cashflow")
-    if income_declared:
-        story.append(Paragraph("- Income information provided in questionnaire.", styles["BodyText"]))
-    else:
-        story.append(Paragraph("- Income not declared; derived bands used for surplus assessment.", styles["BodyText"]))
-    if expenses_declared:
-        story.append(Paragraph("- Expense data captured in questionnaire.", styles["BodyText"]))
-    else:
-        story.append(Paragraph("- Expense data not declared; liquidity evaluation may rely on emergency fund only.", styles["BodyText"]))
-    if netcf is not None:
-        story.append(Paragraph(sanitize_pdf_text(f"- Document cashflow indicates a {'surplus' if netcf >= 0 else 'deficit'} pattern."), styles["BodyText"]))
-    else:
-        story.append(Paragraph("- Cashflow pattern cannot be inferred from uploaded statements.", styles["BodyText"]))
-
-    # Goals (show names & horizon, keep target amount as per spec)
-    if goals:
-        story.append(Paragraph("Key Goals (Captured)", styles["h2"]))
-        for g in goals[:8]:
-            desc = g.get("name") or g.get("goal") or "Goal"
-            amt = g.get("target_amount")
-            horizon = g.get("horizon_years") or g.get("horizon")
-            pieces = [desc]
-            if horizon:
-                pieces.append(f"Horizon: {horizon} yrs")
-            if amt:
-                pieces.append(f"Target: Rs. {amt}")
-            story.append(Paragraph(sanitize_pdf_text("- " + " | ".join(pieces)), styles["BodyText"]))
-    else:
-        story.append(Paragraph("No goals entered.", styles["BodyText"]))
-    story.append(PageBreak())
-
-    # Page 2 — Analytical Dashboard (only 5 core metrics, hide raw bank/portfolio numeric rows)
-    story.append(Paragraph("Analytical Dashboard", styles["h1"]))
-    metrics_rows = [
-        ["Surplus Level", analysis.get("surplusBand"), Paragraph( _interpret_surplus(analysis.get("surplusBand")))],
-        ["Insurance Coverage", analysis.get("insuranceGap"), Paragraph( _interpret_insurance(analysis.get("insuranceGap")))],
-        ["Debt Status", analysis.get("debtStress"), Paragraph( _interpret_debt(analysis.get("debtStress")))],
-        ["Liquidity", analysis.get("liquidity"), Paragraph( _interpret_liquidity(analysis.get("liquidity")))],
-        ["Investment Health Score", ihs.get("band"), Paragraph( _interpret_ihs(ihs.get("band")))],
-    ]
-    table = Table(
-        [["Metric", "Result", "Interpretation"]] + metrics_rows,
+    profile_table = Table(
+        [["Field", "Value"]] + profile_rows,
         hAlign="LEFT",
-        colWidths=[160, 110, 230],
+        colWidths=[180, 320],
     )
-    table.setStyle(TableStyle([
+    profile_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
         ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
         ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-        ('BOTTOMPADDING',(0,0),(-1,0),8),
+        ('BOTTOMPADDING',(0,0),(-1,0),6),
     ]))
-    story.append(table)
+    story.append(profile_table)
+    story.append(Spacer(1, 12))
 
-    # Advanced Risk Engine Summary
-    if advanced_risk:
-        story.append(Spacer(1, 6))
-        story.append(Paragraph("Advanced Risk Assessment", styles["h2"]))
-        ar_rows = [
-            ["Calculated Score", str(advanced_risk.get("score"))],
-            ["Tenure Limit", advanced_risk.get("tenureLimitCategory")],
-            ["Appetite Category", advanced_risk.get("appetiteCategory")],
-            ["Baseline Category", advanced_risk.get("baselineCategory")],
-            ["Final Category", advanced_risk.get("finalCategory")],
-        ]
-        band = advanced_risk.get("recommendedEquityBand") or {}
-        if band.get("min") is not None and band.get("max") is not None:
-            ar_rows.append(["Recommended Equity Band", f"{band.get('min')}% - {band.get('max')}% (mid {advanced_risk.get('recommendedEquityMid')}%)"])
-        adjustments_list = advanced_risk.get("adjustmentsApplied") or []
-        if adjustments_list:
-            ar_rows.append(["Adjustments Applied", "; ".join(adjustments_list)])
-        ar_rows.append(["Reasoning", advanced_risk.get("reasoningText")])
+    # Data Sources Status
+    story.append(Paragraph("Data Sources Status", styles["h2"]))
+    income_declared = bool(lifestyle.get("annual_income"))
+    expenses_declared = bool(lifestyle.get("monthly_expenses"))
+    netcf = bank.get("net_cashflow")
 
-        ar_table = Table([["Field", "Value"]] + ar_rows, hAlign="LEFT", colWidths=[160, 340])
-        ar_table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-            ('BOTTOMPADDING',(0,0),(-1,0),6),
-        ]))
-        story.append(ar_table)
-        story.append(PageBreak())
-
-    flags = analysis.get("flags") or []
-    if flags:
-        story.append(Paragraph("Flags (Attention Areas)", styles["h2"]))
-        for f in flags:
-            sanitized = re.sub(r"₹?\s?[0-9][0-9,]*", "Rs. ***", f)
-            story.append(Paragraph(sanitize_pdf_text(f"! {sanitized}"), styles["BodyText"]))
-    else:
-        story.append(Paragraph("No critical flags identified.", styles["BodyText"]))
-    story.append(PageBreak())
-
-    # Page 3 — Recommendations (Categorized narrative)
-    story.append(Paragraph("Recommendations", styles["h1"]))
-    categorized = _categorize_recommendations(analysis.get("recommendations") or [])
-    for cat, items in categorized.items():
-        story.append(Paragraph(cat, styles["h2"]))
-        for it in items:
-            story.append(Paragraph(sanitize_pdf_text(f"- {it}"), styles["BodyText"]))
-    story.append(PageBreak())
-
-    # Page 4 — Goal Mapping Table
-    story.append(Paragraph("Goal Mapping", styles["h1"]))
-    goal_rows = []
-    for g in goals[:15]:
-        nm = g.get("name") or g.get("goal") or "Goal"
-        amt = g.get("target_amount") or ""
-        horizon = g.get("horizon_years") or g.get("horizon") or ""
-        strategy = g.get("suggested_strategy") or _default_strategy_for_goal(g)
-        goal_rows.append([nm, f"{amt}", f"{horizon}", Paragraph(strategy)])
-    if goal_rows:
-        g_table = Table(
-            [["Goal", "Target Amount", "Time Horizon", "Suggested Strategy"]] + goal_rows,
-            hAlign="LEFT",
-            colWidths=[160, 100, 80, 160],
-        )
-        g_table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1D3557')),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-            ('BOTTOMPADDING',(0,0),(-1,0),8),
-        ]))
-        story.append(g_table)
-    else:
-        story.append(Paragraph("No goals recorded.", styles["BodyText"]))
-    story.append(PageBreak())
-
-    # Page 5 — Summary & Disclaimers
-    story.append(Paragraph("Summary & Disclaimers", styles["h1"]))
-    summary_points = [
-        f"Risk Profile: {analysis.get('riskProfile')}",
-        f"Surplus Level: {analysis.get('surplusBand')}",
-        f"Insurance Status: {analysis.get('insuranceGap')}",
-        f"Debt Position: {analysis.get('debtStress')}",
-        f"Liquidity: {analysis.get('liquidity')}",
-        f"IHS Band: {ihs.get('band')}",
+    data_rows = [
+        ["Income Declaration", "Provided" if income_declared else "Not declared (derived bands used)"],
+        ["Expense Data", "Captured" if expenses_declared else "Not declared (emergency fund based)"],
+        ["Cashflow Pattern", f"{'Surplus' if netcf >= 0 else 'Deficit'} pattern" if netcf is not None else "Cannot be inferred"],
     ]
-    for sp in summary_points:
-        story.append(Paragraph(sanitize_pdf_text(f"- {sp}"), styles["BodyText"]))
 
-    story.append(Paragraph("Recommendation Categories", styles["h2"]))
-    for cat in categorized.keys():
-        story.append(Paragraph(sanitize_pdf_text(f"- {cat}"), styles["BodyText"]))
-
-    story.append(Paragraph("Missing Documents", styles["h2"]))
+    # Document Upload Status
     uploads = list_questionnaire_uploads(q.get("id"))
     present_types = {row["doc_type"] for row in uploads}
     expected_types = {
@@ -2273,18 +2153,209 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         "Mutual fund CAS (Consolidated Account Statement)",
     }
     missing = expected_types - present_types
-    if missing:
-        for m in sorted(missing):
-            story.append(Paragraph(sanitize_pdf_text(f"- {m}"), styles["BodyText"]))
-    else:
-        story.append(Paragraph("All core documents provided.", styles["BodyText"]))
 
+    for doc_type in sorted(expected_types):
+        status = "Uploaded" if doc_type in present_types else "Missing"
+        data_rows.append([doc_type, status])
+
+    data_table = Table(
+        [["Data Source", "Status"]] + data_rows,
+        hAlign="LEFT",
+        colWidths=[280, 220],
+    )
+    data_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+        ('BOTTOMPADDING',(0,0),(-1,0),6),
+    ]))
+    story.append(data_table)
+    story.append(Spacer(1, 12))
+
+    # Goals Captured
+    story.append(Paragraph("Goals Captured", styles["h2"]))
+    if goals:
+        goal_input_rows = []
+        for g in goals[:10]:
+            desc = g.get("name") or g.get("goal") or "Goal"
+            amt = g.get("target_amount") or "-"
+            horizon = g.get("horizon_years") or g.get("horizon") or "-"
+            goal_input_rows.append([desc, f"Rs. {amt}" if amt != "-" else "-", f"{horizon} yrs" if horizon != "-" else "-"])
+        goals_table = Table(
+            [["Goal Name", "Target Amount", "Horizon"]] + goal_input_rows,
+            hAlign="LEFT",
+            colWidths=[240, 130, 130],
+        )
+        goals_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('BOTTOMPADDING',(0,0),(-1,0),6),
+        ]))
+        story.append(goals_table)
+    else:
+        story.append(Paragraph("No goals entered.", styles["BodyText"]))
+    story.append(PageBreak())
+
+    # ==========================================================================
+    # PAGE 2: TECHNICAL ASSESSMENT (ALL VALUES)
+    # ==========================================================================
+    story.append(Paragraph("Page 2: Technical Assessment", styles["h1"]))
+
+    # Core Financial Metrics Dashboard
+    story.append(Paragraph("Core Financial Metrics", styles["h2"]))
+    metrics_rows = [
+        ["Surplus Level", analysis.get("surplusBand") or "-", Paragraph(_interpret_surplus(analysis.get("surplusBand")))],
+        ["Insurance Coverage", analysis.get("insuranceGap") or "-", Paragraph(_interpret_insurance(analysis.get("insuranceGap")))],
+        ["Debt Status", analysis.get("debtStress") or "-", Paragraph(_interpret_debt(analysis.get("debtStress")))],
+        ["Liquidity", analysis.get("liquidity") or "-", Paragraph(_interpret_liquidity(analysis.get("liquidity")))],
+        ["Investment Health Score", ihs.get("band") or "-", Paragraph(_interpret_ihs(ihs.get("band")))],
+    ]
+    table = Table(
+        [["Metric", "Result", "Interpretation"]] + metrics_rows,
+        hAlign="LEFT",
+        colWidths=[140, 90, 270],
+    )
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+        ('BOTTOMPADDING',(0,0),(-1,0),8),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 12))
+
+    # Advanced Risk Assessment (if available)
+    if advanced_risk:
+        story.append(Paragraph("Advanced Risk Assessment", styles["h2"]))
+
+        # Core risk values in a compact table
+        band = advanced_risk.get("recommendedEquityBand") or {}
+        equity_band_str = f"{band.get('min')}% - {band.get('max')}% (mid {advanced_risk.get('recommendedEquityMid')}%)" if band.get("min") is not None else "-"
+
+        ar_rows = [
+            ["Calculated Score", str(advanced_risk.get("score") or "-")],
+            ["Risk Appetite", advanced_risk.get("appetiteCategory") or "-"],
+            ["Tenure Limit", advanced_risk.get("tenureLimitCategory") or "-"],
+            ["Baseline Category", advanced_risk.get("baselineCategory") or "-"],
+            ["Final Category", advanced_risk.get("finalCategory") or "-"],
+            ["Recommended Equity Band", equity_band_str],
+        ]
+
+        ar_table = Table([["Parameter", "Value"]] + ar_rows, hAlign="LEFT", colWidths=[200, 300])
+        ar_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1D3557')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('BOTTOMPADDING',(0,0),(-1,0),6),
+        ]))
+        story.append(ar_table)
+        story.append(Spacer(1, 8))
+
+        # Adjustments applied
+        adjustments_list = advanced_risk.get("adjustmentsApplied") or []
+        if adjustments_list:
+            story.append(Paragraph("Adjustments Applied:", styles["BodyText"]))
+            for adj in adjustments_list:
+                story.append(Paragraph(sanitize_pdf_text(f"  - {adj}"), styles["BodyText"]))
+
+        # Reasoning
+        reasoning = advanced_risk.get("reasoningText")
+        if reasoning:
+            story.append(Spacer(1, 6))
+            story.append(Paragraph(f"Reasoning: {sanitize_pdf_text(reasoning)}", styles["BodyText"]))
+
+    story.append(Spacer(1, 12))
+
+    # Summary Metrics Box
+    story.append(Paragraph("Assessment Summary", styles["h2"]))
+    summary_rows = [
+        ["Risk Profile", analysis.get('riskProfile') or "-"],
+        ["Surplus Level", analysis.get('surplusBand') or "-"],
+        ["Insurance Status", analysis.get('insuranceGap') or "-"],
+        ["Debt Position", analysis.get('debtStress') or "-"],
+        ["Liquidity", analysis.get('liquidity') or "-"],
+        ["IHS Band", ihs.get('band') or "-"],
+    ]
+    summary_table = Table(
+        [["Assessment", "Result"]] + summary_rows,
+        hAlign="LEFT",
+        colWidths=[200, 300],
+    )
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+        ('BOTTOMPADDING',(0,0),(-1,0),6),
+    ]))
+    story.append(summary_table)
+    story.append(PageBreak())
+
+    # ==========================================================================
+    # PAGE 3: RECOMMENDATIONS & ACTIONS
+    # ==========================================================================
+    story.append(Paragraph("Page 3: Recommendations & Actions", styles["h1"]))
+
+    # Flags / Attention Areas
+    flags = analysis.get("flags") or []
+    story.append(Paragraph("Attention Areas", styles["h2"]))
+    if flags:
+        for f in flags:
+            sanitized = re.sub(r"₹?\s?[0-9][0-9,]*", "Rs. ***", f)
+            story.append(Paragraph(sanitize_pdf_text(f"! {sanitized}"), styles["BodyText"]))
+    else:
+        story.append(Paragraph("No critical flags identified.", styles["BodyText"]))
+    story.append(Spacer(1, 12))
+
+    # Categorized Recommendations
+    story.append(Paragraph("Recommendations", styles["h2"]))
+    for cat, items in categorized.items():
+        story.append(Paragraph(f"<b>{cat}</b>", styles["BodyText"]))
+        for it in items:
+            story.append(Paragraph(sanitize_pdf_text(f"  - {it}"), styles["BodyText"]))
+        story.append(Spacer(1, 4))
+    story.append(Spacer(1, 12))
+
+    # Goal Mapping Table (compact)
+    story.append(Paragraph("Goal Strategy Mapping", styles["h2"]))
+    goal_rows = []
+    for g in goals[:10]:
+        nm = g.get("name") or g.get("goal") or "Goal"
+        horizon = g.get("horizon_years") or g.get("horizon") or "-"
+        strategy = g.get("suggested_strategy") or _default_strategy_for_goal(g)
+        goal_rows.append([nm, f"{horizon}", Paragraph(strategy, styles["BodyText"])])
+    if goal_rows:
+        g_table = Table(
+            [["Goal", "Horizon", "Suggested Strategy"]] + goal_rows,
+            hAlign="LEFT",
+            colWidths=[150, 60, 290],
+        )
+        g_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1D3557')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('BOTTOMPADDING',(0,0),(-1,0),6),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ]))
+        story.append(g_table)
+    else:
+        story.append(Paragraph("No goals recorded.", styles["BodyText"]))
+    story.append(Spacer(1, 12))
+
+    # Disclaimers
+    story.append(Paragraph("Disclaimers", styles["h2"]))
     disclaimers = [
         "Indicative plan; not a legally binding advisory document.",
         "Market and regulatory changes can impact recommendations.",
         "Revisit annually or after major life events.",
     ]
-    story.append(Paragraph("Disclaimers", styles["h2"]))
     for d in disclaimers:
         story.append(Paragraph(f"- {d}", styles["BodyText"]))
 
