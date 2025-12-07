@@ -1585,50 +1585,158 @@ def analyze_financial_health(payload: dict):
 def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
     """
     Aggregate key metrics from all documents linked to the questionnaire.
-    Returns a dict with 'bank' and 'portfolio' summaries (if available).
+    Returns a dict with 'bank', 'portfolio', 'insurance', and 'itr' summaries when available.
+    Known metric keys mapped:
+      - Bank: total_inflows, total_outflows, opening_balance, closing_balance
+      - Portfolio: portfolio_equity, portfolio_debt, portfolio_gold, portfolio_realEstate, portfolio_insuranceLinked, portfolio_cash
+      - Insurance: insurance_sum_assured_or_insured (life/health), insurance_type
+      - ITR: gross_total_income, taxable_income, total_tax_paid
     """
     uploads = list_questionnaire_uploads(qid) or []
     doc_ids = [row["document_id"] for row in uploads if row.get("document_id") is not None]
+
     bank = {"total_inflows": 0.0, "total_outflows": 0.0, "opening_balance": None, "closing_balance": None}
     portfolio = {}
+    insurance = {}
+    itr = {}
+
     for did in doc_ids:
         try:
             mets = list_metrics(did) or []
         except Exception:
             mets = []
         for m in mets:
-            k = (m["key"] or "").strip()
-            v = m["value_num"]
+            k = (m["key"] or "").strip().lower()
+            vnum = m.get("value_num")
+            vtxt = m.get("value_text")
+            # Bank
             if k in ("total_inflows", "total_outflows"):
                 try:
-                    if k == "total_inflows" and v is not None:
-                        bank["total_inflows"] += float(v)
-                    if k == "total_outflows" and v is not None:
-                        bank["total_outflows"] += float(v)
+                    if k == "total_inflows" and vnum is not None:
+                        bank["total_inflows"] += float(vnum)
+                    if k == "total_outflows" and vnum is not None:
+                        bank["total_outflows"] += float(vnum)
                 except Exception:
                     pass
             elif k in ("opening_balance", "closing_balance"):
-                if v is not None:
-                    bank[k] = float(v)
+                if vnum is not None:
+                    try:
+                        bank[k] = float(vnum)
+                    except Exception:
+                        pass
+            # Portfolio allocation (CAS)
             elif k.startswith("portfolio_"):
                 try:
                     key = k.replace("portfolio_", "")
-                    if v is not None:
-                        portfolio[key] = float(v)
+                    if vnum is not None:
+                        portfolio[key] = float(vnum)
                 except Exception:
                     pass
+            # Insurance
+            elif k in ("insurance_sum_assured_or_insured", "sum_assured_or_insured"):
+                try:
+                    if vnum is not None:
+                        insurance["sum_assured_or_insured"] = float(vnum)
+                except Exception:
+                    pass
+            elif k in ("insurance_type",):
+                if vtxt:
+                    insurance["insurance_type"] = vtxt
+            # ITR
+            elif k in ("gross_total_income", "taxable_income", "total_tax_paid"):
+                try:
+                    if vnum is not None:
+                        itr[k] = float(vnum)
+                except Exception:
+                    pass
+
     try:
         inflow = float(bank.get("total_inflows") or 0.0)
         outflow = float(bank.get("total_outflows") or 0.0)
         bank["net_cashflow"] = inflow - outflow
     except Exception:
         bank["net_cashflow"] = None
+
     out = {}
     if any(v not in (None, 0.0) for v in bank.values()):
         out["bank"] = bank
     if portfolio:
         out["portfolio"] = portfolio
+    if insurance:
+        out["insurance"] = insurance
+    if itr:
+        out["itr"] = itr
     return out
+
+def build_prefill_from_insights(qid: int) -> dict:
+    """
+    Derive questionnaire prefill values from linked uploads (Bank/CAS/ITR/Insurance).
+    Prefill rules:
+      - Lifestyle:
+          annual_income := ITR.gross_total_income if present else Bank.total_inflows
+          monthly_expenses := Bank.total_outflows / 12
+          savings_percent := max(0, inflows - outflows)/inflows * 100
+      - Allocation:
+          from CAS portfolio_* metrics (equity, debt, gold, realEstate, insuranceLinked, cash)
+      - Insurance:
+          life_cover := sum_assured_or_insured if insurance_type suggests life
+          health_cover := sum_assured_or_insured if insurance_type suggests health
+    """
+    di = aggregate_doc_insights_for_questionnaire(qid) or {}
+    bank = di.get("bank") or {}
+    portfolio = di.get("portfolio") or {}
+    itr = di.get("itr") or {}
+    ins = di.get("insurance") or {}
+
+    lifestyle = {}
+    try:
+        inflow = itr.get("gross_total_income")
+        if not isinstance(inflow, (int, float)) or inflow <= 0:
+            inflow = bank.get("total_inflows")
+        outflow = bank.get("total_outflows")
+        netcf = bank.get("net_cashflow")
+
+        if isinstance(inflow, (int, float)) and inflow > 0:
+            lifestyle["annual_income"] = round(float(inflow), 2)
+        if isinstance(outflow, (int, float)) and outflow > 0:
+            lifestyle["monthly_expenses"] = round(float(outflow) / 12.0, 2)
+        if isinstance(inflow, (int, float)) and inflow > 0 and isinstance(outflow, (int, float)):
+            sp = max(0.0, (float(inflow) - float(outflow))) / float(inflow) * 100.0
+            lifestyle["savings_percent"] = round(sp, 2)
+    except Exception:
+        pass
+
+    allocation = {}
+    try:
+        for k in ["equity", "debt", "gold", "realEstate", "insuranceLinked", "cash"]:
+            v = portfolio.get(k)
+            if isinstance(v, (int, float)) and v >= 0:
+                allocation[k] = float(v)
+    except Exception:
+        pass
+
+    insurance_prefill = {}
+    try:
+        sum_val = ins.get("sum_assured_or_insured")
+        ins_type = str(ins.get("insurance_type") or "").lower()
+        if isinstance(sum_val, (int, float)) and sum_val > 0:
+            if "life" in ins_type or "term" in ins_type or "ulip" in ins_type:
+                insurance_prefill["life_cover"] = float(sum_val)
+            elif "health" in ins_type or "mediclaim" in ins_type:
+                insurance_prefill["health_cover"] = float(sum_val)
+            else:
+                # Unknown type: default to life_cover; user can adjust
+                insurance_prefill["life_cover"] = float(sum_val)
+    except Exception:
+        pass
+
+    return {
+        "questionnaire_id": qid,
+        "docInsights": di,
+        "lifestyle": lifestyle,
+        "allocation": allocation,
+        "insurance": insurance_prefill,
+    }
 
 # --- Flask Routes ---
 
@@ -1768,51 +1876,25 @@ def upload_document():
         except Exception as e:
             extracted_data[f"Document {idx+1}"] = {"error": f"Failed to process file: {str(e)}"}
 
-    # If questionnaire_id is present, generate the narrative Financial Plan and return that URL
+    # If questionnaire_id is present, DO NOT generate the plan here.
+    # Only link uploads and return insights/prefill; plan should be generated after questionnaire submission.
     if questionnaire_id:
-        try:
-            q = get_questionnaire(questionnaire_id)
-        except Exception:
-            q = None
         try:
             doc_insights = aggregate_doc_insights_for_questionnaire(questionnaire_id)
         except Exception as e:
             doc_insights = {"error": str(e)}
-        if isinstance(q, dict):
-            # Ensure q carries its id for missing docs checklist inside PDF
-            q.setdefault("id", questionnaire_id)
-            inputs = _assemble_financial_inputs(q, doc_insights)
-            analysis = analyze_financial_health(inputs)
-            sections = None
-            try:
-                facts = _build_client_facts(q, analysis, doc_insights)
-                sections = run_report_sections(questionnaire_id, facts)
-            except Exception as e:
-                analysis["llm_error"] = str(e)
-            plan_filename = f"FinancialPlan_{os.urandom(8).hex()}.pdf"
-            plan_path = os.path.join(OUTPUT_DIR, plan_filename)
-            generate_financial_plan_pdf(q, analysis, plan_path, doc_insights=doc_insights, narratives=sections)
-            if STORE_REPORTS == "memory":
-                with open(plan_path, "rb") as pf:
-                    data = pf.read()
-                token = _register_temp_download(data, plan_filename)
-                try:
-                    os.remove(plan_path)
-                except Exception:
-                    pass
-                plan_url = url_for('download_temp', token=token, _external=True)
-            else:
-                plan_url = url_for('download_file', filename=plan_filename, _external=True)
-            # Backward compatible: frontend expects summary_pdf_url; point it to plan URL
-            return jsonify({
-                "summary_pdf_url": plan_url,
-                "financial_plan_pdf_url": plan_url,
-                "debug_shas": debug_shas,
-                "questionnaire_id": questionnaire_id,
-                "analysis": analysis,
-                "docInsights": doc_insights,
-                "sections": sections
-            }), 200
+        # Build lightweight prefill suggestions to allow frontend to pre-populate fields
+        try:
+            prefill = build_prefill_from_insights(questionnaire_id)
+        except Exception as e:
+            prefill = {"error": str(e)}
+        return jsonify({
+            "summary_pdf_url": None,  # no summary when using questionnaire flow
+            "debug_shas": debug_shas,
+            "questionnaire_id": questionnaire_id,
+            "docInsights": doc_insights,
+            "prefill": prefill
+        }), 200
 
     # Fallback to legacy summary report if no questionnaire_id provided
     pdf_filename = f"PortfolioSummary_{os.urandom(8).hex()}.pdf"
@@ -2010,6 +2092,18 @@ def questionnaire_get(qid: int):
     if not q:
         return jsonify({"error": "not found"}), 404
     return jsonify(q), 200
+
+@app.route("/questionnaire/<int:qid>/prefill", methods=["GET"])
+def questionnaire_prefill(qid: int):
+    """
+    Provide prefill suggestions derived from uploaded documents for this questionnaire.
+    Frontend can use these to pre-populate fields and allow user edits.
+    """
+    try:
+        prefill = build_prefill_from_insights(qid)
+        return jsonify(prefill), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
     personal = q.get("personal_info") or {}
