@@ -5,3 +5,14 @@ venv/
 # Environment files
 .env
 .env.local
+
+# Build artifacts
+__pycache__/
+*.pyc
+*.zip
+
+# Logs
+LogFiles/
+
+# Deployment artifacts
+deployments/
