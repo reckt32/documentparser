@@ -1785,6 +1785,7 @@ def build_prefill_from_insights(qid: int) -> dict:
             lifestyle["monthly_expenses"] = round(float(outflow) / 12.0, 2)
         if isinstance(inflow, (int, float)) and inflow > 0 and isinstance(outflow, (int, float)):
             sp = max(0.0, (float(inflow) - float(outflow))) / float(inflow) * 100.0
+            sp = max(0.0, min(100.0, sp))
             lifestyle["savings_percent"] = round(sp, 2)
     except Exception:
         pass
@@ -2266,7 +2267,43 @@ def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
             outflow = bank.get("total_outflows")
             if isinstance(inflow, (int, float)) and inflow > 0 and isinstance(outflow, (int, float)):
                 sp = max(0.0, (inflow - outflow)) / inflow * 100.0
+                sp = max(0.0, min(100.0, sp))
                 payload["savings"]["savingsPercent"] = round(sp, 2)
+    except Exception:
+        pass
+
+    # Merge insurance covers from document insights when questionnaire values are absent
+    try:
+        ins = di.get("insurance") or {}
+        sum_val = ins.get("sum_assured_or_insured")
+        ins_type = str(ins.get("insurance_type") or "").lower()
+        if isinstance(sum_val, (int, float)) and sum_val > 0:
+            if not payload["insurance"].get("lifeCover") and ("life" in ins_type or "term" in ins_type or "ulip" in ins_type):
+                payload["insurance"]["lifeCover"] = float(sum_val)
+            if not payload["insurance"].get("healthCover") and ("health" in ins_type or "mediclaim" in ins_type):
+                payload["insurance"]["healthCover"] = float(sum_val)
+            # Unknown type: default to life cover if both missing
+            if not payload["insurance"].get("lifeCover") and not payload["insurance"].get("healthCover"):
+                payload["insurance"]["lifeCover"] = float(sum_val)
+    except Exception:
+        pass
+
+    # Merge portfolio allocation from document insights (CAS) when missing
+    try:
+        port = di.get("portfolio") or {}
+        alloc = payload.get("investments", {}).get("allocation") or {}
+        def _set_if_missing(key, src_key):
+            if alloc.get(key) in (None, "", 0):
+                v = port.get(src_key)
+                if isinstance(v, (int, float)) and v >= 0:
+                    alloc[key] = float(v)
+        _set_if_missing("equity", "equity")
+        _set_if_missing("debt", "debt")
+        _set_if_missing("gold", "gold")
+        _set_if_missing("realEstate", "realEstate")
+        _set_if_missing("insuranceLinked", "insuranceLinked")
+        _set_if_missing("cash", "cash")
+        payload["investments"]["allocation"] = alloc
     except Exception:
         pass
 
