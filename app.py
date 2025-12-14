@@ -17,7 +17,7 @@ from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from datetime import datetime
 from reportlab.pdfgen import canvas
-from extractors import index_and_extract
+from extractors import index_and_extract, extract_and_store_from_indexed
 from llm_sections import run_report_sections
 from db import (
     list_sections,
@@ -1670,69 +1670,94 @@ def analyze_financial_health(payload: dict):
 # --- Document insights aggregation (from linked uploads) ---
 def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
     """
-    Aggregate key metrics from all documents linked to the questionnaire.
-    Returns a dict with 'bank', 'portfolio', 'insurance', and 'itr' summaries when available.
-    Known metric keys mapped:
-      - Bank: total_inflows, total_outflows, opening_balance, closing_balance
-      - Portfolio: portfolio_equity, portfolio_debt, portfolio_gold, portfolio_realEstate, portfolio_insuranceLinked, portfolio_cash
-      - Insurance: insurance_sum_assured_or_insured (life/health), insurance_type
-      - ITR: gross_total_income, taxable_income, total_tax_paid
+    Aggregate insights using deterministic extractors from all documents linked to the questionnaire.
+    Combines:
+      - DB metrics (numeric aggregations for bank/CAS/ITR/insurance)
+      - Indexed section/table-driven summaries via extract_and_store_from_indexed(document_id)
+    Returns:
+      {
+        "bank": {...},                   # totals + opening/closing + net_cashflow
+        "portfolio": {...},              # CAS allocation percentages if present
+        "insurance": {"sum_assured_or_insured": number}?,
+        "itr": {"gross_total_income": n, "taxable_income": n, "total_tax_paid": n}?,
+        "raw_extracts": [                # per-document extracted summaries from index
+          {
+            "document_id": int,
+            "summary": {
+              "investment_snapshot": {...} | None,
+              "account_summary": {...} | None,
+              "portfolio_summary": {...} | None,
+              "provenance": {...}
+            }
+          },
+          ...
+        ]
+      }
     """
     uploads = list_questionnaire_uploads(qid) or []
-    doc_ids = [row["document_id"] for row in uploads if row.get("document_id") is not None]
+    doc_ids = [r["document_id"] for r in uploads if r["document_id"] is not None]
 
+    # Aggregates
     bank = {"total_inflows": 0.0, "total_outflows": 0.0, "opening_balance": None, "closing_balance": None}
-    portfolio = {}
+    portfolio_alloc = {}
     insurance = {}
     itr = {}
 
+    per_doc_extracts = []
+
     for did in doc_ids:
+        # 1) Deterministic summaries from indexed sections/tables
+        try:
+            idx_summary = extract_and_store_from_indexed(did) or {}
+            per_doc_extracts.append({"document_id": did, "summary": idx_summary})
+            # Merge account summary for opening/closing only to avoid double counting with metrics
+            acct = idx_summary.get("account_summary") or {}
+            try:
+                ob = acct.get("opening_balance")
+                cb = acct.get("closing_balance")
+                if bank["opening_balance"] is None and isinstance(ob, (int, float)):
+                    bank["opening_balance"] = float(ob)
+                if bank["closing_balance"] is None and isinstance(cb, (int, float)):
+                    bank["closing_balance"] = float(cb)
+            except Exception:
+                pass
+            # No direct allocation percentages in idx_summary; keep for narratives via facts
+        except Exception:
+            # If extraction fails for any doc, continue with metrics-only for that doc
+            pass
+
+        # 2) Numeric metrics for CAS allocation/ITR/insurance/bank (authoritative numeric store)
         try:
             mets = list_metrics(did) or []
         except Exception:
             mets = []
         for m in mets:
-            md = dict(m)  # sqlite3.Row -> dict for safe access
+            md = dict(m)
             k = (md.get("key") or "").strip().lower()
             vnum = md.get("value_num")
-            # Bank
-            if k in ("total_inflows", "total_outflows"):
-                try:
-                    if k == "total_inflows" and vnum is not None:
-                        bank["total_inflows"] += float(vnum)
-                    if k == "total_outflows" and vnum is not None:
-                        bank["total_outflows"] += float(vnum)
-                except Exception:
-                    pass
-            elif k in ("opening_balance", "closing_balance"):
-                if vnum is not None:
-                    try:
-                        bank[k] = float(vnum)
-                    except Exception:
-                        pass
-            # Portfolio allocation (CAS)
-            elif k.startswith("portfolio_"):
-                try:
-                    key = k.replace("portfolio_", "")
+            try:
+                if k in ("total_inflows", "total_outflows"):
                     if vnum is not None:
-                        portfolio[key] = float(vnum)
-                except Exception:
-                    pass
-            # Insurance
-            elif k in ("insurance_sum_assured_or_insured", "sum_assured_or_insured"):
-                try:
+                        if k == "total_inflows":
+                            bank["total_inflows"] += float(vnum)
+                        else:
+                            bank["total_outflows"] += float(vnum)
+                elif k in ("opening_balance", "closing_balance"):
+                    if vnum is not None:
+                        bank[k] = float(vnum)
+                elif k.startswith("portfolio_"):
+                    if vnum is not None:
+                        portfolio_alloc[k.replace("portfolio_", "")] = float(vnum)
+                elif k in ("insurance_sum_assured_or_insured", "sum_assured_or_insured"):
                     if vnum is not None:
                         insurance["sum_assured_or_insured"] = float(vnum)
-                except Exception:
-                    pass
-            # ITR
-            elif k in ("gross_total_income", "taxable_income", "total_tax_paid"):
-                try:
+                elif k in ("gross_total_income", "taxable_income", "total_tax_paid"):
                     if vnum is not None:
                         itr[k] = float(vnum)
-                except Exception:
-                    pass
+            except Exception:
+                continue
 
+    # Compute net cashflow
     try:
         inflow = float(bank.get("total_inflows") or 0.0)
         outflow = float(bank.get("total_outflows") or 0.0)
@@ -1740,15 +1765,17 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
     except Exception:
         bank["net_cashflow"] = None
 
-    out = {}
+    out: Dict[str, dict] = {}
     if any(v not in (None, 0.0) for v in bank.values()):
         out["bank"] = bank
-    if portfolio:
-        out["portfolio"] = portfolio
+    if portfolio_alloc:
+        out["portfolio"] = portfolio_alloc
     if insurance:
         out["insurance"] = insurance
     if itr:
         out["itr"] = itr
+    if per_doc_extracts:
+        out["raw_extracts"] = per_doc_extracts
     return out
 
 def build_prefill_from_insights(qid: int) -> dict:
@@ -1773,18 +1800,20 @@ def build_prefill_from_insights(qid: int) -> dict:
 
     lifestyle = {}
     try:
-        inflow = itr.get("gross_total_income")
-        if not isinstance(inflow, (int, float)) or inflow <= 0:
-            inflow = bank.get("total_inflows")
-        outflow = bank.get("total_outflows")
-        netcf = bank.get("net_cashflow")
+        # Annual income prefers ITR; monthly expenses from bank; savings% strictly from bank flows
+        itr_income = itr.get("gross_total_income")
+        bank_inflow = bank.get("total_inflows")
+        bank_outflow = bank.get("total_outflows")
+
+        inflow = itr_income if isinstance(itr_income, (int, float)) and itr_income > 0 else bank_inflow
+        outflow = bank_outflow
 
         if isinstance(inflow, (int, float)) and inflow > 0:
             lifestyle["annual_income"] = round(float(inflow), 2)
         if isinstance(outflow, (int, float)) and outflow > 0:
             lifestyle["monthly_expenses"] = round(float(outflow) / 12.0, 2)
-        if isinstance(inflow, (int, float)) and inflow > 0 and isinstance(outflow, (int, float)):
-            sp = max(0.0, (float(inflow) - float(outflow))) / float(inflow) * 100.0
+        if isinstance(bank_inflow, (int, float)) and bank_inflow > 0 and isinstance(bank_outflow, (int, float)):
+            sp = max(0.0, (float(bank_inflow) - float(bank_outflow))) / float(bank_inflow) * 100.0
             sp = max(0.0, min(100.0, sp))
             lifestyle["savings_percent"] = round(sp, 2)
     except Exception:
@@ -2352,8 +2381,11 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
             "total_inflows": bank.get("total_inflows"),
             "total_outflows": bank.get("total_outflows"),
             "net_cashflow": bank.get("net_cashflow"),
+            "opening_balance": bank.get("opening_balance"),
+            "closing_balance": bank.get("closing_balance"),
         },
         "portfolio": portfolio,
+        "extracts": di.get("raw_extracts"),
         "analysis": analysis,
     }
     return facts
