@@ -1,0 +1,145 @@
+{
+  "docInsights": {
+    "bank": {
+      "total_inflows": 1200000.0,
+      "total_outflows": 900000.0,
+      "opening_balance": 10000.0,
+      "closing_balance": 13000.0,
+      "net_cashflow": 300000.0
+    },
+    "portfolio": {
+      "cash": 0.0,
+      "debt": 30.0,
+      "equity": 60.0,
+      "gold": 10.0,
+      "insurancelinked": 0.0,
+      "realestate": 0.0
+    },
+    "insurance": {
+      "sum_assured_or_insured": 5000000.0
+    },
+    "itr": {
+      "gross_total_income": 1500000.0,
+      "taxable_income": 1200000.0,
+      "total_tax_paid": 150000.0
+    },
+    "raw_extracts": [
+      {
+        "document_id": 13,
+        "summary": {
+          "investment_snapshot": null,
+          "account_summary": null,
+          "portfolio_summary": null,
+          "provenance": {}
+        }
+      },
+      {
+        "document_id": 14,
+        "summary": {
+          "investment_snapshot": null,
+          "account_summary": null,
+          "portfolio_summary": null,
+          "provenance": {}
+        }
+      },
+      {
+        "document_id": 15,
+        "summary": {
+          "investment_snapshot": null,
+          "account_summary": null,
+          "portfolio_summary": null,
+          "provenance": {}
+        }
+      },
+      {
+        "document_id": 16,
+        "summary": {
+          "investment_snapshot": null,
+          "account_summary": null,
+          "portfolio_summary": null,
+          "provenance": {}
+        }
+      }
+    ]
+  },
+  "prefill": {
+    "questionnaire_id": 9,
+    "docInsights": {
+      "bank": {
+        "total_inflows": 1200000.0,
+        "total_outflows": 900000.0,
+        "opening_balance": 10000.0,
+        "closing_balance": 13000.0,
+        "net_cashflow": 300000.0
+      },
+      "portfolio": {
+        "cash": 0.0,
+        "debt": 30.0,
+        "equity": 60.0,
+        "gold": 10.0,
+        "insurancelinked": 0.0,
+        "realestate": 0.0
+      },
+      "insurance": {
+        "sum_assured_or_insured": 5000000.0
+      },
+      "itr": {
+        "gross_total_income": 1500000.0,
+        "taxable_income": 1200000.0,
+        "total_tax_paid": 150000.0
+      },
+      "raw_extracts": [
+        {
+          "document_id": 13,
+          "summary": {
+            "investment_snapshot": null,
+            "account_summary": null,
+            "portfolio_summary": null,
+            "provenance": {}
+          }
+        },
+        {
+          "document_id": 14,
+          "summary": {
+            "investment_snapshot": null,
+            "account_summary": null,
+            "portfolio_summary": null,
+            "provenance": {}
+          }
+        },
+        {
+          "document_id": 15,
+          "summary": {
+            "investment_snapshot": null,
+            "account_summary": null,
+            "portfolio_summary": null,
+            "provenance": {}
+          }
+        },
+        {
+          "document_id": 16,
+          "summary": {
+            "investment_snapshot": null,
+            "account_summary": null,
+            "portfolio_summary": null,
+            "provenance": {}
+          }
+        }
+      ]
+    },
+    "lifestyle": {
+      "annual_income": 1500000.0,
+      "monthly_expenses": 75000.0,
+      "savings_percent": 25.0
+    },
+    "allocation": {
+      "equity": 60.0,
+      "debt": 30.0,
+      "gold": 10.0,
+      "cash": 0.0
+    },
+    "insurance": {
+      "life_cover": 5000000.0
+    }
+  }
+}
