@@ -36,6 +36,7 @@ from db import (
     get_latest_questionnaire_for_user,
     link_questionnaire_upload,
     list_questionnaire_uploads,
+    update_questionnaire_upload_metadata,
 )
 # --- Initialization ---
 load_dotenv()
@@ -1433,6 +1434,61 @@ def compute_advanced_risk(payload, age):
         },
     }
 
+def _generate_unified_equity_recommendation(results, inputs):
+    """
+    Generate unified equity recommendation by comparing current allocation
+    vs recommended band from advanced risk assessment.
+    Prevents contradictory advice.
+    """
+    allocation = (inputs.get("investments") or {}).get("allocation") or {}
+    current_equity = _safe_float(allocation.get("equity"), 0.0)
+
+    advanced_risk = results.get("advancedRisk") or {}
+    rec_band = advanced_risk.get("recommendedEquityBand") or {}
+    rec_min = rec_band.get("min")
+    rec_max = rec_band.get("max")
+    rec_mid = advanced_risk.get("recommendedEquityMid")
+
+    ihs_band = results.get("ihs", {}).get("band")
+
+    # Compare current vs recommended
+    if rec_min is not None and rec_max is not None:
+        if current_equity < rec_min - 5:
+            # Below recommended range
+            gap = rec_min - current_equity
+            if gap > 20:
+                return f"Increase equity from {round(current_equity, 1)}% to at least {rec_min}% (target: {rec_mid}%). Consider gradual rebalancing via SIP."
+            else:
+                return f"Increase equity from {round(current_equity, 1)}% towards {rec_min}-{rec_max}% range (target: {rec_mid}%)."
+
+        elif current_equity > rec_max + 5:
+            # Above recommended range
+            gap = current_equity - rec_max
+            if gap > 20:
+                return f"Reduce equity from {round(current_equity, 1)}% to {rec_max}% or below. Consider booking profits and rebalancing to debt."
+            else:
+                return f"Consider rebalancing: current equity {round(current_equity, 1)}% exceeds recommended {rec_min}-{rec_max}%."
+
+        else:
+            # Within recommended range
+            if ihs_band == "Excellent":
+                return f"Maintain allocation (equity: {round(current_equity, 1)}%). Rebalance annually and add international exposure."
+            elif ihs_band == "Good":
+                return f"Equity allocation ({round(current_equity, 1)}%) is well-aligned. Consider international exposure and tax optimization."
+            else:
+                return f"Equity allocation ({round(current_equity, 1)}%) is within recommended range ({rec_min}-{rec_max}%). Focus on fund quality and diversification."
+
+    # Fallback if no advanced risk data
+    rp = results.get("riskProfile")
+    if rp == "Conservative":
+        return "Focus on debt-heavy allocation (25-40% equity) with low-volatility funds."
+    elif rp == "Balanced":
+        return "Aim for balanced 40-55% equity allocation with quality debt funds."
+    elif rp == "Aggressive":
+        return "Target 70-85% equity allocation; add gold (5-10%) as hedge."
+
+    return "Review asset allocation with advisor to align with risk profile and goals."
+
 def generate_flags_and_recommendations(results, inputs):
     flags = []
     recs = []
@@ -1481,14 +1537,11 @@ def generate_flags_and_recommendations(results, inputs):
         flags.append(f"Score = {ihs.get('score')} -> {ihs.get('band')}: Saving {round(savings_percent,1)}% income{extra}")
 
     # Recommendations
-    rp = results.get("riskProfile")
-    if rp == "Conservative":
-        recs.append("Focus on debt-heavy allocation and low-volatility funds.")
-    elif rp == "Balanced":
-        recs.append("Aim for a 60:40 equity-debt mix.")
-    elif rp == "Aggressive":
-        recs.append("Target 70-80% equity allocation; consider adding gold as a hedge.")
+    # 1. Unified Equity Recommendation (replaces old risk profile + IHS equity recommendations)
+    equity_rec = _generate_unified_equity_recommendation(results, inputs)
+    recs.append(equity_rec)
 
+    # 2. Surplus recommendations
     sb = results.get("surplusBand")
     if sb == "Low":
         recs.append("Cut discretionary spending; automate an SIP.")
@@ -1497,12 +1550,14 @@ def generate_flags_and_recommendations(results, inputs):
     elif sb == "Strong":
         recs.append("Accelerate retirement savings and explore growth instruments.")
 
+    # 3. Insurance recommendations
     ig = results.get("insuranceGap")
     if ig == "Underinsured":
         recs.append("Buy term life insurance for 10-12x your income and add/increase health cover.")
     else:
         recs.append("Review your cover every 2-3 years.")
 
+    # 4. Debt recommendations
     ds = results.get("debtStress")
     if ds == "Stressed":
         recs.append("Refinance high-cost debt; repay high-cost debt first; avoid new borrowing.")
@@ -1511,21 +1566,20 @@ def generate_flags_and_recommendations(results, inputs):
     else:
         recs.append("You can leverage strategically if needed.")
 
+    # 5. Liquidity recommendations
     liq = results.get("liquidity")
     if liq == "Insufficient":
         recs.append("Build a liquid buffer (cash/liquid funds) until 6 months of expenses are covered.")
     else:
         recs.append("Invest your incremental surplus into growth assets.")
 
+    # 6. IHS portfolio quality recommendations (non-equity advice only)
     ihs_band = ihs.get("band")
     if ihs_band == "Poor":
-        recs.append("Increase your savings rate, exit unsuitable products, and diversify your portfolio.")
+        recs.append("Increase savings rate, exit unsuitable products, and improve portfolio diversification.")
     elif ihs_band == "Average":
-        recs.append("Increase your equity allocation and align investments with your goals.")
-    elif ihs_band == "Good":
-        recs.append("Conduct an annual review, add international exposure, and optimize for tax.")
-    elif ihs_band == "Excellent":
-        recs.append("Maintain your strategy, rebalance annually, and explore advanced strategies.")
+        recs.append("Align investments with your goals and review fund performance regularly.")
+    # Good and Excellent cases now handled in unified equity recommendation
 
     return flags, recs
 
@@ -1668,6 +1722,28 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
         out["itr"] = itr
     return out
 
+def _get_cas_data_for_questionnaire(qid: int) -> dict:
+    """
+    Retrieve CAS data from uploaded Mutual Fund CAS documents.
+    Returns dict with sip_details, transaction_summary, asset_allocation or empty dict.
+    """
+    uploads = list_questionnaire_uploads(qid) or []
+
+    for upload in uploads:
+        if upload.get("doc_type") == "Mutual fund CAS (Consolidated Account Statement)":
+            metadata_json = upload.get("metadata_json")
+            if metadata_json:
+                try:
+                    metadata = json.loads(metadata_json)
+                    cas_data = metadata.get("cas_data", {})
+                    if cas_data:
+                        return cas_data
+                except Exception as e:
+                    print(f"Error parsing CAS metadata: {e}")
+                    continue
+
+    return {}
+
 def build_prefill_from_insights(qid: int) -> dict:
     """
     Derive questionnaire prefill values from linked uploads (Bank/CAS/ITR/Insurance).
@@ -1776,6 +1852,7 @@ def upload_document():
 
     extracted_data = {}
     debug_shas = []
+    upload_link_ids = {}  # Track upload link IDs for metadata updates
     for idx, (file, doc_type) in enumerate(zip(files, types)):
         try:
             print(f"Processing file {idx + 1}: {file.filename}")
@@ -1791,7 +1868,7 @@ def upload_document():
             # Link to questionnaire if provided
             if questionnaire_id:
                 try:
-                    link_questionnaire_upload(
+                    link_id = link_questionnaire_upload(
                         questionnaire_id=questionnaire_id,
                         document_id=doc_id,
                         sha256=sha,
@@ -1799,6 +1876,8 @@ def upload_document():
                         filename=file.filename,
                         metadata={"size_bytes": len(file_bytes)}
                     )
+                    # Store link_id for updating CAS metadata later
+                    upload_link_ids[idx] = link_id
                 except Exception as e:
                     print(f"Failed linking upload to questionnaire {questionnaire_id}: {e}")
             
@@ -1856,6 +1935,24 @@ def upload_document():
                             other_data["portfolio_summary"] = summaries["portfolio_summary"]
                         if summaries.get("provenance"):
                             other_data["provenance"] = summaries["provenance"]
+
+                    # Update CAS metadata if this is a CAS document
+                    if doc_type == "Mutual fund CAS (Consolidated Account Statement)" and idx in upload_link_ids:
+                        try:
+                            update_questionnaire_upload_metadata(
+                                upload_link_ids[idx],
+                                {
+                                    "size_bytes": len(file_bytes),
+                                    "cas_data": {
+                                        "sip_details": other_data.get("sip_details", []),
+                                        "transaction_summary": other_data.get("transaction_summary", {}),
+                                        "asset_allocation": other_data.get("asset_allocation", {}),
+                                    }
+                                }
+                            )
+                        except Exception as e:
+                            print(f"Error updating CAS metadata: {e}")
+
                     extracted_data[f"{name} {idx+1}"] = other_data
             else:
                 # Generic fallback: still return deterministic DB-backed summaries even if doc type is unknown
@@ -2341,6 +2438,138 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     story.append(data_table)
     story.append(Spacer(1, 12))
 
+    # Portfolio Snapshot (from CAS)
+    cas_data = _get_cas_data_for_questionnaire(q.get("id"))
+
+    if cas_data and (cas_data.get("transaction_summary") or cas_data.get("sip_details")):
+        story.append(Paragraph("Portfolio Snapshot (Mutual Fund CAS)", styles["h2"]))
+
+        # Transaction Summary
+        trans_sum = cas_data.get("transaction_summary") or {}
+        if trans_sum:
+            total_inv = trans_sum.get("total_purchase_amount", 0)
+            current_val = trans_sum.get("total_current_value", 0)
+            unrealized_gain = trans_sum.get("total_unrealized_gain", 0)
+
+            portfolio_rows = []
+            if total_inv:
+                portfolio_rows.append(["Total Investment", f"Rs. {total_inv:,.0f}"])
+            if current_val:
+                portfolio_rows.append(["Current Value", f"Rs. {current_val:,.0f}"])
+            if unrealized_gain is not None:
+                gain_text = f"Rs. {abs(unrealized_gain):,.0f} ({'+' if unrealized_gain >= 0 else '-'})"
+                portfolio_rows.append(["Unrealized Gain/Loss", gain_text])
+
+            # Returns percentage
+            if total_inv and total_inv > 0 and current_val:
+                returns_pct = ((current_val - total_inv) / total_inv) * 100
+                portfolio_rows.append(["Returns", f"{returns_pct:+.1f}%"])
+
+            if portfolio_rows:
+                portfolio_table = Table(
+                    [["Metric", "Value"]] + portfolio_rows,
+                    hAlign="LEFT",
+                    colWidths=[200, 300],
+                )
+                portfolio_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                    ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+                    ('BOTTOMPADDING',(0,0),(-1,0),6),
+                ]))
+                story.append(portfolio_table)
+                story.append(Spacer(1, 8))
+
+        # Asset Allocation & Debt-Equity Ratio
+        asset_alloc = cas_data.get("asset_allocation") or {}
+        equity_pct = asset_alloc.get("equity_percentage", 0)
+        debt_pct = asset_alloc.get("debt_percentage", 0)
+        hybrid_pct = asset_alloc.get("hybrid_percentage", 0)
+
+        if equity_pct or debt_pct or hybrid_pct:
+            alloc_rows = [
+                ["Equity", f"{equity_pct:.1f}%"],
+                ["Debt", f"{debt_pct:.1f}%"],
+                ["Hybrid", f"{hybrid_pct:.1f}%"],
+            ]
+
+            # Debt-Equity Ratio
+            if equity_pct > 0:
+                de_ratio = debt_pct / equity_pct
+                alloc_rows.append(["Debt-Equity Ratio", f"{de_ratio:.2f}:1"])
+
+            alloc_table = Table(
+                [["Asset Class", "Allocation"]] + alloc_rows,
+                hAlign="LEFT",
+                colWidths=[200, 300],
+            )
+            alloc_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+                ('BOTTOMPADDING',(0,0),(-1,0),6),
+            ]))
+            story.append(alloc_table)
+            story.append(Spacer(1, 8))
+
+        # SIP Summary
+        sip_details = cas_data.get("sip_details") or []
+        if sip_details:
+            story.append(Paragraph("Active SIPs", styles["BodyText"]))
+            story.append(Spacer(1, 4))
+
+            sip_rows = []
+            total_monthly_sip = 0
+
+            for sip in sip_details[:10]:  # Limit to 10 SIPs
+                scheme = sip.get("scheme_name", "N/A")
+                amount = sip.get("sip_amount", 0)
+                date = sip.get("sip_date", "N/A")
+                freq = sip.get("frequency", "Monthly")
+
+                # Truncate long scheme names
+                if len(scheme) > 40:
+                    scheme = scheme[:37] + "..."
+
+                sip_rows.append([
+                    scheme,
+                    f"Rs. {amount:,.0f}" if isinstance(amount, (int, float)) else str(amount),
+                    str(date),
+                    freq
+                ])
+
+                # Sum monthly SIPs
+                if freq.lower() == "monthly" and isinstance(amount, (int, float)):
+                    total_monthly_sip += amount
+
+            if sip_rows:
+                sip_table = Table(
+                    [["Scheme", "Amount", "Date", "Frequency"]] + sip_rows,
+                    hAlign="LEFT",
+                    colWidths=[240, 90, 60, 110],
+                )
+                sip_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                    ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+                    ('FONTSIZE',(0,0),(-1,-1), 8),
+                    ('BOTTOMPADDING',(0,0),(-1,0),6),
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ]))
+                story.append(sip_table)
+
+                if total_monthly_sip > 0:
+                    story.append(Spacer(1, 4))
+                    story.append(Paragraph(
+                        f"<b>Total Monthly SIP Commitment:</b> Rs. {total_monthly_sip:,.0f}",
+                        styles["BodyText"]
+                    ))
+
+        story.append(Spacer(1, 12))
+
     # Goals Captured
     story.append(Paragraph("Goals Captured", styles["h2"]))
     if goals:
@@ -2475,8 +2704,8 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     story.append(Paragraph("Attention Areas", styles["h2"]))
     if flags:
         for f in flags:
-            sanitized = re.sub(r"₹?\s?[0-9][0-9,]*", "Rs. ***", f)
-            story.append(Paragraph(sanitize_pdf_text(f"! {sanitized}"), styles["BodyText"]))
+            # Display actual values - removed masking regex
+            story.append(Paragraph(sanitize_pdf_text(f"! {f}"), styles["BodyText"]))
     else:
         story.append(Paragraph("No critical flags identified.", styles["BodyText"]))
     story.append(Spacer(1, 12))
