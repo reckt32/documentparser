@@ -398,5 +398,12 @@ def list_questionnaire_uploads(questionnaire_id: int):
         (questionnaire_id,),
     )
 
+def update_questionnaire_upload_metadata(upload_id: int, metadata: Dict[str, Any]):
+    """Update metadata_json for an existing upload record."""
+    _exec(
+        "UPDATE questionnaire_uploads SET metadata_json = ? WHERE id = ?",
+        (json.dumps(metadata), upload_id)
+    )
+
 # Initialize schema on import
 init_db()
