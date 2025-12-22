@@ -469,17 +469,30 @@ class PortfolioRebalanceRunner(SectionRunner):
         port = facts.get("portfolio") or {}
         if not isinstance(port, dict) or not port:
             return None
-        ihs = ((facts.get("analysis") or {}).get("ihs")) or {}
+        analysis = facts.get("analysis") or {}
+        ihs = analysis.get("ihs") or {}
+        ar = analysis.get("advancedRisk") or {}
         return {
             "portfolio": port,
             "ihsBand": ihs.get("band"),
+            "riskProfile": ar.get("finalCategory") or analysis.get("riskProfile"),
+            "recommendedEquityBand": ar.get("recommendedEquityBand"),
+            "recommendedEquityMid": ar.get("recommendedEquityMid"),
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
-        system = "You suggest high-level rebalancing directions without naming products."
+        system = (
+            "You suggest high-level rebalancing directions without naming products. "
+            "IMPORTANT: Be consistent with the client's risk profile. "
+            "If portfolio equity is already above the recommended band, suggest reducing equity exposure. "
+            "If portfolio equity is below the recommended band, suggest increasing equity exposure. "
+            "Never give advice that contradicts the risk profile recommendations."
+        )
         user = (
             "Section: Portfolio Rebalancing\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
+            "The recommendedEquityBand shows the target equity range based on the client's risk profile. "
+            "Compare current portfolio allocation against this target when suggesting changes.\n\n"
             "Return JSON: title, bullets, paragraphs, actions. Avoid product recommendations; discuss allocation directions."
         )
         return system, user

@@ -1607,7 +1607,11 @@ def generate_flags_and_recommendations(results, inputs):
     if ihs_band == "Poor":
         recs.append("Increase your savings rate, exit unsuitable products, and diversify your portfolio.")
     elif ihs_band == "Average":
-        recs.append("Increase your equity allocation and align investments with your goals.")
+        # Check if equity is already high before suggesting to increase it
+        if equity > 60.0:
+            recs.append("Your portfolio is equity-heavy; consider rebalancing towards debt/hybrid to reduce risk while aligning with your goals.")
+        else:
+            recs.append("Increase your equity allocation and align investments with your goals.")
     elif ihs_band == "Good":
         recs.append("Conduct an annual review, add international exposure, and optimize for tax.")
     elif ihs_band == "Excellent":
@@ -2635,7 +2639,8 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     story.append(Paragraph("Attention Areas", styles["h2"]))
     if flags:
         for f in flags:
-            sanitized = re.sub(r"₹?\s?[0-9][0-9,]*", "Rs. ***", f)
+            # Only mask actual rupee amounts (with Rs. or ₹ prefix), not percentages or scores
+            sanitized = re.sub(r"(Rs\.?|₹)\s*[0-9][0-9,]*", "Rs. ***", f)
             story.append(Paragraph(sanitize_pdf_text(f"! {sanitized}"), styles["BodyText"]))
     else:
         story.append(Paragraph("No critical flags identified.", styles["BodyText"]))
