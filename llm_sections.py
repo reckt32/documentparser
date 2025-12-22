@@ -251,6 +251,54 @@ def compute_goal_sip(target_amount: float, horizon_years: Optional[float], final
         return None
 
 
+def compute_realistic_target(monthly_sip: float, horizon_years: Optional[float], final_category: Optional[str]) -> Optional[float]:
+    """Calculate what target amount is achievable with available monthly SIP."""
+    try:
+        sip = _coerce_float(monthly_sip, 0.0)
+        if sip <= 0:
+            return None
+        n_years = float(horizon_years) if horizon_years not in (None, "") else None
+        if n_years is None or n_years <= 0:
+            return None
+        n = int(round(n_years * 12))
+        r = _choose_monthly_rate(final_category, n_years)
+        # Future Value of SIP: FV = P * [((1+r)^n - 1) / r]
+        fv = sip * ((math.pow(1.0 + r, n) - 1.0) / r)
+        return round(fv, 2)
+    except Exception:
+        return None
+
+
+def compute_required_horizon(target_amount: float, monthly_sip: float, final_category: Optional[str]) -> Optional[float]:
+    """Calculate years needed to reach target with given monthly SIP using iterative approximation."""
+    try:
+        target = _coerce_float(target_amount, 0.0)
+        sip = _coerce_float(monthly_sip, 0.0)
+        if target <= 0 or sip <= 0:
+            return None
+        
+        # Binary search for the required horizon (in years)
+        low, high = 0.5, 50.0  # Search between 6 months and 50 years
+        
+        for _ in range(50):  # Max iterations
+            mid = (low + high) / 2.0
+            achievable = compute_realistic_target(sip, mid, final_category)
+            if achievable is None:
+                return None
+            
+            if abs(achievable - target) < target * 0.01:  # Within 1% tolerance
+                return round(mid, 1)
+            
+            if achievable < target:
+                low = mid
+            else:
+                high = mid
+        
+        return round((low + high) / 2.0, 1)
+    except Exception:
+        return None
+
+
 # ------------------------ Concrete Section Runners ------------------------ #
 
 class FlagsExplainerRunner(SectionRunner):
@@ -428,9 +476,42 @@ class GoalsStrategyRunner(SectionRunner):
 
     def digest(self, facts: Dict[str, Any]) -> Dict[str, Any]:
         analysis = facts.get("analysis") or {}
+        income_info = facts.get("income") or {}
+        bank_info = facts.get("bank") or {}
+        portfolio_info = facts.get("portfolio") or {}
+        
         final_cat = ((analysis.get("advancedRisk") or {}).get("finalCategory")) or analysis.get("riskProfile")
+        
+        # Calculate user's actual financial capacity
+        annual_income = _coerce_float(income_info.get("annualIncome"), 0.0)
+        # Fallback to bank inflows if no declared income
+        if annual_income <= 0:
+            annual_income = _coerce_float(bank_info.get("total_inflows"), 0.0)
+        
+        monthly_income = annual_income / 12.0 if annual_income > 0 else 0.0
+        monthly_expenses = _coerce_float(income_info.get("monthlyExpenses"), 0.0)
+        monthly_emi = _coerce_float(income_info.get("monthlyEmi"), 0.0)
+        
+        # Calculate available surplus for investments
+        available_surplus = max(0, monthly_income - monthly_expenses - monthly_emi)
+        
+        # Get existing SIP commitments from portfolio/CAS data if available
+        existing_sip = _coerce_float(portfolio_info.get("monthly_sip") or portfolio_info.get("total_monthly_sip"), 0.0)
+        
+        # Net available for new goals (after existing commitments)
+        net_available_for_goals = max(0, available_surplus - existing_sip)
+        
+        # Process each goal with affordability context
+        goals_list = facts.get("goals") or []
+        num_goals = len(goals_list) if goals_list else 1
+        
+        # Distribute available surplus proportionally across goals
+        per_goal_budget = net_available_for_goals / num_goals if num_goals > 0 else 0
+        
         items = []
-        for g in (facts.get("goals") or []):
+        total_ideal_sip = 0.0
+        
+        for g in goals_list:
             nm = g.get("name") or g.get("goal") or "Goal"
             tgt = _coerce_float(g.get("target_amount"), 0.0)
             hz = g.get("horizon_years") or g.get("horizon")
@@ -438,26 +519,82 @@ class GoalsStrategyRunner(SectionRunner):
                 hzv = float(hz) if hz not in (None, "", "N/A") else None
             except Exception:
                 hzv = None
-            sip = compute_goal_sip(tgt, hzv, final_cat)
+            
+            # Calculate ideal SIP (what's mathematically needed)
+            ideal_sip = compute_goal_sip(tgt, hzv, final_cat)
+            if ideal_sip:
+                total_ideal_sip += ideal_sip
+            
+            # Calculate affordable SIP (capped by available budget)
+            affordable_sip = min(ideal_sip, per_goal_budget) if ideal_sip and per_goal_budget > 0 else per_goal_budget
+            
+            # Calculate what's achievable with affordable SIP
+            achievable_amount = compute_realistic_target(affordable_sip, hzv, final_cat) if affordable_sip and hzv else None
+            
+            # Calculate required horizon if SIP is limited
+            required_horizon = None
+            if ideal_sip and affordable_sip and affordable_sip < ideal_sip and tgt > 0:
+                required_horizon = compute_required_horizon(tgt, affordable_sip, final_cat)
+            
+            # Determine if there's an affordability gap
+            gap_exists = bool(ideal_sip and affordable_sip and ideal_sip > affordable_sip * 1.1)  # >10% gap
+            shortfall_pct = round(((ideal_sip - affordable_sip) / ideal_sip) * 100, 1) if gap_exists and ideal_sip else 0
+            
             items.append({
                 "name": nm,
                 "target_amount": tgt if tgt > 0 else None,
                 "horizon_years": hzv,
-                "suggested_sip": sip,
+                "ideal_sip": ideal_sip,
+                "affordable_sip": round(affordable_sip, 2) if affordable_sip else None,
+                "achievable_amount": achievable_amount,
+                "required_horizon_at_affordable": required_horizon,
+                "gap_exists": gap_exists,
+                "shortfall_percent": shortfall_pct,
             })
+        
         return {
             "riskFinalCategory": final_cat,
             "goals": items[:12],
+            "financial_capacity": {
+                "monthly_income": round(monthly_income, 2),
+                "monthly_expenses": round(monthly_expenses, 2),
+                "monthly_emi": round(monthly_emi, 2),
+                "available_surplus": round(available_surplus, 2),
+                "existing_sip_commitments": round(existing_sip, 2),
+                "net_available_for_new_goals": round(net_available_for_goals, 2),
+                "per_goal_budget": round(per_goal_budget, 2),
+                "total_ideal_sip_required": round(total_ideal_sip, 2),
+            },
+            "overall_gap_exists": total_ideal_sip > net_available_for_goals * 1.1 if net_available_for_goals > 0 else True,
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
         system = (
-            "You map goals to strategies in simple English. Use suggested_sip if present as a numeric reference; do not recalc."
+            "You are a senior financial planner creating realistic goal strategies for Indian retail clients. "
+            "Your role is to provide HONEST and PRACTICAL advice. "
+            "For each goal, compare the IDEAL SIP (what's mathematically needed to achieve the goal) against "
+            "what's actually AFFORDABLE given the client's income and existing commitments. "
+            "If there's a gap (gap_exists=true), clearly explain this and provide specific recommendations to bridge it. "
+            "Do NOT recommend SIPs that exceed the client's capacity. Be realistic and helpful."
         )
         user = (
-            "Section: Goal-wise Strategy\n"
+            "Section: Goal-wise Strategy with Feasibility Analysis\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
-            "For each goal, produce a short rationale. Output JSON keys: title, bullets (one per goal), paragraphs (1-2 max), actions."
+            "IMPORTANT INSTRUCTIONS:\n"
+            "1. For each goal, clearly state:\n"
+            "   - IDEAL PLAN: 'To achieve Rs.[target] in [horizon] years, you need a monthly SIP of Rs.[ideal_sip]'\n"
+            "   - CURRENT CAPACITY: 'Based on your income and expenses, you can afford Rs.[affordable_sip]/month for this goal'\n"
+            "2. If gap_exists=true, provide BRIDGE RECOMMENDATIONS (choose the most practical):\n"
+            "   - 'Extend your timeline to [required_horizon_at_affordable] years to reach the same target'\n"
+            "   - 'Or, reduce your target to Rs.[achievable_amount] which is achievable in [horizon] years'\n"
+            "   - 'Or, look for ways to increase your savings rate and reanalyze later'\n"
+            "3. If overall_gap_exists=true, emphasize that the client needs to prioritize goals or adjust expectations.\n"
+            "4. Be encouraging but HONEST - never suggest unaffordable SIPs.\n\n"
+            "Output JSON with keys:\n"
+            "- title: 'Goal Strategy: Ideal vs Current Plan'\n"
+            "- bullets: One per goal summarizing ideal vs affordable (max 6)\n"
+            "- paragraphs: 2-3 paragraphs explaining the overall situation and bridge strategies\n"
+            "- actions: Specific, actionable recommendations to bridge gaps (max 5)"
         )
         return system, user
 

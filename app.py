@@ -2455,6 +2455,24 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     di = doc_insights or {}
     bank = di.get("bank") or {}
     portfolio = di.get("portfolio") or {}
+    
+    # Get CAS data for SIP commitments
+    qid = q.get("id")
+    cas_data = _get_cas_data_for_questionnaire(qid) if qid else {}
+    
+    # Calculate total monthly SIP from CAS SIP details
+    total_monthly_sip = 0.0
+    sip_details = cas_data.get("sip_details") or []
+    for sip in sip_details:
+        freq = (sip.get("frequency") or "Monthly").lower()
+        amount = sip.get("sip_amount", 0)
+        if freq == "monthly" and isinstance(amount, (int, float)):
+            total_monthly_sip += float(amount)
+    
+    # Enrich portfolio with SIP data
+    enriched_portfolio = dict(portfolio)
+    enriched_portfolio["total_monthly_sip"] = total_monthly_sip
+    enriched_portfolio["sip_count"] = len(sip_details)
 
     facts = {
         "questionnaire_id": q.get("id"),
@@ -2490,7 +2508,7 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
             "opening_balance": bank.get("opening_balance"),
             "closing_balance": bank.get("closing_balance"),
         },
-        "portfolio": portfolio,
+        "portfolio": enriched_portfolio,
         "extracts": di.get("raw_extracts"),
         "analysis": analysis,
     }
