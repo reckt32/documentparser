@@ -631,6 +631,15 @@ def extract_itr_hybrid(text):
     data = {}
 
     patterns = {
+        "assessee_name": [
+            r"(?i)(?:Name|Assessee)(?:\s+of\s+(?:the\s+)?(?:Assessee|Tax\s*Payer))?[\s:\-]*([A-Z][A-Za-z\s\.]+?)(?:\n|PAN|Father)",
+            r"(?i)Name\s+as\s+per\s+PAN[\s:\-]*([A-Z][A-Za-z\s\.]+)",
+            r"(?i)Full\s+Name[\s:\-]*([A-Z][A-Za-z\s\.]+)"
+        ],
+        "date_of_birth": [
+            r"(?i)(?:Date\s+of\s+Birth|DOB|D\.O\.B)[\s:\-]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
+            r"(?i)Birth\s+Date[\s:\-]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})"
+        ],
         "assessment_year": [
             r"(?i)Assessment\s*Year[\s:\-]*(\d{4}[\s\-]+\d{2,4})",
             r"(?i)A\.?Y\.?[\s:\-]*(\d{4}[\s\-]+\d{2,4})"
@@ -808,6 +817,11 @@ def extract_insurance_hybrid(text):
         "nominee": [
             r"(?i)Nominee(?:\s*Name)?[\s:\-]*([A-Za-z\s\.]+?)(?:\n|Relationship)",
             r"(?i)Name\s+of\s+(?:the\s+)?Nominee[\s:\-]*([A-Za-z\s\.]+)"
+        ],
+        "date_of_birth": [
+            r"(?i)(?:Date\s+of\s+Birth|DOB|D\.O\.B)[\s:\-]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
+            r"(?i)Birth\s+Date[\s:\-]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
+            r"(?i)DOB\s+of\s+(?:Life\s+)?Insured[\s:\-]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})"
         ]
     }
 
@@ -1183,6 +1197,61 @@ def compute_liquidity(monthly_expenses, emergency_fund_amount):
     months = (ef / me) if me > 0 else 0.0
     status = "Adequate" if months >= 6.0 else "Insufficient"
     return status, months
+
+def compute_retirement_corpus(age, monthly_income, desired_monthly_pension=None, inflation_rate=0.06, retirement_age=60):
+    """
+    Calculate retirement corpus needed.
+    
+    Returns dict with:
+      - years_to_retirement: retirement_age - age
+      - standard_corpus: (retirement_age - age) * monthly_income * 12 (human life value method)
+      - pension_annual: desired_monthly_pension * 12 (if pension provided)
+      - pension_corpus: inflation-adjusted corpus for desired pension (if pension provided)
+    """
+    age_val = _safe_float(age, 30)
+    mi = _safe_float(monthly_income, 0.0)
+    years_to_retirement = max(0, retirement_age - age_val)
+    
+    # Standard retirement corpus formula: (retirement_age - age) * monthly_income * 12
+    standard_corpus = years_to_retirement * mi * 12
+    
+    result = {
+        "years_to_retirement": years_to_retirement,
+        "retirement_age": retirement_age,
+        "standard_corpus": round(standard_corpus, 0),
+    }
+    
+    # If desired monthly pension is provided, calculate pension-based corpus
+    if desired_monthly_pension is not None:
+        pension = _safe_float(desired_monthly_pension, 0.0)
+        if pension > 0:
+            annual_pension = pension * 12
+            # Inflation-adjusted corpus: FV of annual pension assuming 25 years of retirement
+            # Using simple multiplication for years to retirement as inflation factor
+            # More sophisticated: pension * 12 * ((1 + inflation)^years - 1) / inflation
+            # Simplified: annual_pension adjusted for inflation over years to retirement
+            inflation_multiplier = (1 + inflation_rate) ** years_to_retirement
+            pension_corpus = annual_pension * inflation_multiplier * 25  # 25 years of retirement assumed
+            
+            result["desired_monthly_pension"] = round(pension, 0)
+            result["pension_annual"] = round(annual_pension, 0)
+            result["pension_corpus"] = round(pension_corpus, 0)
+    
+    return result
+
+def compute_term_insurance_need(age, monthly_income, retirement_age=60):
+    """
+    Calculate term insurance requirement using Human Life Value method.
+    Formula: (retirement_age - age) * monthly_income * 12
+    
+    Returns the required term cover amount.
+    """
+    age_val = _safe_float(age, 30)
+    mi = _safe_float(monthly_income, 0.0)
+    years_to_retirement = max(0, retirement_age - age_val)
+    
+    required_cover = years_to_retirement * mi * 12
+    return round(required_cover, 0)
 
 def compute_ihs(savings_percent, current_products, allocation):
     # Savings (0-40)
@@ -1926,9 +1995,95 @@ def build_prefill_from_insights(qid: int) -> dict:
     except Exception:
         pass
 
+    # Personal info extraction from raw document extracts
+    personal_info = {}
+    try:
+        raw_extracts = di.get("raw_extracts") or []
+        uploads = list_questionnaire_uploads(qid) or []
+        
+        # Create a mapping of document_id to doc_type
+        doc_type_map = {}
+        for upload in uploads:
+            doc_id = upload.get("document_id")
+            if doc_id:
+                doc_type_map[doc_id] = upload.get("doc_type", "")
+        
+        # Scan through raw extracts for personal info
+        for extract in raw_extracts:
+            if personal_info.get("name") and personal_info.get("age"):
+                break  # Already have both
+                
+            doc_id = extract.get("document_id")
+            summary = extract.get("summary") or {}
+            doc_type = doc_type_map.get(doc_id, "").lower()
+            
+            # Additional data might be stored in document-level extraction (not just summary)
+            # We need to re-extract from the uploaded documents
+        
+        # If not found in raw_extracts, scan uploaded document metadata for personal info
+        for upload in uploads:
+            if personal_info.get("name") and personal_info.get("age"):
+                break
+                
+            doc_type = (upload.get("doc_type") or "").lower()
+            metadata_json = upload.get("metadata_json")
+            
+            if metadata_json:
+                try:
+                    metadata = json.loads(metadata_json)
+                    
+                    # Check CAS data for investor_name
+                    cas_data = metadata.get("cas_data") or {}
+                    if not personal_info.get("name"):
+                        investor_name = metadata.get("investor_name") or cas_data.get("investor_name")
+                        if investor_name and investor_name != "N/A" and len(investor_name) > 2:
+                            personal_info["name"] = investor_name.strip().title()
+                    
+                    # Check for extracted personal details in metadata
+                    if not personal_info.get("name"):
+                        # Insurance policy_holder
+                        policy_holder = metadata.get("policy_holder")
+                        if policy_holder and policy_holder != "N/A" and len(policy_holder) > 2:
+                            personal_info["name"] = policy_holder.strip().title()
+                    
+                    if not personal_info.get("name"):
+                        # ITR assessee_name
+                        assessee_name = metadata.get("assessee_name")
+                        if assessee_name and assessee_name != "N/A" and len(assessee_name) > 2:
+                            personal_info["name"] = assessee_name.strip().title()
+                    
+                    # Try to extract age from date_of_birth
+                    if not personal_info.get("age"):
+                        dob = metadata.get("date_of_birth")
+                        if dob and dob != "N/A":
+                            try:
+                                # Parse DOB and calculate age
+                                from datetime import datetime
+                                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"]:
+                                    try:
+                                        birth_date = datetime.strptime(dob, fmt)
+                                        if birth_date.year < 100:  # Handle 2-digit years
+                                            birth_date = birth_date.replace(year=birth_date.year + 1900)
+                                        today = datetime.now()
+                                        age = today.year - birth_date.year
+                                        if (today.month, today.day) < (birth_date.month, birth_date.day):
+                                            age -= 1
+                                        if 18 <= age <= 100:
+                                            personal_info["age"] = age
+                                        break
+                                    except ValueError:
+                                        continue
+                            except Exception:
+                                pass
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
     return {
         "questionnaire_id": qid,
         "docInsights": di,
+        "personal_info": personal_info,
         "lifestyle": lifestyle,
         "allocation": allocation,
         "insurance": insurance_prefill,
@@ -2060,24 +2215,36 @@ def upload_document():
                         if summaries.get("provenance"):
                             other_data["provenance"] = summaries["provenance"]
 
-                    # Update CAS metadata if this is a CAS document
-                    if doc_type == "Mutual fund CAS (Consolidated Account Statement)" and idx in upload_link_ids:
+                    # Update document metadata if linked to questionnaire
+                    if idx in upload_link_ids:
                         try:
-                            update_questionnaire_upload_metadata(
-                                upload_link_ids[idx],
-                                {
-                                    "size_bytes": len(file_bytes),
-                                    "cas_data": {
-                                        "sip_details": other_data.get("sip_details", []),
-                                        "transaction_summary": other_data.get("transaction_summary", {}),
-                                        "asset_allocation": other_data.get("asset_allocation", {}),
-                                        "investment_snapshot": other_data.get("investment_snapshot", {}),
-                                        "holdings": other_data.get("holdings", []),
-                                    }
+                            metadata_update = {"size_bytes": len(file_bytes)}
+                            
+                            # CAS metadata
+                            if doc_type == "Mutual fund CAS (Consolidated Account Statement)":
+                                metadata_update["investor_name"] = other_data.get("investor_name")
+                                metadata_update["cas_data"] = {
+                                    "sip_details": other_data.get("sip_details", []),
+                                    "transaction_summary": other_data.get("transaction_summary", {}),
+                                    "asset_allocation": other_data.get("asset_allocation", {}),
+                                    "investment_snapshot": other_data.get("investment_snapshot", {}),
+                                    "holdings": other_data.get("holdings", []),
                                 }
-                            )
+                            
+                            # ITR metadata - store personal info
+                            elif doc_type == "ITR":
+                                metadata_update["assessee_name"] = other_data.get("assessee_name")
+                                metadata_update["date_of_birth"] = other_data.get("date_of_birth")
+                                metadata_update["pan"] = other_data.get("pan")
+                            
+                            # Insurance metadata - store policy holder
+                            elif doc_type == "Insurance document":
+                                metadata_update["policy_holder"] = other_data.get("policy_holder")
+                                metadata_update["date_of_birth"] = other_data.get("date_of_birth")
+                            
+                            update_questionnaire_upload_metadata(upload_link_ids[idx], metadata_update)
                         except Exception as e:
-                            print(f"Error updating CAS metadata: {e}")
+                            print(f"Error updating {doc_type} metadata: {e}")
 
                     extracted_data[f"{name} {idx+1}"] = other_data
                     try:
@@ -2449,9 +2616,19 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     family = q.get("family_info") or {}
     lifestyle = q.get("lifestyle") or {}
     insurance = q.get("insurance") or {}
-    goals = (q.get("goals") or {}).get("items") or []
+    goals_data = q.get("goals") or {}
+    goals = goals_data.get("items") or []
 
-    dependents_count = (1 if family.get("spouse") else 0) + len(family.get("children") or []) + len(family.get("dependents") or [])
+    # Calculate dependents - children automatically count as financial dependents
+    children = family.get("children") or []
+    other_dependents = family.get("dependents") or []
+    has_spouse = bool(family.get("spouse"))
+    dependents_count = (1 if has_spouse else 0) + len(children) + len(other_dependents)
+    
+    # Financial dependents: children or explicitly marked dependents
+    # If user has children, they automatically have financial dependents
+    has_financial_dependents = len(children) > 0 or len(other_dependents) > 0 or family.get("has_financial_dependents", False)
+    
     di = doc_insights or {}
     bank = di.get("bank") or {}
     portfolio = di.get("portfolio") or {}
@@ -2473,6 +2650,36 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     enriched_portfolio = dict(portfolio)
     enriched_portfolio["total_monthly_sip"] = total_monthly_sip
     enriched_portfolio["sip_count"] = len(sip_details)
+    
+    # Calculate retirement planning if enabled
+    age = personal.get("age")
+    annual_income = lifestyle.get("annual_income")
+    monthly_income = _safe_float(annual_income, 0.0) / 12.0 if annual_income else 0.0
+    monthly_expenses = _safe_float(lifestyle.get("monthly_expenses"), 0.0)
+    
+    retirement_planning = None
+    if goals_data.get("wants_retirement_planning"):
+        desired_pension = goals_data.get("desired_monthly_pension")
+        retirement_planning = compute_retirement_corpus(
+            age=age,
+            monthly_income=monthly_income,
+            desired_monthly_pension=desired_pension
+        )
+        retirement_planning["enabled"] = True
+        retirement_planning["monthly_expenses"] = monthly_expenses
+    
+    # Calculate term insurance requirement if has financial dependents
+    term_insurance = None
+    if has_financial_dependents and monthly_income > 0:
+        required_cover = compute_term_insurance_need(age, monthly_income)
+        current_life_cover = _safe_float(insurance.get("life_cover"), 0.0)
+        term_insurance = {
+            "has_financial_dependents": True,
+            "required_cover": required_cover,
+            "current_cover": current_life_cover,
+            "gap": max(0, required_cover - current_life_cover),
+            "is_adequate": current_life_cover >= required_cover,
+        }
 
     facts = {
         "questionnaire_id": q.get("id"),
@@ -2480,6 +2687,7 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
             "name": personal.get("name"),
             "age": personal.get("age"),
             "dependents_count": dependents_count,
+            "has_financial_dependents": has_financial_dependents,
         },
         "income": {
             "annualIncome": lifestyle.get("annual_income"),
@@ -2511,8 +2719,11 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
         "portfolio": enriched_portfolio,
         "extracts": di.get("raw_extracts"),
         "analysis": analysis,
+        "retirement_planning": retirement_planning,
+        "term_insurance": term_insurance,
     }
     return facts
+
 
 def _render_narrative_section(story, styles, section_key, section_obj):
     try:
@@ -2800,6 +3011,113 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         story.append(goals_table)
     else:
         story.append(Paragraph("No goals entered.", styles["BodyText"]))
+    story.append(Spacer(1, 12))
+
+    # Retirement Planning Section (if enabled)
+    goals_data = q.get("goals") or {}
+    if goals_data.get("wants_retirement_planning"):
+        story.append(Paragraph("Retirement Planning", styles["h2"]))
+        
+        age = _safe_float((q.get("personal_info") or {}).get("age"), 30)
+        annual_income = lifestyle.get("annual_income")
+        monthly_income = _safe_float(annual_income, 0.0) / 12.0 if annual_income else 0.0
+        monthly_expenses = _safe_float(lifestyle.get("monthly_expenses"), 0.0)
+        desired_pension = goals_data.get("desired_monthly_pension")
+        
+        retirement_data = compute_retirement_corpus(
+            age=age,
+            monthly_income=monthly_income,
+            desired_monthly_pension=desired_pension
+        )
+        
+        retirement_rows = [
+            ["Current Age", f"{int(age)} years"],
+            ["Years to Retirement", f"{int(retirement_data.get('years_to_retirement', 0))} years"],
+            ["Retirement Age", f"{retirement_data.get('retirement_age', 60)} years"],
+            ["Standard Retirement Corpus", f"Rs. {retirement_data.get('standard_corpus', 0):,.0f}"],
+        ]
+        
+        # Add pension-based calculations if provided
+        if desired_pension:
+            pension_val = _safe_float(desired_pension, 0)
+            if pension_val > 0:
+                pension_warning = ""
+                if monthly_expenses > 0 and pension_val < monthly_expenses:
+                    pension_warning = " ⚠️ Below current expenses"
+                retirement_rows.append(["Desired Monthly Pension", f"Rs. {pension_val:,.0f}{pension_warning}"])
+                retirement_rows.append(["Annual Pension Requirement", f"Rs. {retirement_data.get('pension_annual', 0):,.0f}"])
+                retirement_rows.append(["Inflation-Adjusted Corpus Needed", f"Rs. {retirement_data.get('pension_corpus', 0):,.0f}"])
+        
+        retirement_table = Table(
+            [["Parameter", "Value"]] + retirement_rows,
+            hAlign="LEFT",
+            colWidths=[250, 250],
+        )
+        retirement_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2D6A4F')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('BOTTOMPADDING',(0,0),(-1,0),6),
+        ]))
+        story.append(retirement_table)
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(
+            "<i>Note: Standard corpus uses formula (60-age) × monthly income × 12. "
+            "Inflation-adjusted corpus assumes 6% annual inflation and 25-year retirement period.</i>",
+            styles["BodyText"]
+        ))
+        story.append(Spacer(1, 12))
+
+    # Term Insurance Section (if has financial dependents)
+    children = family.get("children") or []
+    other_dependents = family.get("dependents") or []
+    has_financial_dependents = len(children) > 0 or len(other_dependents) > 0
+    
+    if has_financial_dependents:
+        story.append(Paragraph("Term Insurance Requirement", styles["h2"]))
+        
+        age = _safe_float((q.get("personal_info") or {}).get("age"), 30)
+        annual_income = lifestyle.get("annual_income")
+        monthly_income = _safe_float(annual_income, 0.0) / 12.0 if annual_income else 0.0
+        current_life_cover = _safe_float((q.get("insurance") or {}).get("life_cover"), 0.0)
+        
+        required_cover = compute_term_insurance_need(age, monthly_income)
+        gap = max(0, required_cover - current_life_cover)
+        is_adequate = current_life_cover >= required_cover
+        
+        dependents_text = f"{len(children)} children"
+        if other_dependents:
+            dependents_text += f", {len(other_dependents)} other dependents"
+        
+        term_rows = [
+            ["Financial Dependents", dependents_text],
+            ["Required Term Cover", f"Rs. {required_cover:,.0f}"],
+            ["Current Life Cover", f"Rs. {current_life_cover:,.0f}"],
+            ["Coverage Status", "✓ Adequate" if is_adequate else f"⚠️ Gap of Rs. {gap:,.0f}"],
+        ]
+        
+        term_table = Table(
+            [["Parameter", "Value"]] + term_rows,
+            hAlign="LEFT",
+            colWidths=[250, 250],
+        )
+        term_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#9D4B45') if not is_adequate else colors.HexColor('#457B9D')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('BOTTOMPADDING',(0,0),(-1,0),6),
+        ]))
+        story.append(term_table)
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(
+            "<i>Formula: (60-age) × monthly income × 12 (Human Life Value method). "
+            "Term insurance is essential when you have financial dependents.</i>",
+            styles["BodyText"]
+        ))
+        story.append(Spacer(1, 12))
+
     story.append(PageBreak())
 
     # ==========================================================================
