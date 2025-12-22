@@ -2071,6 +2071,8 @@ def upload_document():
                                         "sip_details": other_data.get("sip_details", []),
                                         "transaction_summary": other_data.get("transaction_summary", {}),
                                         "asset_allocation": other_data.get("asset_allocation", {}),
+                                        "investment_snapshot": other_data.get("investment_snapshot", {}),
+                                        "holdings": other_data.get("holdings", []),
                                     }
                                 }
                             )
@@ -2608,48 +2610,62 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     # Portfolio Snapshot (from CAS)
     cas_data = _get_cas_data_for_questionnaire(q.get("id"))
 
-    if cas_data and (cas_data.get("transaction_summary") or cas_data.get("sip_details")):
+    if cas_data and (cas_data.get("transaction_summary") or cas_data.get("sip_details") or cas_data.get("investment_snapshot") or cas_data.get("asset_allocation")):
         story.append(Paragraph("Portfolio Snapshot (Mutual Fund CAS)", styles["h2"]))
 
-        # Transaction Summary
+        # Get data from transaction_summary or fallback to investment_snapshot
         trans_sum = cas_data.get("transaction_summary") or {}
-        if trans_sum:
-            total_inv = trans_sum.get("total_purchase_amount", 0)
-            current_val = trans_sum.get("total_current_value", 0)
-            unrealized_gain = trans_sum.get("total_unrealized_gain", 0)
+        inv_snapshot = cas_data.get("investment_snapshot") or {}
+        
+        # Use transaction_summary first, fallback to investment_snapshot
+        total_inv = trans_sum.get("total_purchase_amount") or inv_snapshot.get("investment") or inv_snapshot.get("net_investment") or 0
+        current_val = trans_sum.get("total_current_value") or inv_snapshot.get("current_value") or 0
+        unrealized_gain = trans_sum.get("total_unrealized_gain") or inv_snapshot.get("net_gain") or 0
+        xirr_pct = inv_snapshot.get("xirr_percent")
 
-            portfolio_rows = []
-            if total_inv:
-                portfolio_rows.append(["Total Investment", f"Rs. {total_inv:,.0f}"])
-            if current_val:
-                portfolio_rows.append(["Current Value", f"Rs. {current_val:,.0f}"])
-            if unrealized_gain is not None:
-                gain_text = f"Rs. {abs(unrealized_gain):,.0f} ({'+' if unrealized_gain >= 0 else '-'})"
-                portfolio_rows.append(["Unrealized Gain/Loss", gain_text])
+        portfolio_rows = []
+        if total_inv:
+            portfolio_rows.append(["Total Investment", f"Rs. {float(total_inv):,.0f}"])
+        if current_val:
+            portfolio_rows.append(["Current Value", f"Rs. {float(current_val):,.0f}"])
+        if unrealized_gain is not None and unrealized_gain != 0:
+            gain_val = float(unrealized_gain)
+            gain_text = f"Rs. {abs(gain_val):,.0f} ({'+' if gain_val >= 0 else '-'})"
+            portfolio_rows.append(["Net Gain/Loss", gain_text])
 
-            # Returns percentage
-            if total_inv and total_inv > 0 and current_val:
-                returns_pct = ((current_val - total_inv) / total_inv) * 100
-                portfolio_rows.append(["Returns", f"{returns_pct:+.1f}%"])
+        # Returns percentage
+        if total_inv and float(total_inv) > 0 and current_val:
+            returns_pct = ((float(current_val) - float(total_inv)) / float(total_inv)) * 100
+            portfolio_rows.append(["Absolute Returns", f"{returns_pct:+.1f}%"])
+        
+        # XIRR if available
+        if xirr_pct is not None:
+            portfolio_rows.append(["XIRR", f"{float(xirr_pct):.1f}%"])
 
-            if portfolio_rows:
-                portfolio_table = Table(
-                    [["Metric", "Value"]] + portfolio_rows,
-                    hAlign="LEFT",
-                    colWidths=[200, 300],
-                )
-                portfolio_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
-                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                    ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                    ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-                    ('BOTTOMPADDING',(0,0),(-1,0),6),
-                ]))
-                story.append(portfolio_table)
-                story.append(Spacer(1, 8))
+        if portfolio_rows:
+            portfolio_table = Table(
+                [["Metric", "Value"]] + portfolio_rows,
+                hAlign="LEFT",
+                colWidths=[200, 300],
+            )
+            portfolio_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+                ('BOTTOMPADDING',(0,0),(-1,0),6),
+            ]))
+            story.append(portfolio_table)
+            story.append(Spacer(1, 8))
 
         # Asset Allocation & Debt-Equity Ratio
         asset_alloc = cas_data.get("asset_allocation") or {}
+        # Fallback to portfolio allocation from doc_insights if CAS data is empty
+        if not asset_alloc and portfolio:
+            asset_alloc = {
+                "equity_percentage": portfolio.get("equity", 0),
+                "debt_percentage": portfolio.get("debt", 0),
+            }
         equity_pct = asset_alloc.get("equity_percentage", 0)
         debt_pct = asset_alloc.get("debt_percentage", 0)
         hybrid_pct = asset_alloc.get("hybrid_percentage", 0)
@@ -2660,6 +2676,11 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
                 ["Debt", f"{debt_pct:.1f}%"],
                 ["Hybrid", f"{hybrid_pct:.1f}%"],
             ]
+
+            # Total AUM if available
+            total_aum = asset_alloc.get("total_aum")
+            if total_aum:
+                alloc_rows.insert(0, ["Total AUM", f"Rs. {float(total_aum):,.0f}"])
 
             # Debt-Equity Ratio
             if equity_pct > 0:
