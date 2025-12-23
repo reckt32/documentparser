@@ -632,7 +632,7 @@ def extract_itr_hybrid(text):
 
     patterns = {
         "assessee_name": [
-            r"(?i)(?:Name|Assessee)(?:\s+of\s+(?:the\s+)?(?:Assessee|Tax\s*Payer))?[\s:\-]*([A-Z][A-Za-z\s\.]+?)(?:\n|PAN|Father)",
+            r"(?i)(?:Name|Assessee)(?:\s+of\s+(?:the\s+)?(?:Assessee|Tax\s*Payer))?[\s:\-]*([A-Z][A-Za-z\s\.]+?)(?:\n|PAN)",
             r"(?i)Name\s+as\s+per\s+PAN[\s:\-]*([A-Z][A-Za-z\s\.]+)",
             r"(?i)Full\s+Name[\s:\-]*([A-Z][A-Za-z\s\.]+)"
         ],
@@ -1971,6 +1971,44 @@ def build_prefill_from_insights(qid: int) -> dict:
     except Exception:
         pass
 
+    # Extract monthly EMI from bank statement recurring debits
+    try:
+        uploads = list_questionnaire_uploads(qid) or []
+        total_monthly_emi = 0.0
+        emi_keywords = ["emi", "loan", "mortgage", "instalment", "installment", "repayment", "home loan", "car loan", "personal loan", "vehicle loan", "housing loan"]
+        for upload in uploads:
+            if (upload["doc_type"] or "").lower() == "bank statement":
+                metadata_json = upload["metadata_json"]
+                if metadata_json:
+                    try:
+                        metadata = json.loads(metadata_json)
+                        bank_data = metadata.get("bank_data") or {}
+                        recurring_debits = bank_data.get("recurring_debits") or []
+                        for debit in recurring_debits:
+                            desc = (debit.get("description") or "").lower()
+                            amount = debit.get("amount")
+                            freq = (debit.get("frequency") or "").lower()
+                            # Check if this is an EMI payment
+                            if any(kw in desc for kw in emi_keywords):
+                                if isinstance(amount, (int, float)) and amount > 0:
+                                    # Convert to monthly if not already monthly
+                                    if freq in ("monthly", "month"):
+                                        total_monthly_emi += float(amount)
+                                    elif freq in ("quarterly", "quarter"):
+                                        total_monthly_emi += float(amount) / 3.0
+                                    elif freq in ("yearly", "annual", "year"):
+                                        total_monthly_emi += float(amount) / 12.0
+                                    else:
+                                        # Assume monthly if frequency unclear
+                                        total_monthly_emi += float(amount)
+                    except Exception:
+                        continue
+        if total_monthly_emi > 0:
+            lifestyle["monthly_emi"] = round(total_monthly_emi, 2)
+            print(f"[Prefill] Extracted monthly_emi: {lifestyle['monthly_emi']}")
+    except Exception as e:
+        print(f"[Prefill] Error extracting monthly_emi: {e}")
+
     allocation = {}
     try:
         for k in ["equity", "debt", "gold", "realEstate", "insuranceLinked", "cash"]:
@@ -2202,6 +2240,23 @@ def upload_document():
                         _persist_metrics_for_doc(doc_id, bank_data)
                     except Exception as e:
                         print(f"Persist metrics (bank) failed: {e}")
+                    
+                    # Save bank statement metadata including recurring debits (for EMI prefill)
+                    if idx in upload_link_ids:
+                        try:
+                            bank_metadata = {
+                                "size_bytes": len(file_bytes),
+                                "bank_data": {
+                                    "account_summary": bank_data.get("account_summary", {}),
+                                    "recurring_debits": bank_data.get("recurring_debits", []),
+                                    "recurring_credits": bank_data.get("recurring_credits", []),
+                                }
+                            }
+                            update_questionnaire_upload_metadata(upload_link_ids[idx], bank_metadata)
+                            recurring_debits_count = len(bank_data.get("recurring_debits", []))
+                            print(f"[Upload] Bank statement metadata saved: {recurring_debits_count} recurring debits")
+                        except Exception as e:
+                            print(f"Error updating Bank statement metadata: {e}")
                 else:
                     other_data = func(text)
                     # Merge DB-backed summaries if present (useful for CAS/Portfolio PDFs)
