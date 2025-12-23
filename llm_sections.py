@@ -298,6 +298,57 @@ def compute_required_horizon(target_amount: float, monthly_sip: float, final_cat
     except Exception:
         return None
 
+def compute_goal_risk_category(
+    horizon_years: Optional[float],
+    risk_tolerance: Optional[str],
+    goal_importance: Optional[str],
+    goal_flexibility: Optional[str]
+) -> str:
+    """
+    Compute risk category for a single goal based on its specific parameters.
+    Returns one of: 'Conservative', 'Moderate', 'Growth', 'Aggressive'
+    """
+    # Base score from horizon (0-3)
+    horizon_score = 0
+    if horizon_years is not None:
+        try:
+            h = float(horizon_years)
+            if h < 3:
+                horizon_score = 0
+            elif h < 5:
+                horizon_score = 1
+            elif h < 7:
+                horizon_score = 2
+            else:
+                horizon_score = 3
+        except (ValueError, TypeError):
+            pass
+    
+    # Tolerance score (0-2)
+    tol_map = {"low": 0, "medium": 1, "med": 1, "high": 2}
+    tol_score = tol_map.get(str(risk_tolerance).strip().lower(), 1)
+    
+    # Importance adjustment (-1 to +1)
+    imp_map = {"essential": -1, "important": 0, "lifestyle": 1}
+    imp_adj = imp_map.get(str(goal_importance).strip().lower(), 0)
+    
+    # Flexibility adjustment (-1 to +1)
+    flex_map = {"critical": -1, "fixed": 0, "flexible": 1}
+    flex_adj = flex_map.get(str(goal_flexibility).strip().lower(), 0)
+    
+    # Total score: horizon (0-3) + tolerance (0-2) + adjustments (-2 to +2) = range -2 to 7
+    total = horizon_score + tol_score + imp_adj + flex_adj
+    
+    # Map to category
+    if total <= 1:
+        return "Conservative"
+    elif total <= 3:
+        return "Moderate"
+    elif total <= 5:
+        return "Growth"
+    else:
+        return "Aggressive"
+
 
 # ------------------------ Concrete Section Runners ------------------------ #
 
@@ -520,8 +571,21 @@ class GoalsStrategyRunner(SectionRunner):
             except Exception:
                 hzv = None
             
-            # Calculate ideal SIP (what's mathematically needed)
-            ideal_sip = compute_goal_sip(tgt, hzv, final_cat)
+            # Get per-goal risk settings (fall back to global if not specified)
+            goal_risk_tolerance = g.get("risk_tolerance") or "medium"
+            goal_importance = g.get("goal_importance") or "important"
+            goal_flexibility = g.get("goal_flexibility") or "fixed"
+            
+            # Compute per-goal risk category
+            goal_risk_cat = compute_goal_risk_category(
+                horizon_years=hzv,
+                risk_tolerance=goal_risk_tolerance,
+                goal_importance=goal_importance,
+                goal_flexibility=goal_flexibility
+            )
+            
+            # Calculate ideal SIP using per-goal risk category
+            ideal_sip = compute_goal_sip(tgt, hzv, goal_risk_cat)
             if ideal_sip:
                 total_ideal_sip += ideal_sip
             
@@ -529,12 +593,12 @@ class GoalsStrategyRunner(SectionRunner):
             affordable_sip = min(ideal_sip, per_goal_budget) if ideal_sip and per_goal_budget > 0 else per_goal_budget
             
             # Calculate what's achievable with affordable SIP
-            achievable_amount = compute_realistic_target(affordable_sip, hzv, final_cat) if affordable_sip and hzv else None
+            achievable_amount = compute_realistic_target(affordable_sip, hzv, goal_risk_cat) if affordable_sip and hzv else None
             
             # Calculate required horizon if SIP is limited
             required_horizon = None
             if ideal_sip and affordable_sip and affordable_sip < ideal_sip and tgt > 0:
-                required_horizon = compute_required_horizon(tgt, affordable_sip, final_cat)
+                required_horizon = compute_required_horizon(tgt, affordable_sip, goal_risk_cat)
             
             # Determine if there's an affordability gap
             gap_exists = bool(ideal_sip and affordable_sip and ideal_sip > affordable_sip * 1.1)  # >10% gap
@@ -544,6 +608,12 @@ class GoalsStrategyRunner(SectionRunner):
                 "name": nm,
                 "target_amount": tgt if tgt > 0 else None,
                 "horizon_years": hzv,
+                "risk_category": goal_risk_cat,
+                "risk_inputs": {
+                    "tolerance": goal_risk_tolerance,
+                    "importance": goal_importance,
+                    "flexibility": goal_flexibility,
+                },
                 "ideal_sip": ideal_sip,
                 "affordable_sip": round(affordable_sip, 2) if affordable_sip else None,
                 "achievable_amount": achievable_amount,

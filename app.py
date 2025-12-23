@@ -2761,6 +2761,9 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
                 "name": (g.get("name") or g.get("goal")),
                 "target_amount": g.get("target_amount"),
                 "horizon_years": g.get("horizon_years") or g.get("horizon"),
+                "risk_tolerance": g.get("risk_tolerance", "medium"),
+                "goal_importance": g.get("goal_importance", "important"),
+                "goal_flexibility": g.get("goal_flexibility", "fixed"),
             }
             for g in goals
         ],
