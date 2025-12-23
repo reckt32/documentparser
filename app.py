@@ -3137,12 +3137,6 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
             ('BOTTOMPADDING',(0,0),(-1,0),6),
         ]))
         story.append(retirement_table)
-        story.append(Spacer(1, 6))
-        story.append(Paragraph(
-            "<i>Note: Standard corpus uses formula (60-age) × monthly income × 12. "
-            "Ideal retirement corpus uses perpetuity formula: (pension × 12) ÷ 7%.</i>",
-            styles["BodyText"]
-        ))
         story.append(Spacer(1, 12))
 
     # Term Insurance Section (if has financial dependents)
@@ -3546,20 +3540,22 @@ def get_custom_styles():
 
 def header(canvas, doc):
     canvas.saveState()
-    # Draw logo at top-left if available
+    # Draw logo at top-left in the margin area (above content)
     if os.path.exists(LOGO_PATH):
         try:
-            logo_width = 80
-            logo_height = 40
-            canvas.drawImage(LOGO_PATH, doc.leftMargin, doc.height + doc.topMargin - logo_height + 5, 
+            logo_width = 60
+            logo_height = 30
+            # Position logo in the top margin, well above the content area
+            logo_y = doc.height + doc.topMargin + 15
+            canvas.drawImage(LOGO_PATH, doc.leftMargin, logo_y, 
                            width=logo_width, height=logo_height, preserveAspectRatio=True, mask='auto')
         except Exception:
             pass  # Skip logo if there's an error loading it
-    # Draw date at top-right
+    # Draw date at top-right in the margin
     styles = get_custom_styles()
     p = Paragraph(f"Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles['Header'])
-    w, h = p.wrap(doc.width - 100, doc.topMargin)  # Leave space for logo
-    p.drawOn(canvas, doc.leftMargin + 100, doc.height + doc.topMargin - h)
+    w, h = p.wrap(doc.width - 80, doc.topMargin)
+    p.drawOn(canvas, doc.leftMargin + 80, doc.height + doc.topMargin + 20)
     canvas.restoreState()
 
 def footer(canvas, doc):
