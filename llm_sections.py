@@ -384,6 +384,7 @@ class FlagsExplainerRunner(SectionRunner):
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
         system = (
             "You are a senior financial planner writing for Indian retail clients. "
+            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
             "Be precise, neutral, and practical. No guarantees or forward-looking promises. "
             "Return valid JSON with keys: title (string), bullets (array of short points), paragraphs (2-3 short paragraphs), actions (checklist items)."
         )
@@ -420,6 +421,7 @@ class ProtectionPlanRunner(SectionRunner):
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
         system = (
             "You are a senior financial planner. Draft a protection (life/health) section for Indian clients. "
+            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
             "No guarantees; avoid product pushing; focus on adequacy and prioritization."
         )
         user = (
@@ -448,7 +450,8 @@ class CashflowRunner(SectionRunner):
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
         system = (
-            "You are a financial planner. Explain cashflows clearly, with practical advice to improve savings."
+            "You are a financial planner for Indian clients. Explain cashflows clearly, with practical advice to improve savings. "
+            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency."
         )
         user = (
             "Section: Cashflow Overview\n"
@@ -473,7 +476,7 @@ class DebtStrategyRunner(SectionRunner):
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
-        system = "You craft debt optimization advice for Indian retail clients. Be specific and conservative."
+        system = "You craft debt optimization advice for Indian retail clients. Be specific and conservative. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency."
         user = (
             "Section: Debt Strategy\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
@@ -494,7 +497,7 @@ class LiquidityPlanRunner(SectionRunner):
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
-        system = "You design emergency fund guidance aligned with Indian norms (6+ months as baseline)."
+        system = "You design emergency fund guidance aligned with Indian norms (6+ months as baseline). IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency."
         user = (
             "Section: Liquidity Plan\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
@@ -518,7 +521,7 @@ class RiskRationaleRunner(SectionRunner):
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
-        system = "You explain risk profile and asset allocation rationale simply and accurately."
+        system = "You explain risk profile and asset allocation rationale for Indian clients simply and accurately. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency."
         user = (
             "Section: Risk Profile & Allocation Rationale\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
@@ -649,6 +652,7 @@ class GoalsStrategyRunner(SectionRunner):
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
         system = (
             "You are a senior financial planner creating realistic goal strategies for Indian retail clients. "
+            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
             "Your role is to provide HONEST and PRACTICAL advice. "
             "For each goal, compare the IDEAL SIP (what's mathematically needed to achieve the goal) against "
             "what's actually AFFORDABLE given the client's income and existing commitments. "
@@ -697,8 +701,9 @@ class PortfolioRebalanceRunner(SectionRunner):
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
         system = (
-            "You suggest high-level rebalancing directions without naming products. "
-            "IMPORTANT: Be consistent with the client's risk profile. "
+            "You suggest high-level rebalancing directions for Indian clients without naming products. "
+            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
+            "Be consistent with the client's risk profile. "
             "If portfolio equity is already above the recommended band, suggest reducing equity exposure. "
             "If portfolio equity is below the recommended band, suggest increasing equity exposure. "
             "Never give advice that contradicts the risk profile recommendations."
@@ -740,7 +745,7 @@ class ExecutiveSummaryRunner(SectionRunner):
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
-        system = "You write a crisp executive summary for Indian retail clients."
+        system = "You write a crisp executive summary for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency."
         user = (
             "Section: Executive Summary\n"
             "You are given short outlines from multiple sections. Create a concise summary.\n"
