@@ -1916,7 +1916,7 @@ def _get_cas_data_for_questionnaire(qid: int) -> dict:
     uploads = list_questionnaire_uploads(qid) or []
 
     for upload in uploads:
-        if upload.get("doc_type") == "Mutual fund CAS (Consolidated Account Statement)":
+        if upload("doc_type") == "Mutual fund CAS (Consolidated Account Statement)":
             metadata_json = upload.get("metadata_json")
             if metadata_json:
                 try:
