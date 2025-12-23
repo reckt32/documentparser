@@ -10,7 +10,7 @@ from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 import io
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Frame, PageTemplate
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Frame, PageTemplate, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import inch
@@ -64,6 +64,23 @@ STORE_REPORTS = os.getenv("STORE_REPORTS", "disk").lower()
 SAVE_TX_JSON = os.getenv("SAVE_TX_JSON", "false").lower() == "true"
 # Simple in-memory store for ephemeral downloads
 TEMP_REPORTS = {}
+
+# Logo path - uses app directory for production compatibility
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+
+def _format_indian_amount(amount: float) -> str:
+    """Format amount in Indian currency style (lakhs/crores) for compact display in PDFs."""
+    if amount is None or amount == 0:
+        return "0"
+    amount = abs(amount)
+    if amount >= 1_00_00_000:  # 1 crore
+        return f"{amount / 1_00_00_000:.1f} Cr"
+    elif amount >= 1_00_000:  # 1 lakh
+        return f"{amount / 1_00_000:.1f} L"
+    elif amount >= 1000:
+        return f"{amount / 1000:.1f} K"
+    else:
+        return str(int(round(amount)))
 
 def _register_temp_download(data: bytes, filename: str, mimetype: str = "application/pdf") -> str:
     token = os.urandom(16).hex()
@@ -1198,7 +1215,7 @@ def compute_liquidity(monthly_expenses, emergency_fund_amount):
     status = "Adequate" if months >= 6.0 else "Insufficient"
     return status, months
 
-def compute_retirement_corpus(age, monthly_income, desired_monthly_pension=None, inflation_rate=0.06, retirement_age=60):
+def compute_retirement_corpus(age, monthly_income, desired_monthly_pension=None, withdrawal_rate=0.07, retirement_age=60):
     """
     Calculate retirement corpus needed.
     
@@ -1206,7 +1223,7 @@ def compute_retirement_corpus(age, monthly_income, desired_monthly_pension=None,
       - years_to_retirement: retirement_age - age
       - standard_corpus: (retirement_age - age) * monthly_income * 12 (human life value method)
       - pension_annual: desired_monthly_pension * 12 (if pension provided)
-      - pension_corpus: inflation-adjusted corpus for desired pension (if pension provided)
+      - pension_corpus: (pension * 12) / withdrawal_rate - ideal corpus for perpetual pension
     """
     age_val = _safe_float(age, 30)
     mi = _safe_float(monthly_income, 0.0)
@@ -1222,22 +1239,22 @@ def compute_retirement_corpus(age, monthly_income, desired_monthly_pension=None,
     }
     
     # If desired monthly pension is provided, calculate pension-based corpus
+    # Using perpetuity formula: Corpus = (Annual Pension) / Withdrawal Rate
+    # This gives the corpus needed to generate the annual pension indefinitely at the given rate
     if desired_monthly_pension is not None:
         pension = _safe_float(desired_monthly_pension, 0.0)
         if pension > 0:
             annual_pension = pension * 12
-            # Inflation-adjusted corpus: FV of annual pension assuming 25 years of retirement
-            # Using simple multiplication for years to retirement as inflation factor
-            # More sophisticated: pension * 12 * ((1 + inflation)^years - 1) / inflation
-            # Simplified: annual_pension adjusted for inflation over years to retirement
-            inflation_multiplier = (1 + inflation_rate) ** years_to_retirement
-            pension_corpus = annual_pension * inflation_multiplier * 25  # 25 years of retirement assumed
+            # Ideal retirement corpus = annual pension / 7% (perpetuity formula)
+            pension_corpus = annual_pension / withdrawal_rate
             
             result["desired_monthly_pension"] = round(pension, 0)
             result["pension_annual"] = round(annual_pension, 0)
             result["pension_corpus"] = round(pension_corpus, 0)
+            result["withdrawal_rate_percent"] = withdrawal_rate * 100
     
     return result
+
 
 def compute_term_insurance_need(age, monthly_income, retirement_age=60):
     """
@@ -1668,7 +1685,7 @@ def generate_flags_and_recommendations(results, inputs):
         flags.append(f"Low Surplus: Saving {round(savings_percent,1)}% vs Benchmark 20%+")
     if results.get("insuranceGap") == "Underinsured":
         required = 10.0 * annual_income
-        flags.append(f"Underinsured: Cover Rs. {int(round(life_cover))} vs Required Rs. {int(round(required))}")
+        flags.append(f"Underinsured: Cover Rs. {_format_indian_amount(life_cover)} vs Required Rs. {_format_indian_amount(required)}")
     if results.get("debtStress") == "Stressed":
         # Recompute ratio for message
         monthly_income = annual_income / 12.0 if annual_income > 0 else 0.0
@@ -3105,7 +3122,7 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
                     pension_warning = " ⚠️ Below current expenses"
                 retirement_rows.append(["Desired Monthly Pension", f"Rs. {pension_val:,.0f}{pension_warning}"])
                 retirement_rows.append(["Annual Pension Requirement", f"Rs. {retirement_data.get('pension_annual', 0):,.0f}"])
-                retirement_rows.append(["Inflation-Adjusted Corpus Needed", f"Rs. {retirement_data.get('pension_corpus', 0):,.0f}"])
+                retirement_rows.append(["Ideal Retirement Corpus", f"Rs. {retirement_data.get('pension_corpus', 0):,.0f}"])
         
         retirement_table = Table(
             [["Parameter", "Value"]] + retirement_rows,
@@ -3123,7 +3140,7 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         story.append(Spacer(1, 6))
         story.append(Paragraph(
             "<i>Note: Standard corpus uses formula (60-age) × monthly income × 12. "
-            "Inflation-adjusted corpus assumes 6% annual inflation and 25-year retirement period.</i>",
+            "Ideal retirement corpus uses perpetuity formula: (pension × 12) ÷ 7%.</i>",
             styles["BodyText"]
         ))
         story.append(Spacer(1, 12))
@@ -3529,10 +3546,20 @@ def get_custom_styles():
 
 def header(canvas, doc):
     canvas.saveState()
+    # Draw logo at top-left if available
+    if os.path.exists(LOGO_PATH):
+        try:
+            logo_width = 80
+            logo_height = 40
+            canvas.drawImage(LOGO_PATH, doc.leftMargin, doc.height + doc.topMargin - logo_height + 5, 
+                           width=logo_width, height=logo_height, preserveAspectRatio=True, mask='auto')
+        except Exception:
+            pass  # Skip logo if there's an error loading it
+    # Draw date at top-right
     styles = get_custom_styles()
     p = Paragraph(f"Report Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles['Header'])
-    w, h = p.wrap(doc.width, doc.topMargin)
-    p.drawOn(canvas, doc.leftMargin, doc.height + doc.topMargin - h)
+    w, h = p.wrap(doc.width - 100, doc.topMargin)  # Leave space for logo
+    p.drawOn(canvas, doc.leftMargin + 100, doc.height + doc.topMargin - h)
     canvas.restoreState()
 
 def footer(canvas, doc):
