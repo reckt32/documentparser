@@ -1916,8 +1916,8 @@ def _get_cas_data_for_questionnaire(qid: int) -> dict:
     uploads = list_questionnaire_uploads(qid) or []
 
     for upload in uploads:
-        if upload("doc_type") == "Mutual fund CAS (Consolidated Account Statement)":
-            metadata_json = upload("metadata_json")
+        if upload["doc_type"] == "Mutual fund CAS (Consolidated Account Statement)":
+            metadata_json = upload["metadata_json"]
             if metadata_json:
                 try:
                     metadata = json.loads(metadata_json)
@@ -2004,9 +2004,9 @@ def build_prefill_from_insights(qid: int) -> dict:
         # Create a mapping of document_id to doc_type
         doc_type_map = {}
         for upload in uploads:
-            doc_id = upload("document_id")
+            doc_id = upload["document_id"]
             if doc_id:
-                doc_type_map[doc_id] = upload("doc_type", "")
+                doc_type_map[doc_id] = upload["doc_type"] or ""
         
         # Scan through raw extracts for personal info
         for extract in raw_extracts:
@@ -2025,8 +2025,8 @@ def build_prefill_from_insights(qid: int) -> dict:
             if personal_info.get("name") and personal_info.get("age"):
                 break
                 
-            doc_type = (upload("doc_type") or "").lower()
-            metadata_json = upload("metadata_json")
+            doc_type = (upload["doc_type"] or "").lower()
+            metadata_json = upload["metadata_json"]
             
             if metadata_json:
                 try:
