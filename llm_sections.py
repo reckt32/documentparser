@@ -302,7 +302,8 @@ def compute_goal_risk_category(
     horizon_years: Optional[float],
     risk_tolerance: Optional[str],
     goal_importance: Optional[str],
-    goal_flexibility: Optional[str]
+    goal_flexibility: Optional[str],
+    behavior: Optional[str] = None
 ) -> str:
     """
     Compute risk category for a single goal based on its specific parameters.
@@ -336,8 +337,12 @@ def compute_goal_risk_category(
     flex_map = {"critical": -1, "fixed": 0, "flexible": 1}
     flex_adj = flex_map.get(str(goal_flexibility).strip().lower(), 0)
     
-    # Total score: horizon (0-3) + tolerance (0-2) + adjustments (-2 to +2) = range -2 to 7
-    total = horizon_score + tol_score + imp_adj + flex_adj
+    # Behavior adjustment (-1 to +1)
+    behavior_map = {"sell": -1, "reduce": -1, "hold": 0, "buy": 1, "aggressive buy": 1, "aggressive_buy": 1}
+    behavior_adj = behavior_map.get(str(behavior).strip().lower(), 0) if behavior else 0
+    
+    # Total score: horizon (0-3) + tolerance (0-2) + adjustments (-3 to +3) = range -3 to 8
+    total = horizon_score + tol_score + imp_adj + flex_adj + behavior_adj
     
     # Map to category
     if total <= 1:
@@ -571,17 +576,19 @@ class GoalsStrategyRunner(SectionRunner):
             except Exception:
                 hzv = None
             
-            # Get per-goal risk settings (fall back to global if not specified)
+            # Get per-goal risk settings (fall back to defaults if not specified)
             goal_risk_tolerance = g.get("risk_tolerance") or "medium"
             goal_importance = g.get("goal_importance") or "important"
             goal_flexibility = g.get("goal_flexibility") or "fixed"
+            goal_behavior = g.get("behavior") or "hold"
             
             # Compute per-goal risk category
             goal_risk_cat = compute_goal_risk_category(
                 horizon_years=hzv,
                 risk_tolerance=goal_risk_tolerance,
                 goal_importance=goal_importance,
-                goal_flexibility=goal_flexibility
+                goal_flexibility=goal_flexibility,
+                behavior=goal_behavior
             )
             
             # Calculate ideal SIP using per-goal risk category
@@ -613,6 +620,7 @@ class GoalsStrategyRunner(SectionRunner):
                     "tolerance": goal_risk_tolerance,
                     "importance": goal_importance,
                     "flexibility": goal_flexibility,
+                    "behavior": goal_behavior,
                 },
                 "ideal_sip": ideal_sip,
                 "affordable_sip": round(affordable_sip, 2) if affordable_sip else None,

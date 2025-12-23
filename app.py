@@ -2764,6 +2764,7 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
                 "risk_tolerance": g.get("risk_tolerance", "medium"),
                 "goal_importance": g.get("goal_importance", "important"),
                 "goal_flexibility": g.get("goal_flexibility", "fixed"),
+                "behavior": g.get("behavior", "hold"),
             }
             for g in goals
         ],
