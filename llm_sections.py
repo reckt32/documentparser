@@ -42,6 +42,17 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 SECTIONS_DIR_NAME = "sections"
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 
+# ------------------------ Financial Assumptions (Configurable) ------------------------ #
+# These assumptions are used for SIP calculations and are displayed in reports
+ASSUMED_INFLATION_RATE = 0.06  # 6% annual inflation
+ASSUMED_RETURNS = {
+    "aggressive": {"annual": 0.14, "monthly": 0.011, "label": "14% p.a. (Aggressive Equity)"},
+    "growth": {"annual": 0.114, "monthly": 0.009, "label": "11.4% p.a. (Growth/Balanced)"},
+    "moderate": {"annual": 0.114, "monthly": 0.009, "label": "11.4% p.a. (Moderate)"},
+    "conservative": {"annual": 0.074, "monthly": 0.006, "label": "7.4% p.a. (Conservative/Debt)"},
+}
+WITHDRAWAL_RATE_RETIREMENT = 0.07  # 7% safe withdrawal rate for retirement corpus
+
 
 def _ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
@@ -214,22 +225,98 @@ class SectionRunner:
 # ------------------------ Helpers for Deterministic Goal Math ------------------------ #
 
 def _choose_monthly_rate(final_category: Optional[str], horizon_years: Optional[float]) -> float:
-    # Simple heuristic, monthly expected return
+    """Select monthly expected return based on risk category and horizon."""
     cat = (final_category or "").lower()
     h = float(horizon_years) if horizon_years not in (None, "") else None
+    
+    # Use constants for rate selection
     if cat in ["very aggressive", "aggressive"]:
-        base = 0.011
+        base = ASSUMED_RETURNS["aggressive"]["monthly"]
     elif cat in ["growth", "moderate"]:
-        base = 0.009
+        base = ASSUMED_RETURNS["growth"]["monthly"]
     else:
-        base = 0.006
-    # Short horizons tend lower
+        base = ASSUMED_RETURNS["conservative"]["monthly"]
+    
+    # Short horizons use more conservative rates
     if h is not None:
         if h <= 3:
-            base = min(base, 0.006)
+            base = min(base, ASSUMED_RETURNS["conservative"]["monthly"])
         elif h <= 7:
-            base = min(base, 0.009)
+            base = min(base, ASSUMED_RETURNS["growth"]["monthly"])
     return base
+
+
+def _get_return_assumptions(final_category: Optional[str], horizon_years: Optional[float]) -> Dict[str, Any]:
+    """Get return assumptions for display in reports."""
+    cat = (final_category or "").lower()
+    h = float(horizon_years) if horizon_years not in (None, "") else None
+    
+    if cat in ["very aggressive", "aggressive"]:
+        ret = ASSUMED_RETURNS["aggressive"]
+    elif cat in ["growth", "moderate"]:
+        ret = ASSUMED_RETURNS["growth"]
+    else:
+        ret = ASSUMED_RETURNS["conservative"]
+    
+    # Adjust label for short horizon
+    effective_annual = ret["annual"]
+    if h is not None and h <= 3:
+        effective_annual = ASSUMED_RETURNS["conservative"]["annual"]
+    elif h is not None and h <= 7:
+        effective_annual = min(ret["annual"], ASSUMED_RETURNS["growth"]["annual"])
+    
+    return {
+        "expected_return_percent": round(effective_annual * 100, 1),
+        "inflation_percent": round(ASSUMED_INFLATION_RATE * 100, 1),
+        "real_return_percent": round((effective_annual - ASSUMED_INFLATION_RATE) * 100, 1),
+    }
+
+
+def compute_goal_priority(
+    horizon_years: Optional[float],
+    importance: Optional[str],
+    gap_exists: bool,
+    shortfall_percent: float = 0
+) -> Tuple[int, str]:
+    """
+    Compute goal priority score and tier.
+    Lower score = higher priority.
+    
+    Returns: (priority_score, priority_tier)
+    Tiers: "Immediate" (<=3 yrs), "Short-term" (3-7 yrs), "Long-term" (>7 yrs)
+    """
+    base_score = 100
+    
+    # Importance factor (essential goals get highest priority)
+    imp = str(importance or "").strip().lower()
+    if imp == "essential":
+        base_score -= 40
+    elif imp == "important":
+        base_score -= 20
+    # lifestyle goals stay at base
+    
+    # Horizon urgency (shorter horizon = higher priority)
+    tier = "Long-term"
+    if horizon_years:
+        h = float(horizon_years)
+        if h <= 3:
+            base_score -= 30
+            tier = "Immediate"
+        elif h <= 5:
+            base_score -= 20
+            tier = "Short-term"
+        elif h <= 7:
+            base_score -= 10
+            tier = "Short-term"
+    
+    # Gap factor: achievable goals get slight priority boost
+    # But severely underfunded goals (>50% shortfall) need attention too
+    if not gap_exists:
+        base_score -= 10  # Achievable goals get priority
+    elif shortfall_percent > 50:
+        base_score -= 5  # Severely underfunded needs attention
+    
+    return (base_score, tier)
 
 
 def compute_goal_sip(target_amount: float, horizon_years: Optional[float], final_category: Optional[str]) -> Optional[float]:
@@ -419,14 +506,32 @@ class ProtectionPlanRunner(SectionRunner):
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
+        annual_income = _coerce_float(digest.get("annualIncome"), 0.0)
+        required_cover = _coerce_float(digest.get("requiredLifeCover"), annual_income * 10)
+        current_life = _coerce_float(digest.get("lifeCover"), 0.0)
+        current_health = _coerce_float(digest.get("healthCover"), 0.0)
+        age = _coerce_float(digest.get("age"), 35)
+        
+        # Estimate term premium (rough: Rs. 500-800 per lakh for 30-40 age group)
+        cover_gap = max(0, required_cover - current_life)
+        estimated_premium = (cover_gap / 100000) * (500 if age < 35 else 700 if age < 45 else 1200)
+        
         system = (
             "You are a senior financial planner. Draft a protection (life/health) section for Indian clients. "
             "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
-            "No guarantees; avoid product pushing; focus on adequacy and prioritization."
+            "Provide SPECIFIC coverage amounts and estimates. Avoid naming specific insurers but be specific about amounts."
         )
         user = (
             "Section: Protection Plan\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
+            "INSTRUCTIONS:\n"
+            f"1. Life Insurance Gap: Required Rs.{required_cover:,.0f}, Current Rs.{current_life:,.0f}, Gap Rs.{cover_gap:,.0f}\n"
+            f"   - If gap exists, recommend term insurance with specific cover amount\n"
+            f"   - Estimated premium: approx Rs.{estimated_premium:,.0f}/year (varies by age, health, insurer)\n"
+            f"2. Health Insurance: Current Rs.{current_health:,.0f}\n"
+            "   - Recommend Rs.10-15 lakh family floater for adequate coverage\n"
+            "   - If current < Rs.5 lakh, flag as critical gap\n"
+            "3. Priority Order: Term life first if dependents exist, then health cover\n\n"
             "Output JSON keys: title, bullets, paragraphs, actions.\n"
             "Length limits: <=6 bullets, <=2 paragraphs, <=5 actions."
         )
@@ -476,11 +581,36 @@ class DebtStrategyRunner(SectionRunner):
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
-        system = "You craft debt optimization advice for Indian retail clients. Be specific and conservative. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency."
+        monthly_emi = _coerce_float(digest.get("monthlyEmi"), 0.0)
+        annual_income = _coerce_float(digest.get("annualIncome"), 0.0)
+        emi_pct = _coerce_float(digest.get("emiPct"), 0.0)
+        monthly_income = annual_income / 12 if annual_income > 0 else 0
+        
+        # Calculate suggested prepayment from surplus (if EMI is >30%, suggest aggressive prepayment)
+        target_emi_pct = 30.0
+        excess_emi = max(0, monthly_emi - (monthly_income * target_emi_pct / 100))
+        
+        system = (
+            "You craft debt optimization advice for Indian retail clients. "
+            "Be specific about which debts to pay first and prepayment amounts. "
+            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($)."
+        )
         user = (
             "Section: Debt Strategy\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
-            "JSON output keys: title, bullets, paragraphs, actions. Avoid guarantees. Suggestions should be prioritized."
+            "INSTRUCTIONS:\n"
+            f"1. Current EMI: Rs.{monthly_emi:,.0f}/month ({emi_pct:.1f}% of income)\n"
+            f"   - Benchmark: Keep EMI below 30-40% of income\n"
+            f"2. DEBT PRIORITY (always recommend this order):\n"
+            "   - Credit card debt (18-42% interest) - Pay off FIRST\n"
+            "   - Personal loans (12-20% interest) - Pay off SECOND\n"
+            "   - Car loans (8-12% interest) - Pay off THIRD\n"
+            "   - Home loans (7-9% interest) - Lowest priority\n"
+            f"3. PREPAYMENT: If EMI exceeds 30%, suggest monthly prepayment of Rs.{excess_emi:,.0f}\n"
+            "   - Focus prepayment on highest-interest debt first\n"
+            "4. Avoid new unsecured debt until EMI < 30%\n\n"
+            "JSON output keys: title, bullets, paragraphs, actions. "
+            "Actions should include specific prepayment amounts if applicable."
         )
         return system, user
 
@@ -555,7 +685,12 @@ class GoalsStrategyRunner(SectionRunner):
         available_surplus = max(0, monthly_income - monthly_expenses - monthly_emi)
         
         # Get existing SIP commitments from portfolio/CAS data if available
-        existing_sip = _coerce_float(portfolio_info.get("monthly_sip") or portfolio_info.get("total_monthly_sip"), 0.0)
+        # Note: SIPs may already be counted in monthly_expenses in some cases
+        existing_sip_raw = _coerce_float(
+            portfolio_info.get("monthly_sip") or portfolio_info.get("total_monthly_sip"), 0.0
+        )
+        # Cap existing SIP to not exceed available surplus (prevents negative budget)
+        existing_sip = min(existing_sip_raw, available_surplus * 0.9)  # Allow 10% buffer
         
         # Net available for new goals (after existing commitments)
         net_available_for_goals = max(0, available_surplus - existing_sip)
@@ -566,6 +701,12 @@ class GoalsStrategyRunner(SectionRunner):
         
         # Distribute available surplus proportionally across goals
         per_goal_budget = net_available_for_goals / num_goals if num_goals > 0 else 0
+        
+        # Ensure minimum floor: if surplus exists, allocate at least 5% of income per goal
+        # This prevents the Rs. 0/month issue when existing_sip data is unreliable
+        minimum_per_goal = (monthly_income * 0.05) if monthly_income > 0 else 0
+        if available_surplus > 0 and per_goal_budget < minimum_per_goal:
+            per_goal_budget = min(minimum_per_goal, available_surplus / num_goals)
         
         items = []
         total_ideal_sip = 0.0
@@ -614,6 +755,17 @@ class GoalsStrategyRunner(SectionRunner):
             gap_exists = bool(ideal_sip and affordable_sip and ideal_sip > affordable_sip * 1.1)  # >10% gap
             shortfall_pct = round(((ideal_sip - affordable_sip) / ideal_sip) * 100, 1) if gap_exists and ideal_sip else 0
             
+            # Compute priority score and tier for this goal
+            priority_score, priority_tier = compute_goal_priority(
+                horizon_years=hzv,
+                importance=goal_importance,
+                gap_exists=gap_exists,
+                shortfall_percent=shortfall_pct
+            )
+            
+            # Get return assumptions for this goal's risk category
+            return_assumptions = _get_return_assumptions(goal_risk_cat, hzv)
+            
             items.append({
                 "name": nm,
                 "target_amount": tgt if tgt > 0 else None,
@@ -631,7 +783,20 @@ class GoalsStrategyRunner(SectionRunner):
                 "required_horizon_at_affordable": required_horizon,
                 "gap_exists": gap_exists,
                 "shortfall_percent": shortfall_pct,
+                "priority_score": priority_score,
+                "priority_tier": priority_tier,
+                "calculation_assumptions": return_assumptions,
             })
+        # Sort goals by priority score (lower = higher priority)
+        items.sort(key=lambda x: x.get("priority_score", 100))
+        
+        # Assign priority rank based on sorted order
+        for rank, item in enumerate(items, start=1):
+            item["priority_rank"] = rank
+        
+        # Get overall equity recommendation context for reconciliation
+        advanced_risk = analysis.get("advancedRisk") or {}
+        overall_equity_band = advanced_risk.get("recommendedEquityBand") or {}
         
         return {
             "riskFinalCategory": final_cat,
@@ -647,6 +812,11 @@ class GoalsStrategyRunner(SectionRunner):
                 "total_ideal_sip_required": round(total_ideal_sip, 2),
             },
             "overall_gap_exists": total_ideal_sip > net_available_for_goals * 1.1 if net_available_for_goals > 0 else True,
+            "calculation_assumptions_note": f"Calculations use expected returns of 7.4%-14% p.a. (based on risk category) and {ASSUMED_INFLATION_RATE*100}% inflation.",
+            "overall_recommended_equity_band": {
+                "min": overall_equity_band.get("min"),
+                "max": overall_equity_band.get("max"),
+            },
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
@@ -654,29 +824,40 @@ class GoalsStrategyRunner(SectionRunner):
             "You are a senior financial planner creating realistic goal strategies for Indian retail clients. "
             "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
             "Your role is to provide HONEST and PRACTICAL advice. "
-            "For each goal, compare the IDEAL SIP (what's mathematically needed to achieve the goal) against "
-            "what's actually AFFORDABLE given the client's income and existing commitments. "
-            "If there's a gap (gap_exists=true), clearly explain this and provide specific recommendations to bridge it. "
-            "Do NOT recommend SIPs that exceed the client's capacity. Be realistic and helpful."
+            "For each goal, compare the IDEAL SIP (what's mathematically needed) against what's AFFORDABLE. "
+            "Goals are pre-sorted by priority (priority_rank=1 is highest priority). "
+            "If there's a gap (gap_exists=true), provide specific bridge recommendations. "
+            "Do NOT recommend SIPs that exceed the client's capacity."
         )
         user = (
             "Section: Goal-wise Strategy with Feasibility Analysis\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
             "IMPORTANT INSTRUCTIONS:\n"
-            "1. For each goal, clearly state:\n"
-            "   - IDEAL PLAN: 'To achieve Rs.[target] in [horizon] years, you need a monthly SIP of Rs.[ideal_sip]'\n"
-            "   - CURRENT CAPACITY: 'Based on your income and expenses, you can afford Rs.[affordable_sip]/month for this goal'\n"
-            "2. If gap_exists=true, provide BRIDGE RECOMMENDATIONS (choose the most practical):\n"
-            "   - 'Extend your timeline to [required_horizon_at_affordable] years to reach the same target'\n"
-            "   - 'Or, reduce your target to Rs.[achievable_amount] which is achievable in [horizon] years'\n"
-            "   - 'Or, look for ways to increase your savings rate and reanalyze later'\n"
-            "3. If overall_gap_exists=true, emphasize that the client needs to prioritize goals or adjust expectations.\n"
-            "4. Be encouraging but HONEST - never suggest unaffordable SIPs.\n\n"
+            "1. PRIORITY ORDER: Goals are sorted by priority. Discuss them in priority order (priority_rank=1 first).\n"
+            "   - 'Immediate' tier: Address within 1-2 years\n"
+            "   - 'Short-term' tier: Address in years 3-5\n"
+            "   - 'Long-term' tier: Can be deferred to year 5+\n\n"
+            "2. For each goal, clearly state:\n"
+            "   - IDEAL: 'To achieve Rs.[target] in [horizon] years, you need Rs.[ideal_sip]/month'\n"
+            "   - CURRENT CAPACITY: 'You can afford Rs.[affordable_sip]/month for this goal'\n"
+            "   - Use the calculation_assumptions to note the expected return used\n\n"
+            "3. If gap_exists=true, provide BRIDGE RECOMMENDATIONS:\n"
+            "   - 'Extend timeline to [required_horizon_at_affordable] years'\n"
+            "   - 'Or reduce target to Rs.[achievable_amount]'\n"
+            "   - 'Or increase savings rate and reanalyze'\n\n"
+            "4. PHASED ACTION PLAN: Create a timeline based on priority_tier:\n"
+            "   - 'Year 1-2: Focus on [Immediate priority goals] + build emergency fund + insurance'\n"
+            "   - 'Year 3-5: Begin investing for [Short-term goals]'\n"
+            "   - 'Year 5+: Accelerate [Long-term goals]'\n\n"
+            "5. ASSUMPTIONS NOTE: Mention in one of the paragraphs:\n"
+            f"   '{digest.get('calculation_assumptions_note', '')}'\n\n"
+            "6. EQUITY RECONCILIATION: If per-goal allocations differ from overall_recommended_equity_band, "
+            "explain that goal-specific allocations are theoretical and the overall portfolio should stay within the recommended band.\n\n"
             "Output JSON with keys:\n"
-            "- title: 'Goal Strategy: Ideal vs Current Plan'\n"
-            "- bullets: One per goal summarizing ideal vs affordable (max 6)\n"
-            "- paragraphs: 2-3 paragraphs explaining the overall situation and bridge strategies\n"
-            "- actions: Specific, actionable recommendations to bridge gaps (max 5)"
+            "- title: 'Goal Strategy: Prioritized Action Plan'\n"
+            "- bullets: One per goal in priority order, showing ideal vs affordable (max 6)\n"
+            "- paragraphs: 2-3 paragraphs covering phased plan, assumptions, and bridge strategies\n"
+            "- actions: Specific phased recommendations (max 5)"
         )
         return system, user
 
@@ -700,20 +881,55 @@ class PortfolioRebalanceRunner(SectionRunner):
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
+        portfolio = digest.get("portfolio") or {}
+        rec_band = digest.get("recommendedEquityBand") or {}
+        rec_mid = _coerce_float(digest.get("recommendedEquityMid"), 50.0)
+        rec_min = _coerce_float(rec_band.get("min"), 40.0)
+        rec_max = _coerce_float(rec_band.get("max"), 60.0)
+        
+        current_equity = _coerce_float(portfolio.get("equity"), 50.0)
+        current_debt = _coerce_float(portfolio.get("debt"), 30.0)
+        
+        # Calculate rebalancing direction
+        if current_equity > rec_max:
+            direction = "REDUCE EQUITY"
+            shift_pct = round(current_equity - rec_mid, 1)
+        elif current_equity < rec_min:
+            direction = "INCREASE EQUITY"
+            shift_pct = round(rec_mid - current_equity, 1)
+        else:
+            direction = "MAINTAIN"
+            shift_pct = 0
+        
         system = (
-            "You suggest high-level rebalancing directions for Indian clients without naming products. "
-            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
-            "Be consistent with the client's risk profile. "
-            "If portfolio equity is already above the recommended band, suggest reducing equity exposure. "
-            "If portfolio equity is below the recommended band, suggest increasing equity exposure. "
-            "Never give advice that contradicts the risk profile recommendations."
+            "You suggest high-level rebalancing directions for Indian clients. "
+            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹). NEVER use dollars ($). "
+            "Provide CATEGORY-level guidance (e.g., 'large-cap index funds', 'debt mutual funds') "
+            "but do NOT name specific AMCs or fund names. "
+            "Be consistent with the client's risk profile."
         )
         user = (
             "Section: Portfolio Rebalancing\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
-            "The recommendedEquityBand shows the target equity range based on the client's risk profile. "
-            "Compare current portfolio allocation against this target when suggesting changes.\n\n"
-            "Return JSON: title, bullets, paragraphs, actions. Avoid product recommendations; discuss allocation directions."
+            "INSTRUCTIONS:\n"
+            f"1. CURRENT vs RECOMMENDED:\n"
+            f"   - Current Equity: {current_equity:.1f}%\n"
+            f"   - Recommended Range: {rec_min:.0f}-{rec_max:.0f}% (target: {rec_mid:.0f}%)\n"
+            f"   - Action: {direction} by ~{shift_pct}% of portfolio\n\n"
+            "2. CATEGORY-LEVEL GUIDANCE (use these terms, not product names):\n"
+            "   TO REDUCE EQUITY:\n"
+            "   - Move to short-duration debt funds or corporate bond funds\n"
+            "   - Consider liquid funds for near-term needs\n"
+            "   - Book profits in small/mid-cap and shift to debt\n"
+            "   TO INCREASE EQUITY:\n"
+            "   - Add to large-cap index funds or flexi-cap funds\n"
+            "   - Use SIP route for gradual deployment\n"
+            "   - Consider hybrid equity-debt funds for moderate risk\n\n"
+            "3. DIVERSIFICATION SUGGESTIONS:\n"
+            "   - International equity: 5-10% via US/global index funds\n"
+            "   - Gold: 5-10% via sovereign gold bonds or gold ETFs\n\n"
+            "Return JSON: title, bullets, paragraphs, actions. "
+            "Actions should include specific percentage shifts."
         )
         return system, user
 
