@@ -3297,9 +3297,20 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     flags = analysis.get("flags") or []
     story.append(Paragraph("Attention Areas", styles["h2"]))
     if flags:
+        def _format_rupee_match(match):
+            """Convert matched rupee amount to compact Indian format (L/Cr)."""
+            full_match = match.group(0)
+            # Extract just the number part, removing Rs., ₹, spaces, and commas
+            num_str = re.sub(r"[Rs\.₹,\s]", "", full_match)
+            try:
+                amount = float(num_str)
+                return f"Rs. {_format_indian_amount(amount)}"
+            except ValueError:
+                return full_match  # Return original if parsing fails
+        
         for f in flags:
-            # Only mask actual rupee amounts (with Rs. or ₹ prefix), not percentages or scores
-            sanitized = re.sub(r"(Rs\.?|₹)\s*[0-9][0-9,]*", "Rs. ***", f)
+            # Format actual rupee amounts (with Rs. or ₹ prefix) to compact Indian style (L/Cr)
+            sanitized = re.sub(r"(Rs\.?|₹)\s*[0-9][0-9,]*\.?\d*", _format_rupee_match, f)
             story.append(Paragraph(sanitize_pdf_text(f"! {sanitized}"), styles["BodyText"]))
     else:
         story.append(Paragraph("No critical flags identified.", styles["BodyText"]))
