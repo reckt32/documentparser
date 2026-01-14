@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "questionnaire_id": 11,
+    "section": "flags_explainer",
+    "model": "gpt-4o",
+    "ts": 1768411800,
+    "facts_hash": "45be72e652392f05098222889beab6c06b33140380a1d14cc298419036ca3b5f",
+    "prompt": {
+      "system": "You are a senior financial planner writing for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Be precise, neutral, and practical. No guarantees or forward-looking promises. Return valid JSON with keys: title (string), bullets (array of short points), paragraphs (2-3 short paragraphs), actions (checklist items).",
+      "user": "Section: Flags and Actions\nFactsDigest JSON (<=2KB):\n{\"client\": {\"age\": \"32\", \"dependents\": 0}, \"flags\": [], \"kpis\": {\"debtStress\": null, \"emiPct\": null, \"ihsBand\": null, \"insuranceGap\": null, \"liquidity\": null, \"liquidityMonths\": null, \"surplusBand\": null}}\n\nConstraints:\n- Max 6 bullets, each <= 20 words.\n- 1-2 paragraphs, each <= 80 words.\n- Max 5 actions, each actionable and specific.\n"
+    },
+    "usage": {
+      "prompt_tokens": 219,
+      "completion_tokens": 199,
+      "total_tokens": 418
+    }
+  },
+  "content": {
+    "title": "Financial Planning for a 32-Year-Old with No Dependents",
+    "bullets": [
+      "Age: 32, no dependents",
+      "Focus on building emergency fund",
+      "Consider long-term investment options",
+      "Evaluate insurance needs",
+      "Plan for retirement early",
+      "Monitor financial health regularly"
+    ],
+    "paragraphs": [
+      "At 32, with no dependents, you have a unique opportunity to focus on personal financial growth. Building a robust emergency fund should be a priority to cover unforeseen expenses. Consider allocating funds towards long-term investments to benefit from compounding.",
+      "Evaluate your insurance needs to ensure adequate coverage. Planning for retirement early can provide financial security in later years. Regularly monitoring your financial health will help you stay on track and make informed decisions."
+    ],
+    "actions": [
+      "Build an emergency fund covering 6 months of expenses.",
+      "Explore long-term investment options like mutual funds.",
+      "Review and update your insurance coverage.",
+      "Start a retirement savings plan, such as a PPF or NPS.",
+      "Schedule regular financial health check-ups."
+    ]
+  }
+}

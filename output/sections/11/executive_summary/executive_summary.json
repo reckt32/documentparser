@@ -1,0 +1,32 @@
+{
+  "_meta": {
+    "questionnaire_id": 11,
+    "section": "executive_summary",
+    "model": "gpt-4o",
+    "ts": 1768411873,
+    "facts_hash": "256e87cc22b652dd7b767349158f427d6b873d9e47b1b3634d6e6741ac3fe838",
+    "prompt": {
+      "system": "You write a crisp executive summary for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Executive Summary\nYou are given short outlines from multiple sections. Create a concise summary.\nSectionOutlines:\n{\"cashflow\": {\"bullets\": [\"Gross Inflows: Rs. 923,043\", \"Mandatory Outflows: Rs. 467,598.7\", \"Living Expenses: Rs. 200,000\", \"Investments: Rs. 100,000\", \"Net Available: Rs. 155,444.3\"], \"title\": \"Cashflow Overview and Optimization\"}, \"debt_strategy\": {\"bullets\": [\"Current EMI is Rs.0/month, which is 0.0% of your annual income.\", \"Maintain EMI payments below 30-40% of your income to ensure financial stability.\", \"Prioritize paying off debts in the following order: Credit card debt, Personal loans, Car loans, and Home loans.\", \"No current EMI burden allows for strategic planning of future debt management.\"], \"title\": \"Debt Optimization Strategy for Effective Financial Management\"}, \"flags_explainer\": {\"bullets\": [\"Age: 32, no dependents\", \"Focus on building emergency fund\", \"Consider long-term investment options\", \"Evaluate insurance needs\", \"Plan for retirement early\"], \"title\": \"Financial Planning for a 32-Year-Old with No Dependents\"}, \"goals_strategy\": {\"bullets\": [\"Goal: To achieve your financial objectives, you need to determine specific targets and timelines. Currently, there are no defined targets or timelines, so no ideal SIP can be calculated.\", \"Current Capacity: With a net available surplus of Rs.0, you cannot afford any SIP for this goal at the moment.\"], \"title\": \"Goal Strategy: Prioritized Action Plan\"}, \"liquidity_plan\": {\"bullets\": [\"Establish a robust emergency fund to cover at least 6 months of essential expenses.\", \"Ensure easy access to funds without penalties or delays.\", \"Regularly review and adjust the fund based on lifestyle changes and inflation.\"], \"title\": \"Liquidity Plan for Financial Security\"}, \"portfolio_rebalance\": {\"bullets\": [\"Current equity allocation is at 100%, which is significantly higher than the recommended range of 40-60%.\", \"Target equity allocation should be around 50% to align with a balanced risk profile.\", \"Introduce debt instruments to stabilize the portfolio and reduce risk exposure.\"], \"title\": \"Portfolio Rebalancing Strategy\"}, \"protection_plan\": {\"bullets\": [\"Age: 32, Annual Income: Rs.3,84,033, No dependents\", \"Life Insurance Gap: Rs.3,840,330\", \"Recommended Term Insurance: Rs.3,840,330 cover\", \"Estimated Term Insurance Premium: Rs.19,202/year\", \"Current Health Insurance: Rs.0\"], \"title\": \"Protection Plan for Financial Security\"}, \"risk_rationale\": {\"bullets\": [\"Risk profile helps determine how much risk you are comfortable taking with your investments.\", \"Asset allocation is about spreading your investments across different types of assets like stocks, bonds, and cash.\", \"A balanced approach can help achieve financial goals while managing risk.\"], \"title\": \"Understanding Your Risk Profile and Asset Allocation\"}, \"tax_efficiency\": {\"bullets\": [\"Maximize tax savings by utilizing available deductions under sections 80C, 80D, and 80CCD(1B).\", \"Consider LTCG harvesting to optimize tax liability on capital gains.\"], \"title\": \"Tax Efficiency & Savings Recommendations\"}}\n\nOutput JSON keys: title, bullets (<=6), paragraphs (<=2). No actions."
+    },
+    "usage": {
+      "prompt_tokens": 779,
+      "completion_tokens": 257,
+      "total_tokens": 1036
+    }
+  },
+  "content": {
+    "title": "Comprehensive Financial Strategy for Indian Retail Clients",
+    "bullets": [
+      "Net cashflow available is Rs. 155,444.3 after accounting for mandatory outflows and living expenses.",
+      "No current EMI burden, allowing for strategic debt management planning.",
+      "Focus on building an emergency fund and evaluating insurance needs for financial security.",
+      "Portfolio requires rebalancing from 100% equity to a balanced 50% equity allocation.",
+      "Maximize tax savings through deductions and LTCG harvesting."
+    ],
+    "paragraphs": [
+      "The financial overview highlights a net cashflow availability of Rs. 155,444.3, providing an opportunity to optimize investments and savings. With no current EMI burden, clients can strategically plan future debt management, prioritizing credit card and personal loan repayments. Building a robust emergency fund and evaluating insurance needs are crucial steps for financial security, especially for a 32-year-old with no dependents.",
+      "Portfolio rebalancing is recommended to reduce risk exposure by shifting from a 100% equity allocation to a balanced 50% equity allocation. Additionally, clients should focus on maximizing tax efficiency by utilizing deductions under sections 80C, 80D, and 80CCD(1B), and consider LTCG harvesting to optimize tax liabilities."
+    ]
+  }
+}

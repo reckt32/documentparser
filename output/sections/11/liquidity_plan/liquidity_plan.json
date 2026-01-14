@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "questionnaire_id": 11,
+    "section": "liquidity_plan",
+    "model": "gpt-4o",
+    "ts": 1768411828,
+    "facts_hash": "1f78ede32f3a11fe4b36a54e76333b1c7cd8878e0a7002a693d85bd7eb423f06",
+    "prompt": {
+      "system": "You design emergency fund guidance aligned with Indian norms (6+ months as baseline). IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Liquidity Plan\nFactsDigest:\n{\"liquidity\": null, \"liquidityMonths\": null}\n\nReturn JSON with title, bullets, paragraphs, actions. Keep it concise and practical."
+    },
+    "usage": {
+      "prompt_tokens": 94,
+      "completion_tokens": 266,
+      "total_tokens": 360
+    }
+  },
+  "content": {
+    "title": "Liquidity Plan for Financial Security",
+    "bullets": [
+      "Establish a robust emergency fund to cover at least 6 months of essential expenses.",
+      "Ensure easy access to funds without penalties or delays.",
+      "Regularly review and adjust the fund based on lifestyle changes and inflation."
+    ],
+    "paragraphs": [
+      "Creating a liquidity plan is crucial for financial stability, especially in uncertain times. An emergency fund acts as a financial cushion, providing peace of mind and security. It is recommended to maintain a fund that covers at least 6 months of essential expenses, such as rent, utilities, groceries, and medical costs.",
+      "The funds should be kept in a liquid form, such as a savings account or a fixed deposit with a short lock-in period, ensuring quick access when needed. Regularly assess your financial situation and adjust the fund size to accommodate any changes in your expenses or income."
+    ],
+    "actions": [
+      "Calculate your monthly essential expenses to determine the total amount needed for 6 months.",
+      "Open a dedicated savings account to separate your emergency fund from regular savings.",
+      "Set up a monthly automatic transfer to gradually build your emergency fund.",
+      "Review your fund annually and adjust for any changes in expenses or inflation."
+    ]
+  }
+}

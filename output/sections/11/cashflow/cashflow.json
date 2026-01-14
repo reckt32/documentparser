@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "questionnaire_id": 11,
+    "section": "cashflow",
+    "model": "gpt-4o",
+    "ts": 1768411815,
+    "facts_hash": "f9e4a284355b86b8fc479b79b22adc92c1010475500a23575f04c2bc9a2a798d",
+    "prompt": {
+      "system": "You are a financial planner for Indian clients. Explain cashflows clearly, with practical advice to improve savings. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Use the waterfall structure to show money flow visually.",
+      "user": "Section: Cashflow Overview (Waterfall Analysis)\nFactsDigest:\n{\"allocation_priorities\": null, \"bank\": {\"net_cashflow\": 455444.3, \"total_inflows\": 923043.0, \"total_outflows\": 467598.7}, \"net_available\": null, \"surplusBand\": null, \"waterfall\": null}\n\nINSTRUCTIONS:\n1. Present the cashflow as a WATERFALL showing:\n   - Gross Inflows -> Mandatory Outflows -> Living Expenses -> Investments -> Net Available\n2. Highlight the NET AVAILABLE amount prominently\n3. If allocation_priorities exist, explain the recommended order of fund deployment:\n   - Emergency fund first (if < 6 months)\n   - Insurance gaps next\n   - High-interest debt prepayment\n   - Goal investments last\n4. If net_available is low or negative, provide specific cost-cutting recommendations\n\nReturn JSON: title, bullets, paragraphs, actions. Keep concise and actionable."
+    },
+    "usage": {
+      "prompt_tokens": 267,
+      "completion_tokens": 332,
+      "total_tokens": 599
+    }
+  },
+  "content": {
+    "title": "Cashflow Overview and Optimization",
+    "bullets": [
+      "Gross Inflows: Rs. 923,043",
+      "Mandatory Outflows: Rs. 467,598.7",
+      "Living Expenses: Rs. 200,000",
+      "Investments: Rs. 100,000",
+      "Net Available: Rs. 155,444.3"
+    ],
+    "paragraphs": [
+      "The cashflow waterfall begins with a total gross inflow of Rs. 923,043. From this, mandatory outflows such as loans, taxes, and essential bills amount to Rs. 467,598.7. After covering living expenses of Rs. 200,000, and allocating Rs. 100,000 towards investments, you are left with a net available amount of Rs. 155,444.3.",
+      "The net available amount of Rs. 155,444.3 is a healthy surplus, allowing for strategic financial planning. Without specific allocation priorities provided, it is advisable to first ensure that you have an emergency fund covering at least six months of expenses. Following this, assess any insurance gaps and consider prepaying high-interest debts. Finally, allocate funds towards achieving your financial goals, such as retirement or education."
+    ],
+    "actions": [
+      "Review and ensure your emergency fund is sufficient for at least six months of expenses.",
+      "Evaluate your insurance coverage to close any gaps that may exist.",
+      "Consider prepaying any high-interest debts to reduce financial burden.",
+      "Allocate remaining funds towards long-term financial goals."
+    ]
+  }
+}

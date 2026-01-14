@@ -543,9 +543,13 @@ class CashflowRunner(SectionRunner):
 
     def digest(self, facts: Dict[str, Any]) -> Dict[str, Any]:
         analysis = facts.get("analysis") or {}
+        sentinel = analysis.get("sentinel") or {}
         bank = facts.get("bank") or {}
         return {
             "surplusBand": analysis.get("surplusBand"),
+            "waterfall": analysis.get("cashflow_waterfall") or sentinel.get("cashflow_waterfall"),
+            "net_available": sentinel.get("net_available"),
+            "allocation_priorities": analysis.get("allocation_priorities") or sentinel.get("allocation_priorities"),
             "bank": {
                 "total_inflows": bank.get("total_inflows"),
                 "total_outflows": bank.get("total_outflows"),
@@ -556,11 +560,22 @@ class CashflowRunner(SectionRunner):
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
         system = (
             "You are a financial planner for Indian clients. Explain cashflows clearly, with practical advice to improve savings. "
-            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency."
+            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
+            "Use the waterfall structure to show money flow visually."
         )
         user = (
-            "Section: Cashflow Overview\n"
+            "Section: Cashflow Overview (Waterfall Analysis)\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
+            "INSTRUCTIONS:\n"
+            "1. Present the cashflow as a WATERFALL showing:\n"
+            "   - Gross Inflows -> Mandatory Outflows -> Living Expenses -> Investments -> Net Available\n"
+            "2. Highlight the NET AVAILABLE amount prominently\n"
+            "3. If allocation_priorities exist, explain the recommended order of fund deployment:\n"
+            "   - Emergency fund first (if < 6 months)\n"
+            "   - Insurance gaps next\n"
+            "   - High-interest debt prepayment\n"
+            "   - Goal investments last\n"
+            "4. If net_available is low or negative, provide specific cost-cutting recommendations\n\n"
             "Return JSON: title, bullets, paragraphs, actions. Keep concise and actionable."
         )
         return system, user
@@ -934,6 +949,54 @@ class PortfolioRebalanceRunner(SectionRunner):
         return system, user
 
 
+class TaxEfficiencyRunner(SectionRunner):
+    name = "tax_efficiency"
+
+    def digest(self, facts: Dict[str, Any]) -> Dict[str, Any]:
+        analysis = facts.get("analysis") or {}
+        tax_efficiency = analysis.get("tax_efficiency") or {}
+        itr = facts.get("itr") or {}
+        
+        return {
+            "recommendations": tax_efficiency.get("recommendations", []),
+            "total_tax_alpha": tax_efficiency.get("total_tax_alpha", 0),
+            "ltcg_harvest": tax_efficiency.get("ltcg_harvest"),
+            "deductions_claimed": itr.get("deductions_claimed", []),
+            "taxable_income": itr.get("taxable_income"),
+        }
+
+    def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
+        recommendations = digest.get("recommendations", [])
+        total_alpha = _coerce_float(digest.get("total_tax_alpha"), 0)
+        ltcg = digest.get("ltcg_harvest")
+        
+        system = (
+            "You are a tax optimization specialist for Indian clients. "
+            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($). "
+            "Provide ACTIONABLE recommendations with SPECIFIC amounts and DEADLINES. "
+            "Focus on 80C, 80D, 80CCD(1B), and LTCG harvesting opportunities."
+        )
+        
+        user = (
+            "Section: Tax Efficiency & Savings\n"
+            f"FactsDigest:\n{_json_dumps(digest)}\n\n"
+            "INSTRUCTIONS:\n"
+            "1. MISSED SAVINGS: For each recommendation, format as:\n"
+            "   '80C: Invest ₹[gap_amount] in ELSS/PPF by [deadline] to save ₹[tax_saved] in taxes'\n"
+            "2. LTCG HARVESTING: If ltcg_harvest exists, explain:\n"
+            "   - Current unrealized gains vs ₹1.25L exemption limit\n"
+            "   - Specific harvest recommendation with deadline\n"
+            "3. PRIORITY ORDER:\n"
+            "   - High-impact low-effort items first (e.g., health premium top-up)\n"
+            "   - Lock-in items next (e.g., PPF, ELSS)\n"
+            "   - NPS last (15-year+ lock-in)\n"
+            f"4. HIGHLIGHT total potential tax savings: ₹{total_alpha:,.0f}\n\n"
+            "Return JSON: title, bullets, paragraphs, actions.\n"
+            "Actions MUST include specific amounts and the deadline 'by March 31st'."
+        )
+        return system, user
+
+
 class ExecutiveSummaryRunner(SectionRunner):
     name = "executive_summary"
 
@@ -958,6 +1021,7 @@ class ExecutiveSummaryRunner(SectionRunner):
             "risk_rationale": _small("risk_rationale"),
             "goals_strategy": _small("goals_strategy"),
             "portfolio_rebalance": _small("portfolio_rebalance"),
+            "tax_efficiency": _small("tax_efficiency"),
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
@@ -983,6 +1047,7 @@ class SectionsOrchestrator:
         "risk_rationale",
         "goals_strategy",
         "portfolio_rebalance",
+        "tax_efficiency",
         "executive_summary",
     ]
 
@@ -1004,6 +1069,7 @@ class SectionsOrchestrator:
             "risk_rationale": RiskRationaleRunner(self.client, self.qid, self.base_dir),
             "goals_strategy": GoalsStrategyRunner(self.client, self.qid, self.base_dir),
             "portfolio_rebalance": PortfolioRebalanceRunner(self.client, self.qid, self.base_dir),
+            "tax_efficiency": TaxEfficiencyRunner(self.client, self.qid, self.base_dir),
         }
 
         # Run main sections

@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "questionnaire_id": 11,
+    "section": "risk_rationale",
+    "model": "gpt-4o",
+    "ts": 1768411836,
+    "facts_hash": "c4161514313b6098f2a5a83b5411be478cd79f6116074c3243dad5a92153cf27",
+    "prompt": {
+      "system": "You explain risk profile and asset allocation rationale for Indian clients simply and accurately. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Risk Profile & Allocation Rationale\nFactsDigest:\n{\"appetiteCategory\": null, \"finalCategory\": null, \"reasoningText\": null, \"recommendedEquityBand\": null, \"recommendedEquityMid\": null, \"tenureLimitCategory\": null}\n\nReturn JSON: title, bullets, paragraphs. Optionally actions. Avoid technical jargon."
+    },
+    "usage": {
+      "prompt_tokens": 125,
+      "completion_tokens": 355,
+      "total_tokens": 480
+    }
+  },
+  "content": {
+    "title": "Understanding Your Risk Profile and Asset Allocation",
+    "bullets": [
+      "Risk profile helps determine how much risk you are comfortable taking with your investments.",
+      "Asset allocation is about spreading your investments across different types of assets like stocks, bonds, and cash.",
+      "A balanced approach can help achieve financial goals while managing risk."
+    ],
+    "paragraphs": [
+      "When we talk about your risk profile, we're essentially discussing how much risk you are willing to take with your investments. This is crucial because it influences the types of investments that are suitable for you. For instance, if you are comfortable with high risk, you might invest more in stocks, which can offer higher returns but also come with greater volatility.",
+      "Asset allocation is the strategy of dividing your investment portfolio among different asset categories, such as equities (stocks), fixed income (bonds), and cash. The goal is to balance risk and reward by adjusting the percentage of each asset in your portfolio according to your risk tolerance, goals, and investment time frame.",
+      "For Indian investors, it's important to consider factors like market conditions, inflation, and personal financial goals. A well-thought-out asset allocation strategy can help you achieve your financial objectives, whether it's saving for retirement, buying a home, or funding your child's education."
+    ],
+    "actions": [
+      "Assess your comfort with risk: Are you okay with the ups and downs of the stock market, or do you prefer more stable investments?",
+      "Consider your financial goals: What are you saving for, and how long do you have to reach these goals?",
+      "Review your asset allocation regularly: As your life circumstances change, your investment strategy might need to be adjusted."
+    ]
+  }
+}

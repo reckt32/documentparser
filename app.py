@@ -19,6 +19,7 @@ from datetime import datetime
 from reportlab.pdfgen import canvas
 from extractors import index_and_extract, extract_and_store_from_indexed
 from llm_sections import run_report_sections
+from sentinel import SentinelOrchestrator, run_sentinel_pipeline
 from db import (
     list_sections,
     list_metrics,
@@ -1764,6 +1765,21 @@ def generate_flags_and_recommendations(results, inputs):
 
 def analyze_financial_health(payload: dict):
     payload = payload or {}
+    
+    # Run Sentinel validation pipeline first
+    sentinel = SentinelOrchestrator()
+    sentinel_result = sentinel.run(payload)
+    
+    # If critical data is missing, return questions for frontend to collect
+    if sentinel_result.has_critical_failures:
+        return {
+            "status": "needs_input",
+            "questions": sentinel_result.get_questions(),
+            "preserve_payload": payload,
+            "missing_fields": sentinel_result.missing_fields,
+            "critical_issues": [{"field": i.field, "message": i.message} for i in sentinel_result.critical_issues],
+        }
+    
     personal = payload.get("personal") or {}
     income = payload.get("income") or {}
     goals = payload.get("goals") or {}
@@ -1793,6 +1809,7 @@ def analyze_financial_health(payload: dict):
     ihs = compute_ihs(savings_percent, current_products, allocation)
 
     results = {
+        "status": "complete",
         "riskProfile": (advanced_risk["finalCategory"] if advanced_risk else basic_risk_profile),
         "advancedRisk": advanced_risk,
         "surplusBand": surplus_band,
@@ -1806,12 +1823,26 @@ def analyze_financial_health(payload: dict):
             "emiPct": round(emi_ratio_pct, 2),
             "liquidityMonths": round(liquidity_months, 2),
             "requiredLifeCover": required_cover
-        }
+        },
+        # Sentinel pipeline results
+        "sentinel": sentinel_result.to_dict(),
+        "cashflow_waterfall": sentinel_result.cashflow_waterfall,
+        "allocation_priorities": sentinel_result.allocation_priorities,
+        "tax_efficiency": {
+            "recommendations": sentinel_result.tax_recommendations,
+            "total_tax_alpha": sentinel_result.total_tax_alpha,
+            "ltcg_harvest": sentinel_result.ltcg_harvest_recommendation,
+        },
     }
 
     flags, recs = generate_flags_and_recommendations(results, payload)
     results["flags"] = flags
     results["recommendations"] = recs
+    
+    # Add Sentinel warnings to flags
+    for w in sentinel_result.warnings:
+        results["flags"].append(f"⚠️ {w.message}")
+    
     return results
 
 # --- Document insights aggregation (from linked uploads) ---

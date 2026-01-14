@@ -1,0 +1,47 @@
+{
+  "_meta": {
+    "questionnaire_id": 11,
+    "section": "tax_efficiency",
+    "model": "gpt-4o",
+    "ts": 1768411867,
+    "facts_hash": "0d0454de2b3427b4fe0f62849fc5d26e6c6fb3f8e0771231f8d3286c917945f7",
+    "prompt": {
+      "system": "You are a tax optimization specialist for Indian clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($). Provide ACTIONABLE recommendations with SPECIFIC amounts and DEADLINES. Focus on 80C, 80D, 80CCD(1B), and LTCG harvesting opportunities.",
+      "user": "Section: Tax Efficiency & Savings\nFactsDigest:\n{\"deductions_claimed\": [], \"ltcg_harvest\": null, \"recommendations\": [], \"taxable_income\": null, \"total_tax_alpha\": 0}\n\nINSTRUCTIONS:\n1. MISSED SAVINGS: For each recommendation, format as:\n   '80C: Invest ₹[gap_amount] in ELSS/PPF by [deadline] to save ₹[tax_saved] in taxes'\n2. LTCG HARVESTING: If ltcg_harvest exists, explain:\n   - Current unrealized gains vs ₹1.25L exemption limit\n   - Specific harvest recommendation with deadline\n3. PRIORITY ORDER:\n   - High-impact low-effort items first (e.g., health premium top-up)\n   - Lock-in items next (e.g., PPF, ELSS)\n   - NPS last (15-year+ lock-in)\n4. HIGHLIGHT total potential tax savings: ₹0\n\nReturn JSON: title, bullets, paragraphs, actions.\nActions MUST include specific amounts and the deadline 'by March 31st'."
+    },
+    "usage": {
+      "prompt_tokens": 305,
+      "completion_tokens": 492,
+      "total_tokens": 797
+    }
+  },
+  "content": {
+    "title": "Tax Efficiency & Savings Recommendations",
+    "bullets": [
+      "Maximize tax savings by utilizing available deductions under sections 80C, 80D, and 80CCD(1B).",
+      "Consider LTCG harvesting to optimize tax liability on capital gains."
+    ],
+    "paragraphs": [
+      "To optimize your tax savings, it is crucial to take advantage of the deductions available under sections 80C, 80D, and 80CCD(1B). Additionally, if you have any unrealized long-term capital gains, consider harvesting them to make full use of the ₹1.25 lakh exemption limit. This strategy will help you minimize your tax liability effectively."
+    ],
+    "actions": [
+      {
+        "action": "80C: Invest ₹1,50,000 in ELSS or PPF by March 31st to save ₹46,800 in taxes.",
+        "details": "Since you haven't claimed any deductions under 80C, you can invest up to ₹1,50,000 in eligible instruments like ELSS or PPF to save on taxes."
+      },
+      {
+        "action": "80D: Purchase a health insurance policy for yourself and family with a premium of ₹25,000 by March 31st to save ₹7,800 in taxes.",
+        "details": "Health insurance premiums are deductible under section 80D. This is a high-impact, low-effort way to reduce your taxable income."
+      },
+      {
+        "action": "80CCD(1B): Contribute ₹50,000 to NPS by March 31st to save ₹15,600 in taxes.",
+        "details": "Contributions to the National Pension System (NPS) under section 80CCD(1B) offer an additional deduction of ₹50,000, which can further reduce your tax liability."
+      },
+      {
+        "action": "LTCG Harvesting: If you have unrealized long-term capital gains, sell assets to realize gains up to ₹1,25,000 by March 31st to utilize the exemption limit.",
+        "details": "Review your investment portfolio for any unrealized long-term capital gains. Harvesting these gains up to the exemption limit can help you avoid paying taxes on them."
+      }
+    ],
+    "total_potential_tax_savings": "₹70,200"
+  }
+}
