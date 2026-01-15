@@ -3347,110 +3347,6 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         story.append(Paragraph("No critical flags identified.", styles["BodyText"]))
     story.append(Spacer(1, 12))
 
-    # ==========================================================================
-    # CASHFLOW WATERFALL (from Sentinel)
-    # ==========================================================================
-    cashflow_waterfall = analysis.get("cashflow_waterfall") or []
-    if cashflow_waterfall:
-        story.append(Paragraph("Cashflow Waterfall", styles["h2"]))
-        waterfall_rows = []
-        for item in cashflow_waterfall:
-            label = item.get("label", "")
-            formatted = item.get("formatted", "")
-            waterfall_rows.append([label, formatted])
-        
-        if waterfall_rows:
-            wf_table = Table(
-                waterfall_rows,
-                hAlign="LEFT",
-                colWidths=[300, 200],
-            )
-            wf_table.setStyle(TableStyle([
-                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#E8F4EA')),  # Highlight net available
-                ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-                ('TOPPADDING', (0,0), (-1,-1), 4),
-            ]))
-            story.append(wf_table)
-        story.append(Spacer(1, 12))
-
-    # ==========================================================================
-    # ALLOCATION PRIORITIES (from Sentinel)
-    # ==========================================================================
-    allocation_priorities = analysis.get("allocation_priorities") or []
-    if allocation_priorities:
-        story.append(Paragraph("Recommended Fund Allocation", styles["h2"]))
-        priority_rows = []
-        for p in allocation_priorities:
-            priority = p.get("priority", "")
-            label = p.get("label", "")
-            formatted = p.get("formatted", "")
-            reasoning = p.get("reasoning", "")
-            priority_rows.append([f"P{priority}", label, formatted, reasoning])
-        
-        if priority_rows:
-            pr_table = Table(
-                [["#", "Category", "Amount/mo", "Reason"]] + priority_rows,
-                hAlign="LEFT",
-                colWidths=[30, 120, 80, 270],
-            )
-            pr_table.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-                ('VALIGN', (0,0), (-1,-1), 'TOP'),
-            ]))
-            story.append(pr_table)
-        story.append(Spacer(1, 12))
-
-    # ==========================================================================
-    # TAX EFFICIENCY (from Sentinel)
-    # ==========================================================================
-    tax_efficiency = analysis.get("tax_efficiency") or {}
-    tax_recommendations = tax_efficiency.get("recommendations") or []
-    total_tax_alpha = tax_efficiency.get("total_tax_alpha", 0)
-    
-    if tax_recommendations:
-        story.append(Paragraph("Tax Savings Opportunities", styles["h2"]))
-        if total_tax_alpha > 0:
-            story.append(Paragraph(f"<b>Potential Tax Savings: Rs. {_format_indian_amount(total_tax_alpha)}</b>", styles["BodyText"]))
-        
-        tax_rows = []
-        for rec in tax_recommendations:
-            section = rec.get("section", "")
-            gap = rec.get("formatted_gap", "")
-            savings = rec.get("formatted_savings", "")
-            deadline = rec.get("deadline", "")
-            tax_rows.append([section, gap, savings, f"by {deadline}"])
-        
-        if tax_rows:
-            tax_table = Table(
-                [["Section", "Gap", "Tax Saved", "Deadline"]] + tax_rows,
-                hAlign="LEFT",
-                colWidths=[80, 100, 100, 220],
-            )
-            tax_table.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2A9D8F')),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-            ]))
-            story.append(tax_table)
-        
-        # LTCG Harvest Recommendation
-        ltcg = tax_efficiency.get("ltcg_harvest")
-        if ltcg:
-            story.append(Spacer(1, 6))
-            ltcg_rec = ltcg.get("recommendation", "")
-            if ltcg_rec:
-                story.append(Paragraph(f"<b>LTCG Opportunity:</b> {ltcg_rec}", styles["BodyText"]))
-        
-        story.append(Spacer(1, 12))
-
     # Categorized Recommendations
     story.append(Paragraph("Recommendations", styles["h2"]))
     for cat, items in categorized.items():
@@ -3473,7 +3369,6 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
             "risk_rationale",
             "goals_strategy",
             "portfolio_rebalance",
-            "tax_efficiency",
         ]
         for key in section_order:
             sec = narratives.get(key)
