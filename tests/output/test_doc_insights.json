@@ -25,7 +25,7 @@
     },
     "raw_extracts": [
       {
-        "document_id": 13,
+        "document_id": 1,
         "summary": {
           "investment_snapshot": null,
           "account_summary": null,
@@ -34,7 +34,7 @@
         }
       },
       {
-        "document_id": 14,
+        "document_id": 2,
         "summary": {
           "investment_snapshot": null,
           "account_summary": null,
@@ -43,7 +43,7 @@
         }
       },
       {
-        "document_id": 15,
+        "document_id": 3,
         "summary": {
           "investment_snapshot": null,
           "account_summary": null,
@@ -52,7 +52,7 @@
         }
       },
       {
-        "document_id": 16,
+        "document_id": 4,
         "summary": {
           "investment_snapshot": null,
           "account_summary": null,
@@ -63,7 +63,7 @@
     ]
   },
   "prefill": {
-    "questionnaire_id": 9,
+    "questionnaire_id": 1,
     "docInsights": {
       "bank": {
         "total_inflows": 1200000.0,
@@ -90,7 +90,7 @@
       },
       "raw_extracts": [
         {
-          "document_id": 13,
+          "document_id": 1,
           "summary": {
             "investment_snapshot": null,
             "account_summary": null,
@@ -99,7 +99,7 @@
           }
         },
         {
-          "document_id": 14,
+          "document_id": 2,
           "summary": {
             "investment_snapshot": null,
             "account_summary": null,
@@ -108,7 +108,7 @@
           }
         },
         {
-          "document_id": 15,
+          "document_id": 3,
           "summary": {
             "investment_snapshot": null,
             "account_summary": null,
@@ -117,7 +117,7 @@
           }
         },
         {
-          "document_id": 16,
+          "document_id": 4,
           "summary": {
             "investment_snapshot": null,
             "account_summary": null,
@@ -127,6 +127,7 @@
         }
       ]
     },
+    "personal_info": {},
     "lifestyle": {
       "annual_income": 1500000.0,
       "monthly_expenses": 75000.0,

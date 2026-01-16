@@ -573,6 +573,7 @@ def extract_bank_statement_hybrid(text, transactions_payload=None, save_json_pat
     Extract the following information in JSON format:
 
     1. account_summary:
+        - account_holder_name: Full name of the account holder (look for "Account Holder", "Customer Name", "Name", etc.)
         - opening_balance
         - closing_balance
         - total_inflows
@@ -2035,101 +2036,151 @@ def build_prefill_from_insights(qid: int) -> dict:
     except Exception:
         pass
 
+    # Scan uploads for insurance prefill - need to read insurance_type from metadata
     insurance_prefill = {}
     try:
-        sum_val = ins.get("sum_assured_or_insured")
-        ins_type = str(ins.get("insurance_type") or "").lower()
-        if isinstance(sum_val, (int, float)) and sum_val > 0:
-            if "life" in ins_type or "term" in ins_type or "ulip" in ins_type:
-                insurance_prefill["life_cover"] = float(sum_val)
-            elif "health" in ins_type or "mediclaim" in ins_type:
-                insurance_prefill["health_cover"] = float(sum_val)
-            else:
-                # Unknown type: default to life_cover; user can adjust
+        uploads = list_questionnaire_uploads(qid) or []
+        for upload in uploads:
+            doc_type = (upload["doc_type"] or "").lower()
+            if "insurance" in doc_type:
+                metadata_json = upload["metadata_json"]
+                if metadata_json:
+                    try:
+                        metadata = json.loads(metadata_json)
+                        ins_type = str(metadata.get("insurance_type") or "").lower()
+                        sum_val = metadata.get("sum_assured_or_insured")
+                        
+                        # Also check aggregated insights if not in metadata
+                        if sum_val is None or sum_val == "N/A":
+                            sum_val = ins.get("sum_assured_or_insured")
+                        
+                        if isinstance(sum_val, (int, float)) and sum_val > 0:
+                            if "health" in ins_type or "mediclaim" in ins_type:
+                                # Add to health cover (may have multiple health policies)
+                                existing_health = insurance_prefill.get("health_cover", 0.0)
+                                insurance_prefill["health_cover"] = existing_health + float(sum_val)
+                            elif "life" in ins_type or "term" in ins_type or "ulip" in ins_type:
+                                # Add to life cover
+                                existing_life = insurance_prefill.get("life_cover", 0.0)
+                                insurance_prefill["life_cover"] = existing_life + float(sum_val)
+                            else:
+                                # Unknown type: default to life_cover
+                                existing_life = insurance_prefill.get("life_cover", 0.0)
+                                insurance_prefill["life_cover"] = existing_life + float(sum_val)
+                    except Exception:
+                        continue
+        
+        # Fallback: if no metadata found, use aggregated insights
+        if not insurance_prefill:
+            sum_val = ins.get("sum_assured_or_insured")
+            if isinstance(sum_val, (int, float)) and sum_val > 0:
+                # Default to life_cover when type unknown
                 insurance_prefill["life_cover"] = float(sum_val)
     except Exception:
         pass
 
-    # Personal info extraction from raw document extracts
+    # Personal info extraction - priority order:
+    # 1. Bank statement account_holder_name (most reliable, directly from user's bank)
+    # 2. CAS investor_name
+    # 3. Insurance policy_holder
+    # 4. ITR assessee_name (least reliable - may pick up father's name field)
     personal_info = {}
     try:
-        raw_extracts = di.get("raw_extracts") or []
         uploads = list_questionnaire_uploads(qid) or []
         
-        # Create a mapping of document_id to doc_type
-        doc_type_map = {}
+        # First pass: look for bank statement (highest priority for name)
         for upload in uploads:
-            doc_id = upload["document_id"]
-            if doc_id:
-                doc_type_map[doc_id] = upload["doc_type"] or ""
-        
-        # Scan through raw extracts for personal info
-        for extract in raw_extracts:
-            if personal_info.get("name") and personal_info.get("age"):
-                break  # Already have both
-                
-            doc_id = extract.get("document_id")
-            summary = extract.get("summary") or {}
-            doc_type = doc_type_map.get(doc_id, "").lower()
-            
-            # Additional data might be stored in document-level extraction (not just summary)
-            # We need to re-extract from the uploaded documents
-        
-        # If not found in raw_extracts, scan uploaded document metadata for personal info
-        for upload in uploads:
-            if personal_info.get("name") and personal_info.get("age"):
+            if personal_info.get("name"):
                 break
-                
             doc_type = (upload["doc_type"] or "").lower()
+            if "bank" in doc_type:
+                metadata_json = upload["metadata_json"]
+                if metadata_json:
+                    try:
+                        metadata = json.loads(metadata_json)
+                        account_holder = metadata.get("account_holder_name")
+                        if account_holder and account_holder != "N/A" and len(str(account_holder)) > 2:
+                            personal_info["name"] = str(account_holder).strip().title()
+                    except Exception:
+                        continue
+        
+        # Second pass: look for CAS investor_name
+        if not personal_info.get("name"):
+            for upload in uploads:
+                if personal_info.get("name"):
+                    break
+                doc_type = (upload["doc_type"] or "").lower()
+                if "cas" in doc_type or "mutual fund" in doc_type:
+                    metadata_json = upload["metadata_json"]
+                    if metadata_json:
+                        try:
+                            metadata = json.loads(metadata_json)
+                            cas_data = metadata.get("cas_data") or {}
+                            investor_name = metadata.get("investor_name") or cas_data.get("investor_name")
+                            if investor_name and investor_name != "N/A" and len(investor_name) > 2:
+                                personal_info["name"] = investor_name.strip().title()
+                        except Exception:
+                            continue
+        
+        # Third pass: look for Insurance policy_holder
+        if not personal_info.get("name"):
+            for upload in uploads:
+                if personal_info.get("name"):
+                    break
+                doc_type = (upload["doc_type"] or "").lower()
+                if "insurance" in doc_type:
+                    metadata_json = upload["metadata_json"]
+                    if metadata_json:
+                        try:
+                            metadata = json.loads(metadata_json)
+                            policy_holder = metadata.get("policy_holder")
+                            if policy_holder and policy_holder != "N/A" and len(policy_holder) > 2:
+                                personal_info["name"] = policy_holder.strip().title()
+                        except Exception:
+                            continue
+        
+        # Fourth pass: look for ITR assessee_name (lowest priority)
+        if not personal_info.get("name"):
+            for upload in uploads:
+                if personal_info.get("name"):
+                    break
+                doc_type = (upload["doc_type"] or "").lower()
+                if "itr" in doc_type:
+                    metadata_json = upload["metadata_json"]
+                    if metadata_json:
+                        try:
+                            metadata = json.loads(metadata_json)
+                            assessee_name = metadata.get("assessee_name")
+                            if assessee_name and assessee_name != "N/A" and len(assessee_name) > 2:
+                                personal_info["name"] = assessee_name.strip().title()
+                        except Exception:
+                            continue
+        
+        # Extract age from date_of_birth (from any document)
+        for upload in uploads:
+            if personal_info.get("age"):
+                break
             metadata_json = upload["metadata_json"]
-            
             if metadata_json:
                 try:
                     metadata = json.loads(metadata_json)
-                    
-                    # Check CAS data for investor_name
-                    cas_data = metadata.get("cas_data") or {}
-                    if not personal_info.get("name"):
-                        investor_name = metadata.get("investor_name") or cas_data.get("investor_name")
-                        if investor_name and investor_name != "N/A" and len(investor_name) > 2:
-                            personal_info["name"] = investor_name.strip().title()
-                    
-                    # Check for extracted personal details in metadata
-                    if not personal_info.get("name"):
-                        # Insurance policy_holder
-                        policy_holder = metadata.get("policy_holder")
-                        if policy_holder and policy_holder != "N/A" and len(policy_holder) > 2:
-                            personal_info["name"] = policy_holder.strip().title()
-                    
-                    if not personal_info.get("name"):
-                        # ITR assessee_name
-                        assessee_name = metadata.get("assessee_name")
-                        if assessee_name and assessee_name != "N/A" and len(assessee_name) > 2:
-                            personal_info["name"] = assessee_name.strip().title()
-                    
-                    # Try to extract age from date_of_birth
-                    if not personal_info.get("age"):
-                        dob = metadata.get("date_of_birth")
-                        if dob and dob != "N/A":
+                    dob = metadata.get("date_of_birth")
+                    if dob and dob != "N/A":
+                        from datetime import datetime
+                        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"]:
                             try:
-                                # Parse DOB and calculate age
-                                from datetime import datetime
-                                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"]:
-                                    try:
-                                        birth_date = datetime.strptime(dob, fmt)
-                                        if birth_date.year < 100:  # Handle 2-digit years
-                                            birth_date = birth_date.replace(year=birth_date.year + 1900)
-                                        today = datetime.now()
-                                        age = today.year - birth_date.year
-                                        if (today.month, today.day) < (birth_date.month, birth_date.day):
-                                            age -= 1
-                                        if 18 <= age <= 100:
-                                            personal_info["age"] = age
-                                        break
-                                    except ValueError:
-                                        continue
-                            except Exception:
-                                pass
+                                birth_date = datetime.strptime(dob, fmt)
+                                if birth_date.year < 100:  # Handle 2-digit years
+                                    birth_date = birth_date.replace(year=birth_date.year + 1900)
+                                today = datetime.now()
+                                age = today.year - birth_date.year
+                                if (today.month, today.day) < (birth_date.month, birth_date.day):
+                                    age -= 1
+                                if 18 <= age <= 100:
+                                    personal_info["age"] = age
+                                break
+                            except ValueError:
+                                continue
                 except Exception:
                     continue
     except Exception:
@@ -2263,6 +2314,7 @@ def upload_document():
                         try:
                             bank_metadata = {
                                 "size_bytes": len(file_bytes),
+                                "account_holder_name": (bank_data.get("account_summary") or {}).get("account_holder_name"),
                                 "bank_data": {
                                     "account_summary": bank_data.get("account_summary", {}),
                                     "recurring_debits": bank_data.get("recurring_debits", []),
@@ -2309,9 +2361,11 @@ def upload_document():
                                 metadata_update["date_of_birth"] = other_data.get("date_of_birth")
                                 metadata_update["pan"] = other_data.get("pan")
                             
-                            # Insurance metadata - store policy holder
+                            # Insurance metadata - store policy holder and insurance_type
                             elif doc_type == "Insurance document":
                                 metadata_update["policy_holder"] = other_data.get("policy_holder")
+                                metadata_update["insurance_type"] = other_data.get("insurance_type")
+                                metadata_update["sum_assured_or_insured"] = other_data.get("sum_assured_or_insured")
                                 metadata_update["date_of_birth"] = other_data.get("date_of_birth")
                             
                             update_questionnaire_upload_metadata(upload_link_ids[idx], metadata_update)
@@ -3572,6 +3626,26 @@ def header(canvas, doc):
 def footer(canvas, doc):
     canvas.saveState()
     styles = get_custom_styles()
+    
+    # Educational disclaimer - displayed on every page
+    disclaimer_text = (
+        "This is an educational analysis tool, not financial advice. "
+        "This report is for informational purposes only. "
+        "Consult a SEBI-registered Investment Advisor before making decisions. "
+        "We do not recommend specific securities or products."
+    )
+    disclaimer_style = ParagraphStyle(
+        'Disclaimer',
+        fontSize=6,
+        alignment=TA_CENTER,
+        textColor=colors.grey,
+        leading=8
+    )
+    disclaimer = Paragraph(disclaimer_text, disclaimer_style)
+    dw, dh = disclaimer.wrap(doc.width, doc.bottomMargin)
+    disclaimer.drawOn(canvas, doc.leftMargin, dh + 15)
+    
+    # Page number
     p = Paragraph(f"Page {doc.page}", styles['Footer'])
     w, h = p.wrap(doc.width, doc.bottomMargin)
     p.drawOn(canvas, doc.leftMargin, h)

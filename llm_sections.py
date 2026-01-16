@@ -442,6 +442,196 @@ def compute_goal_risk_category(
         return "Aggressive"
 
 
+# ------------------------ Priority Allocation Engine ------------------------ #
+
+def generate_bridge_recommendations(shortfall: float, current_surplus: float) -> List[Dict]:
+    """
+    Generate specific recommendations to bridge the goal funding gap.
+    Called when user cannot afford all their goals with current surplus.
+    """
+    if shortfall <= 0:
+        return []
+    
+    recs = []
+    
+    # Option 1: Reduce expenses
+    expense_reduction = shortfall
+    recs.append({
+        "option": "Reduce Expenses",
+        "amount": round(expense_reduction),
+        "action": f"Reduce monthly expenses by Rs. {expense_reduction:,.0f} to fully fund all goals"
+    })
+    
+    # Option 2: Increase income (need ~30% more gross income due to taxes/savings rate)
+    income_increase = shortfall * 1.3
+    recs.append({
+        "option": "Increase Income",
+        "amount": round(income_increase),
+        "action": f"Increase monthly income by Rs. {income_increase:,.0f} (assuming current savings rate)"
+    })
+    
+    # Option 3: Accept partial achievement and increase over time
+    if current_surplus > 0:
+        achievable_pct = (current_surplus / (current_surplus + shortfall)) * 100
+        recs.append({
+            "option": "Start Now, Increase Later",
+            "amount": None,
+            "action": f"Start SIPs now at Rs. {current_surplus:,.0f}/month ({achievable_pct:.0f}% of goals) and increase contributions annually"
+        })
+    
+    # Option 4: Extend timelines
+    recs.append({
+        "option": "Extend Goal Timelines",
+        "amount": None,
+        "action": "Extend goal target dates to reduce monthly SIP requirement"
+    })
+    
+    return recs
+
+
+class PriorityAllocationEngine:
+    """
+    Allocates available monthly surplus following priority order:
+    
+    Priority 1: Term Insurance Premium (if gap exists & has dependents)
+    Priority 2: Health Insurance Premium (if gap exists)
+    Priority 3+: Goals (remaining surplus distributed by priority rank)
+    
+    This implements the framework:
+    "First term insurance → then health → then goals → if shortfall, show % achievable"
+    """
+    
+    @staticmethod
+    def estimate_term_premium(cover_gap: float, age: int = 35) -> float:
+        """Estimate yearly term insurance premium based on cover gap and age."""
+        if cover_gap <= 0:
+            return 0.0
+        # Rough estimate: Rs. 500-1200 per lakh depending on age
+        rate_per_lakh = 500 if age < 35 else (700 if age < 45 else 1200)
+        return (cover_gap / 100000) * rate_per_lakh
+    
+    @staticmethod
+    def estimate_health_premium(cover_gap: float, age: int = 35) -> float:
+        """Estimate yearly health insurance premium based on cover gap and age."""
+        if cover_gap <= 0:
+            return 0.0
+        # Rough estimate: Rs. 2500-5000 per lakh for family floater
+        rate_per_lakh = 2500 if age < 35 else (3500 if age < 45 else 5000)
+        return (cover_gap / 100000) * rate_per_lakh
+    
+    @staticmethod
+    def compute_allocation(
+        monthly_surplus: float,
+        term_insurance_gap: float,
+        health_insurance_gap: float,
+        goals: List[Dict],
+        age: int = 35,
+        has_dependents: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Compute priority-based allocation of monthly surplus.
+        
+        Args:
+            monthly_surplus: Available monthly savings after expenses/EMI
+            term_insurance_gap: Gap in term cover (Rs.)
+            health_insurance_gap: Gap in health cover (Rs.)
+            goals: List of goal dicts with 'ideal_sip', 'name', 'priority_rank'
+            age: Client age for premium estimation
+            has_dependents: Whether client has financial dependents
+        
+        Returns:
+            Dict with priority breakdown, achievement %, and bridge recommendations
+        """
+        priority_items = []
+        allocated_so_far = 0.0
+        
+        # Priority 1: Term Insurance (if has dependents and gap exists)
+        term_premium_yearly = PriorityAllocationEngine.estimate_term_premium(term_insurance_gap, age)
+        term_premium_monthly = term_premium_yearly / 12 if has_dependents and term_insurance_gap > 0 else 0
+        
+        term_status = "Adequate"
+        if term_premium_monthly > 0:
+            if monthly_surplus >= term_premium_monthly:
+                term_status = "Fundable"
+                allocated_so_far += term_premium_monthly
+            else:
+                term_status = "Critical Gap"
+        elif not has_dependents:
+            term_status = "Not Required"
+            
+        priority_items.append({
+            "priority": 1,
+            "name": "Term Insurance",
+            "monthly_amount": round(term_premium_monthly, 0),
+            "yearly_amount": round(term_premium_yearly, 0),
+            "status": term_status,
+            "note": f"Cover gap: Rs. {term_insurance_gap:,.0f}" if term_insurance_gap > 0 else "Adequate coverage"
+        })
+        
+        # Priority 2: Health Insurance
+        health_premium_yearly = PriorityAllocationEngine.estimate_health_premium(health_insurance_gap, age)
+        health_premium_monthly = health_premium_yearly / 12 if health_insurance_gap > 0 else 0
+        
+        remaining_after_term = max(0, monthly_surplus - allocated_so_far)
+        health_status = "Adequate"
+        if health_premium_monthly > 0:
+            if remaining_after_term >= health_premium_monthly:
+                health_status = "Fundable"
+                allocated_so_far += health_premium_monthly
+            else:
+                health_status = "Gap Exists"
+                
+        priority_items.append({
+            "priority": 2,
+            "name": "Health Insurance",
+            "monthly_amount": round(health_premium_monthly, 0),
+            "yearly_amount": round(health_premium_yearly, 0),
+            "status": health_status,
+            "note": f"Cover gap: Rs. {health_insurance_gap:,.0f}" if health_insurance_gap > 0 else "Adequate coverage"
+        })
+        
+        # Remaining for goals
+        remaining_for_goals = max(0, monthly_surplus - allocated_so_far)
+        
+        # Calculate total ideal SIP needed for all goals
+        total_ideal_sip = sum(_coerce_float(g.get("ideal_sip"), 0.0) for g in goals)
+        
+        # Goal achievement percentage
+        if total_ideal_sip > 0:
+            achievement_pct = min(100.0, (remaining_for_goals / total_ideal_sip) * 100)
+        else:
+            achievement_pct = 100.0  # No goals = 100% achieved
+        
+        # Shortfall amount
+        shortfall = max(0, total_ideal_sip - remaining_for_goals)
+        
+        # Add goals as priority 3
+        goal_status = "Full" if achievement_pct >= 100 else ("Partial" if achievement_pct > 0 else "Cannot Fund")
+        priority_items.append({
+            "priority": 3,
+            "name": "Goal SIPs",
+            "monthly_amount": round(remaining_for_goals, 0),
+            "ideal_amount": round(total_ideal_sip, 0),
+            "status": goal_status,
+            "note": f"Can fund {achievement_pct:.0f}% of goal requirements"
+        })
+        
+        # Generate bridge recommendations if shortfall exists
+        bridge_recs = generate_bridge_recommendations(shortfall, remaining_for_goals) if shortfall > 0 else []
+        
+        return {
+            "priority_breakdown": priority_items,
+            "monthly_surplus": round(monthly_surplus, 0),
+            "allocated_to_insurance": round(term_premium_monthly + health_premium_monthly, 0),
+            "remaining_for_goals": round(remaining_for_goals, 0),
+            "total_ideal_sip_needed": round(total_ideal_sip, 0),
+            "goal_achievement_percent": round(achievement_pct, 1),
+            "savings_shortfall": round(shortfall, 0) if shortfall > 0 else 0,
+            "bridge_recommendations": bridge_recs,
+            "summary": f"With Rs. {monthly_surplus:,.0f}/month surplus: Insurance needs Rs. {allocated_so_far:,.0f}, leaving Rs. {remaining_for_goals:,.0f} for goals ({achievement_pct:.0f}% of requirement)."
+        }
+
+
 # ------------------------ Concrete Section Runners ------------------------ #
 
 class FlagsExplainerRunner(SectionRunner):
@@ -798,6 +988,43 @@ class GoalsStrategyRunner(SectionRunner):
         advanced_risk = analysis.get("advancedRisk") or {}
         overall_equity_band = advanced_risk.get("recommendedEquityBand") or {}
         
+        # --- Priority Framework Integration ---
+        # Extract insurance gap data from facts
+        personal = facts.get("personal") or {}
+        insurance = facts.get("insurance") or {}
+        term_insurance_info = facts.get("term_insurance") or {}
+        
+        age = _coerce_float(personal.get("age"), 35)
+        has_dependents = personal.get("has_financial_dependents", False) or (_coerce_float(personal.get("dependents_count"), 0) > 0)
+        
+        # Calculate term insurance gap
+        term_gap = _coerce_float(term_insurance_info.get("gap"), 0.0)
+        if term_gap <= 0:
+            # Fallback: compute from required vs current
+            required_cover = _coerce_float(
+                (analysis.get("_diagnostics") or {}).get("requiredLifeCover"), 
+                monthly_income * 12 * 10  # Default: 10x annual income
+            )
+            current_life_cover = _coerce_float(insurance.get("lifeCover"), 0.0)
+            term_gap = max(0, required_cover - current_life_cover)
+        
+        # Calculate health insurance gap (recommend Rs. 10-15 lakh family floater)
+        current_health_cover = _coerce_float(insurance.get("healthCover"), 0.0)
+        recommended_health = 1000000  # Rs. 10 lakh minimum recommended
+        if has_dependents:
+            recommended_health = 1500000  # Rs. 15 lakh for family
+        health_gap = max(0, recommended_health - current_health_cover)
+        
+        # Compute priority-based allocation
+        priority_allocation = PriorityAllocationEngine.compute_allocation(
+            monthly_surplus=available_surplus,
+            term_insurance_gap=term_gap,
+            health_insurance_gap=health_gap,
+            goals=items,
+            age=int(age),
+            has_dependents=has_dependents
+        )
+        
         return {
             "riskFinalCategory": final_cat,
             "goals": items[:12],
@@ -817,9 +1044,21 @@ class GoalsStrategyRunner(SectionRunner):
                 "min": overall_equity_band.get("min"),
                 "max": overall_equity_band.get("max"),
             },
+            # NEW: Priority Framework Data
+            "priority_framework": priority_allocation,
+            "insurance_gaps": {
+                "term_insurance_gap": round(term_gap, 0),
+                "health_insurance_gap": round(health_gap, 0),
+                "has_dependents": has_dependents,
+            },
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
+        # Extract priority framework summary for prompt
+        priority_data = digest.get("priority_framework") or {}
+        achievement_pct = priority_data.get("goal_achievement_percent", 100)
+        bridge_recs = priority_data.get("bridge_recommendations") or []
+        
         system = (
             "You are a senior financial planner creating realistic goal strategies for Indian retail clients. "
             "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
@@ -830,34 +1069,54 @@ class GoalsStrategyRunner(SectionRunner):
             "Do NOT recommend SIPs that exceed the client's capacity."
         )
         user = (
-            "Section: Goal-wise Strategy with Feasibility Analysis\n"
+            "Section: Goal-wise Strategy with Priority Framework\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
-            "IMPORTANT INSTRUCTIONS:\n"
-            "1. PRIORITY ORDER: Goals are sorted by priority. Discuss them in priority order (priority_rank=1 first).\n"
+            "IMPORTANT INSTRUCTIONS:\n\n"
+            "**PRIORITY FRAMEWORK (MUST INCLUDE):**\n"
+            "The priority_framework section shows allocation in this order:\n"
+            "  Priority 1: Term Insurance (if dependents exist)\n"
+            "  Priority 2: Health Insurance (if gap exists)\n"
+            "  Priority 3: Goal SIPs (remaining surplus)\n\n"
+            f"Current goal achievement level: {achievement_pct:.0f}% of total goal requirements.\n"
+        )
+        
+        # Add bridge recommendations if goals aren't fully funded
+        if achievement_pct < 100 and bridge_recs:
+            user += (
+                "Since goals cannot be fully funded, include these BRIDGE OPTIONS in your response:\n"
+            )
+            for rec in bridge_recs[:3]:  # Top 3 recommendations
+                user += f"  - {rec.get('option')}: {rec.get('action')}\n"
+            user += "\n"
+        
+        user += (
+            "1. START WITH PRIORITY SUMMARY: Begin with a bullet stating:\n"
+            "   'With Rs.[surplus]/month: Rs.[X] for insurance, Rs.[Y] remaining for goals ([Z]% of requirement)'\n\n"
+            "2. GOAL PRIORITY ORDER: Discuss goals in priority order (priority_rank=1 first).\n"
             "   - 'Immediate' tier: Address within 1-2 years\n"
             "   - 'Short-term' tier: Address in years 3-5\n"
             "   - 'Long-term' tier: Can be deferred to year 5+\n\n"
-            "2. For each goal, clearly state:\n"
+            "3. For each goal, clearly state:\n"
             "   - IDEAL: 'To achieve Rs.[target] in [horizon] years, you need Rs.[ideal_sip]/month'\n"
             "   - CURRENT CAPACITY: 'You can afford Rs.[affordable_sip]/month for this goal'\n"
             "   - Use the calculation_assumptions to note the expected return used\n\n"
-            "3. If gap_exists=true, provide BRIDGE RECOMMENDATIONS:\n"
+            "4. If gap_exists=true, provide BRIDGE RECOMMENDATIONS:\n"
             "   - 'Extend timeline to [required_horizon_at_affordable] years'\n"
             "   - 'Or reduce target to Rs.[achievable_amount]'\n"
             "   - 'Or increase savings rate and reanalyze'\n\n"
-            "4. PHASED ACTION PLAN: Create a timeline based on priority_tier:\n"
-            "   - 'Year 1-2: Focus on [Immediate priority goals] + build emergency fund + insurance'\n"
-            "   - 'Year 3-5: Begin investing for [Short-term goals]'\n"
-            "   - 'Year 5+: Accelerate [Long-term goals]'\n\n"
-            "5. ASSUMPTIONS NOTE: Mention in one of the paragraphs:\n"
+            "5. PATH TO FULL ACHIEVEMENT: If achievement < 100%, explain how to reach 100%:\n"
+            "   - Specific amount to reduce expenses\n"
+            "   - Or specific amount to increase income\n"
+            "   - Or start with current SIP and increase annually\n\n"
+            "6. ASSUMPTIONS NOTE: Mention in one of the paragraphs:\n"
             f"   '{digest.get('calculation_assumptions_note', '')}'\n\n"
-            "6. EQUITY RECONCILIATION: If per-goal allocations differ from overall_recommended_equity_band, "
+            "7. EQUITY RECONCILIATION: If per-goal allocations differ from overall_recommended_equity_band, "
             "explain that goal-specific allocations are theoretical and the overall portfolio should stay within the recommended band.\n\n"
             "Output JSON with keys:\n"
             "- title: 'Goal Strategy: Prioritized Action Plan'\n"
-            "- bullets: One per goal in priority order, showing ideal vs affordable (max 6)\n"
-            "- paragraphs: 2-3 paragraphs covering phased plan, assumptions, and bridge strategies\n"
-            "- actions: Specific phased recommendations (max 5)"
+            "- bullets: First bullet = priority summary, then one per goal in priority order (max 6)\n"
+            "- paragraphs: 2-3 paragraphs covering priority framework, phased plan, and bridge strategies\n"
+            "- actions: Specific phased recommendations including path to full achievement (max 5)"
         )
         return system, user
 
@@ -934,6 +1193,432 @@ class PortfolioRebalanceRunner(SectionRunner):
         return system, user
 
 
+# ------------------------ Tax Optimization Constants & Helpers ------------------------ #
+
+# Tax Deduction Limits (FY 2024-25 / AY 2025-26)
+TAX_DEDUCTION_LIMITS = {
+    "80C": 150000,              # PPF, ELSS, LIC, EPF, principal repayment, etc.
+    "80CCD_1B": 50000,          # Additional NPS contribution (over and above 80C)
+    "80D_self": 25000,          # Health insurance - self/family (<60 years)
+    "80D_parents": 50000,       # Health insurance - senior citizen parents (>60 years)
+    "80D_parents_non_senior": 25000,  # Health insurance - non-senior parents
+    "24B_HOME_LOAN_INTEREST": 200000,  # Home loan interest deduction
+    "80E_EDUCATION_LOAN": None,  # No limit (full interest deductible)
+    "80G_DONATIONS": None,       # 50% or 100% of donation (varies)
+    "LTCG_EXEMPTION": 125000,   # Long-term capital gains exemption (FY25-26)
+}
+
+# Tax slab rates for old regime (FY 2024-25)
+TAX_SLABS_OLD_REGIME = [
+    (250000, 0.00),
+    (500000, 0.05),
+    (1000000, 0.20),
+    (float('inf'), 0.30),
+]
+
+# Tax slab rates for new regime (FY 2024-25)
+TAX_SLABS_NEW_REGIME = [
+    (300000, 0.00),
+    (700000, 0.05),
+    (1000000, 0.10),
+    (1200000, 0.15),
+    (1500000, 0.20),
+    (float('inf'), 0.30),
+]
+
+
+def _get_marginal_tax_rate(taxable_income: float, regime: str = "old") -> float:
+    """Get the marginal tax rate for given taxable income."""
+    slabs = TAX_SLABS_OLD_REGIME if regime == "old" else TAX_SLABS_NEW_REGIME
+    prev_threshold = 0
+    for threshold, rate in slabs:
+        if taxable_income <= threshold:
+            return rate
+        prev_threshold = threshold
+    return 0.30  # Default to highest slab
+
+
+def compute_tax_deduction_gaps(
+    deductions_claimed: List[Dict[str, Any]],
+    insurance_data: Dict[str, Any],
+    gross_income: float,
+    taxable_income: float
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Compute utilization and gaps for key tax deduction sections.
+    Uses extracted ITR data for deductions already claimed.
+    
+    Returns dict with section -> {limit, current, gap, instruments, tax_saving_potential}
+    """
+    gaps = {}
+    
+    # Create lookup for claimed deductions
+    claimed = {}
+    for d in (deductions_claimed or []):
+        section = str(d.get("section", "")).upper().strip()
+        amount = _coerce_float(d.get("amount"), 0.0)
+        # Normalize section names
+        if "80C" in section and "80CCD" not in section:
+            claimed["80C"] = claimed.get("80C", 0.0) + amount
+        elif "80CCD" in section or "NPS" in section.upper():
+            claimed["80CCD_1B"] = claimed.get("80CCD_1B", 0.0) + amount
+        elif "80D" in section:
+            claimed["80D"] = claimed.get("80D", 0.0) + amount
+        elif "80E" in section:
+            claimed["80E"] = claimed.get("80E", 0.0) + amount
+        elif "80G" in section:
+            claimed["80G"] = claimed.get("80G", 0.0) + amount
+    
+    # Calculate marginal rate for tax saving calculations
+    marginal_rate = _get_marginal_tax_rate(taxable_income)
+    
+    # 80C Analysis
+    limit_80c = TAX_DEDUCTION_LIMITS["80C"]
+    current_80c = claimed.get("80C", 0.0)
+    gap_80c = max(0, limit_80c - current_80c)
+    if gap_80c > 0:
+        gaps["80C"] = {
+            "limit": limit_80c,
+            "current_utilization": current_80c,
+            "gap": gap_80c,
+            "utilization_percent": round((current_80c / limit_80c) * 100, 1),
+            "tax_saving_potential": round(gap_80c * marginal_rate, 0),
+            "recommended_instruments": [
+                {"name": "ELSS", "priority": 1, "amount": min(gap_80c, 50000), 
+                 "reason": "Equity exposure with shortest lock-in (3 years) + tax saving"},
+                {"name": "PPF", "priority": 2, "amount": min(gap_80c, 50000), 
+                 "reason": "Safe, guaranteed returns, 15-year tax-free compounding"},
+                {"name": "NPS Tier-1", "priority": 3, "amount": min(gap_80c, 50000), 
+                 "reason": "Retirement savings + additional 80CCD(1B) benefit available"},
+            ]
+        }
+    
+    # 80CCD(1B) Analysis - Additional NPS
+    limit_80ccd = TAX_DEDUCTION_LIMITS["80CCD_1B"]
+    current_80ccd = claimed.get("80CCD_1B", 0.0)
+    gap_80ccd = max(0, limit_80ccd - current_80ccd)
+    if gap_80ccd > 0:
+        gaps["80CCD_1B"] = {
+            "limit": limit_80ccd,
+            "current_utilization": current_80ccd,
+            "gap": gap_80ccd,
+            "utilization_percent": round((current_80ccd / limit_80ccd) * 100, 1),
+            "tax_saving_potential": round(gap_80ccd * marginal_rate, 0),
+            "recommended_instruments": [
+                {"name": "NPS Tier-1", "priority": 1, "amount": gap_80ccd,
+                 "reason": "Additional ₹50K deduction OVER AND ABOVE Section 80C limit"}
+            ],
+            "note": "This is in addition to 80C limit. Invest ₹50K in NPS for extra deduction."
+        }
+    
+    # 80D Analysis - Health Insurance
+    # Use insurance data from CAS/documents if available, otherwise use claimed
+    health_premium_claimed = claimed.get("80D", 0.0)
+    health_cover = _coerce_float(insurance_data.get("healthCover"), 0.0)
+    
+    # Estimate 80D utilization - if we have insurance docs, assume some premium was paid
+    limit_80d_total = TAX_DEDUCTION_LIMITS["80D_self"] + TAX_DEDUCTION_LIMITS["80D_parents"]
+    current_80d = health_premium_claimed
+    gap_80d = max(0, limit_80d_total - current_80d)
+    
+    if gap_80d > 0:
+        gaps["80D"] = {
+            "limit_self_family": TAX_DEDUCTION_LIMITS["80D_self"],
+            "limit_parents": TAX_DEDUCTION_LIMITS["80D_parents"],
+            "total_limit": limit_80d_total,
+            "current_utilization": current_80d,
+            "gap": gap_80d,
+            "utilization_percent": round((current_80d / limit_80d_total) * 100, 1),
+            "tax_saving_potential": round(gap_80d * marginal_rate, 0),
+            "recommended_actions": [
+                {"action": "Top-up health insurance", "priority": 1,
+                 "reason": "Medical inflation at 10-15%; adequate health cover prevents financial stress"},
+                {"action": "Add parents under 80D", "priority": 2,
+                 "reason": "₹50K additional deduction for senior citizen parents' health insurance"}
+            ]
+        }
+    
+    return gaps
+
+
+def detect_tax_regime(deductions_claimed: List[Dict[str, Any]], total_deductions: float) -> str:
+    """
+    Infer tax regime based on deductions claimed.
+    If significant deductions are claimed, likely old regime. Otherwise new regime.
+    """
+    if not deductions_claimed and total_deductions <= 0:
+        return "new_regime_likely"
+    
+    total_claimed = sum(_coerce_float(d.get("amount"), 0.0) for d in (deductions_claimed or []))
+    if total_claimed >= 50000:  # Meaningful deductions claimed
+        return "old_regime"
+    
+    return "regime_unclear"
+
+
+def compute_effective_tax_rate(tax_paid: float, gross_income: float) -> float:
+    """Calculate effective tax rate as percentage."""
+    if gross_income <= 0:
+        return 0.0
+    return round((tax_paid / gross_income) * 100, 2)
+
+
+class TaxOptimizationRunner(SectionRunner):
+    """
+    Tax Optimization Section Runner.
+    
+    Uses extracted ITR data to:
+    1. Analyze current tax profile and deduction utilization
+    2. Identify gaps in 80C, 80CCD(1B), 80D, and other sections
+    3. Calculate potential tax savings from optimizing deductions
+    4. Provide actionable recommendations for next FY
+    5. Include capital gains optimization strategies
+    """
+    name = "tax_optimization"
+    
+    def digest(self, facts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        # Get ITR data - this is the key data source
+        itr_data = facts.get("itr") or {}
+        
+        # If no ITR data, skip this section
+        if not itr_data:
+            return None
+        
+        # Extract key ITR fields
+        gross_income = _coerce_float(itr_data.get("gross_total_income"), 0.0)
+        taxable_income = _coerce_float(itr_data.get("taxable_income"), 0.0)
+        total_tax_paid = _coerce_float(itr_data.get("total_tax_paid"), 0.0)
+        
+        # If no income data, skip
+        if gross_income <= 0:
+            return None
+        
+        # Get deductions claimed from ITR
+        deductions_claimed = itr_data.get("deductions_claimed") or []
+        
+        # Get tax computation details if available
+        tax_computation = itr_data.get("tax_computation") or {}
+        total_deductions = _coerce_float(
+            tax_computation.get("total_deductions") or (gross_income - taxable_income),
+            0.0
+        )
+        
+        # Get income sources breakdown
+        income_sources = itr_data.get("income_sources") or {}
+        
+        # Get capital gains data for LTCG optimization
+        capital_gains = _coerce_float(income_sources.get("capital_gains"), 0.0)
+        
+        # Get carry forward losses for offset opportunities
+        carry_forward_losses = itr_data.get("carry_forward_losses") or {}
+        
+        # Get insurance data from facts for 80D analysis
+        insurance_data = facts.get("insurance") or {}
+        
+        # Detect likely tax regime
+        regime = detect_tax_regime(deductions_claimed, total_deductions)
+        
+        # Compute effective tax rate
+        effective_rate = compute_effective_tax_rate(total_tax_paid, gross_income)
+        
+        # Calculate marginal tax rate for savings projections
+        marginal_rate = _get_marginal_tax_rate(taxable_income)
+        
+        # Compute deduction gaps and recommendations
+        deduction_gaps = {}
+        total_potential_saving = 0.0
+        
+        if regime != "new_regime_likely":
+            deduction_gaps = compute_tax_deduction_gaps(
+                deductions_claimed=deductions_claimed,
+                insurance_data=insurance_data,
+                gross_income=gross_income,
+                taxable_income=taxable_income
+            )
+            # Sum up potential savings
+            for section, data in deduction_gaps.items():
+                total_potential_saving += _coerce_float(data.get("tax_saving_potential"), 0.0)
+        
+        # LTCG optimization opportunity
+        ltcg_optimization = None
+        if capital_gains > 0 or capital_gains == 0:
+            ltcg_exemption = TAX_DEDUCTION_LIMITS["LTCG_EXEMPTION"]
+            # If capital gains are less than exemption limit, suggest gain harvesting
+            if 0 <= capital_gains < ltcg_exemption:
+                harvestable = ltcg_exemption - capital_gains
+                ltcg_optimization = {
+                    "type": "GAIN_HARVESTING",
+                    "current_ltcg": capital_gains,
+                    "exemption_limit": ltcg_exemption,
+                    "harvestable_room": harvestable,
+                    "recommendation": f"You can book up to ₹{harvestable:,.0f} in additional LTCG tax-free this year",
+                    "action": "Redeem equity mutual funds showing gains, then reinvest to reset cost base"
+                }
+            elif capital_gains > ltcg_exemption:
+                excess = capital_gains - ltcg_exemption
+                ltcg_optimization = {
+                    "type": "STRATEGIC_REDEMPTION",
+                    "current_ltcg": capital_gains,
+                    "exemption_limit": ltcg_exemption,
+                    "taxable_ltcg": excess,
+                    "tax_liability": round(excess * 0.125, 0),  # 12.5% LTCG tax
+                    "recommendation": "Spread large redemptions across financial years to optimize ₹1.25L annual exemption",
+                    "action": "Plan redemptions to stay within ₹1.25L LTCG per year"
+                }
+        
+        # Tax loss harvesting opportunity
+        portfolio = facts.get("portfolio") or {}
+        loss_harvesting = None
+        # Note: We'd need CAS data with unrealized losses for full implementation
+        # For now, flag the strategy if equity allocation exists
+        if _coerce_float(portfolio.get("equity"), 0.0) > 0:
+            loss_harvesting = {
+                "strategy": "TAX_LOSS_HARVESTING",
+                "recommendation": "Review portfolio for underperforming funds with unrealized losses",
+                "benefit": "Book losses to offset against STCG/LTCG; carry forward unused losses for 8 years",
+                "timing": "Execute before March 31 to claim in current FY"
+            }
+        
+        # Build next-year roadmap
+        action_items = []
+        total_actions_saving = 0.0
+        
+        # Priority order: 80C first (biggest limit), then 80CCD, then 80D
+        if "80C" in deduction_gaps:
+            gap = deduction_gaps["80C"]
+            action_items.append({
+                "priority": 1,
+                "action": f"Max out 80C (₹{gap['limit']:,.0f}) via ELSS/PPF",
+                "current": f"₹{gap['current_utilization']:,.0f} used",
+                "gap": f"₹{gap['gap']:,.0f} remaining",
+                "tax_saving": f"₹{gap['tax_saving_potential']:,.0f}"
+            })
+            total_actions_saving += gap['tax_saving_potential']
+        
+        if "80CCD_1B" in deduction_gaps:
+            gap = deduction_gaps["80CCD_1B"]
+            action_items.append({
+                "priority": 2,
+                "action": f"Invest ₹{gap['gap']:,.0f} in NPS (80CCD-1B)",
+                "current": f"₹{gap['current_utilization']:,.0f} used",
+                "gap": f"₹{gap['gap']:,.0f} remaining",
+                "tax_saving": f"₹{gap['tax_saving_potential']:,.0f}",
+                "note": "This is ADDITIONAL to 80C limit"
+            })
+            total_actions_saving += gap['tax_saving_potential']
+        
+        if "80D" in deduction_gaps:
+            gap = deduction_gaps["80D"]
+            action_items.append({
+                "priority": 3,
+                "action": f"Top-up health insurance by ₹{gap['gap']:,.0f}",
+                "current": f"₹{gap['current_utilization']:,.0f} used",
+                "gap": f"₹{gap['gap']:,.0f} remaining (self + parents)",
+                "tax_saving": f"₹{gap['tax_saving_potential']:,.0f}"
+            })
+            total_actions_saving += gap['tax_saving_potential']
+        
+        return {
+            "tax_profile": {
+                "gross_income": gross_income,
+                "taxable_income": taxable_income,
+                "total_tax_paid": total_tax_paid,
+                "effective_tax_rate": effective_rate,
+                "marginal_tax_rate": round(marginal_rate * 100, 1),
+                "detected_regime": regime,
+            },
+            "income_sources": income_sources,
+            "deductions_summary": {
+                "total_claimed": total_deductions,
+                "deductions_list": deductions_claimed[:10],  # Limit for prompt size
+            },
+            "deduction_gaps": deduction_gaps,
+            "ltcg_optimization": ltcg_optimization,
+            "loss_harvesting_strategy": loss_harvesting,
+            "carry_forward_losses": carry_forward_losses if carry_forward_losses else None,
+            "next_year_roadmap": {
+                "action_items": action_items,
+                "total_potential_saving": round(total_actions_saving, 0),
+            },
+            "regime_advice": {
+                "old_regime": "Maximize deductions (80C, 80D, 80CCD, HRA) to reduce taxable income",
+                "new_regime": "No deductions allowed; focus on post-tax optimization via tax-efficient products",
+            }
+        }
+    
+    def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
+        tax_profile = digest.get("tax_profile") or {}
+        deduction_gaps = digest.get("deduction_gaps") or {}
+        roadmap = digest.get("next_year_roadmap") or {}
+        ltcg_opt = digest.get("ltcg_optimization")
+        
+        gross_income = tax_profile.get("gross_income", 0)
+        taxable_income = tax_profile.get("taxable_income", 0)
+        effective_rate = tax_profile.get("effective_tax_rate", 0)
+        marginal_rate = tax_profile.get("marginal_tax_rate", 0)
+        regime = tax_profile.get("detected_regime", "old_regime")
+        total_saving = roadmap.get("total_potential_saving", 0)
+        
+        system = (
+            "You are a tax planning expert for Indian retail clients. "
+            "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($). "
+            "Provide SPECIFIC and ACTIONABLE tax optimization advice. "
+            "Reference actual sections (80C, 80CCD, 80D) and their limits. "
+            "Be precise about amounts and tax savings. Do not give generic advice."
+        )
+        
+        user = (
+            "Section: Tax Optimization Strategy\n\n"
+            f"Client Tax Profile:\n{_json_dumps(digest)}\n\n"
+            "INSTRUCTIONS - Create a comprehensive tax optimization report:\n\n"
+            "1. CURRENT TAX SUMMARY (use these exact numbers):\n"
+            f"   - Gross Income: ₹{gross_income:,.0f}\n"
+            f"   - Taxable Income: ₹{taxable_income:,.0f}\n"
+            f"   - Effective Tax Rate: {effective_rate}%\n"
+            f"   - Marginal Tax Rate: {marginal_rate}%\n"
+            f"   - Detected Regime: {regime.replace('_', ' ').title()}\n\n"
+            "2. DEDUCTION GAPS IDENTIFIED:\n"
+        )
+        
+        # Add specific gap details
+        for section, gap_data in deduction_gaps.items():
+            if isinstance(gap_data, dict):
+                user += f"   - Section {section}: Gap of ₹{gap_data.get('gap', 0):,.0f} (can save ₹{gap_data.get('tax_saving_potential', 0):,.0f} in tax)\n"
+        
+        user += (
+            "\n3. RECOMMENDATIONS BY PRIORITY:\n"
+            "   For each gap, recommend SPECIFIC instruments:\n"
+            "   - 80C: ELSS (for equity + tax), PPF (for safe returns), NPS (for retirement)\n"
+            "   - 80CCD(1B): NPS Tier-1 (additional ₹50K over 80C)\n"
+            "   - 80D: Health insurance top-up, super top-up policies\n\n"
+        )
+        
+        if ltcg_opt:
+            user += (
+                "4. CAPITAL GAINS OPTIMIZATION:\n"
+                f"   - Strategy: {ltcg_opt.get('type', 'N/A')}\n"
+                f"   - {ltcg_opt.get('recommendation', '')}\n"
+                f"   - Action: {ltcg_opt.get('action', '')}\n\n"
+            )
+        
+        user += (
+            f"5. TOTAL POTENTIAL TAX SAVING: ₹{total_saving:,.0f}\n\n"
+            "6. REGIME-SPECIFIC ADVICE:\n"
+            f"   - If OLD REGIME: {digest.get('regime_advice', {}).get('old_regime', '')}\n"
+            f"   - If NEW REGIME: {digest.get('regime_advice', {}).get('new_regime', '')}\n\n"
+            "OUTPUT JSON STRUCTURE:\n"
+            "{\n"
+            '  "title": "Tax Optimization: Maximize Your Savings",\n'
+            '  "bullets": [max 6 bullets with specific amounts and sections],\n'
+            '  "paragraphs": [2-3 paragraphs explaining strategy and next steps],\n'
+            '  "actions": [max 5 specific actions with amounts, timelines]\n'
+            "}\n\n"
+            "CRITICAL: Include SPECIFIC amounts from the data. Do NOT give vague advice."
+        )
+        
+        return system, user
+
+
 class ExecutiveSummaryRunner(SectionRunner):
     name = "executive_summary"
 
@@ -958,6 +1643,7 @@ class ExecutiveSummaryRunner(SectionRunner):
             "risk_rationale": _small("risk_rationale"),
             "goals_strategy": _small("goals_strategy"),
             "portfolio_rebalance": _small("portfolio_rebalance"),
+            "tax_optimization": _small("tax_optimization"),
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
@@ -983,6 +1669,7 @@ class SectionsOrchestrator:
         "risk_rationale",
         "goals_strategy",
         "portfolio_rebalance",
+        "tax_optimization",
         "executive_summary",
     ]
 
@@ -1004,6 +1691,7 @@ class SectionsOrchestrator:
             "risk_rationale": RiskRationaleRunner(self.client, self.qid, self.base_dir),
             "goals_strategy": GoalsStrategyRunner(self.client, self.qid, self.base_dir),
             "portfolio_rebalance": PortfolioRebalanceRunner(self.client, self.qid, self.base_dir),
+            "tax_optimization": TaxOptimizationRunner(self.client, self.qid, self.base_dir),
         }
 
         # Run main sections

@@ -41,6 +41,7 @@ from llm_sections import (
     ProtectionPlanRunner,
     DebtStrategyRunner,
     PortfolioRebalanceRunner,
+    TaxOptimizationRunner,
     LLMClient,
     compute_goal_sip,
     compute_goal_priority,
@@ -125,6 +126,27 @@ SAMPLE_CLIENT_FACTS = {
             "emiPct": 20.0,
             "liquidityMonths": 4,
             "requiredLifeCover": 18000000,  # 10x income
+        },
+    },
+    # ITR data for tax optimization testing
+    "itr": {
+        "gross_total_income": 1800000,   # Rs. 18 lakh gross income
+        "taxable_income": 1450000,       # Rs. 14.5 lakh after deductions
+        "total_tax_paid": 187500,        # Rs. 1.875 lakh tax paid
+        "deductions_claimed": [
+            {"section": "80C", "amount": 100000},   # Rs. 1 lakh under 80C (gap of 50k)
+            {"section": "80D", "amount": 15000},    # Rs. 15k health insurance (gap exists)
+        ],
+        "income_sources": {
+            "salary": 1600000,
+            "other_sources": 150000,
+            "capital_gains": 50000,  # Some LTCG - can harvest more
+        },
+        "tax_computation": {
+            "gross_total_income": 1800000,
+            "total_deductions": 350000,
+            "taxable_income": 1450000,
+            "total_tax_paid": 187500,
         },
     },
 }
@@ -250,7 +272,7 @@ def main():
     parser.add_argument("--no-llm", action="store_true", 
                         help="Skip LLM calls, only test digest generation")
     parser.add_argument("--section", type=str, default="all",
-                        choices=["all", "goals", "protection", "debt", "portfolio"],
+                        choices=["all", "goals", "protection", "debt", "portfolio", "tax"],
                         help="Which section to test")
     args = parser.parse_args()
     
@@ -285,6 +307,7 @@ def main():
         "protection": (ProtectionPlanRunner, "Protection Plan"),
         "debt": (DebtStrategyRunner, "Debt Strategy"),
         "portfolio": (PortfolioRebalanceRunner, "Portfolio Rebalance"),
+        "tax": (TaxOptimizationRunner, "Tax Optimization"),
     }
     
     if args.section == "all":
