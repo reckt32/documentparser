@@ -1025,6 +1025,25 @@ class GoalsStrategyRunner(SectionRunner):
             has_dependents=has_dependents
         )
         
+        # --- Affordability Summary ---
+        # Calculate what can actually be funded vs what's ideally needed
+        total_affordable_sip = sum(_coerce_float(g.get("affordable_sip"), 0.0) for g in items)
+        funding_gap = max(0, total_ideal_sip - total_affordable_sip)
+        fundable_percentage = (total_affordable_sip / total_ideal_sip * 100) if total_ideal_sip > 0 else 100.0
+        
+        # Get remaining budget for goals after insurance allocations
+        remaining_for_goals = priority_allocation.get("remaining_for_goals", net_available_for_goals)
+        
+        affordability_summary = {
+            "total_ideal_sip_required": round(total_ideal_sip, 0),
+            "total_affordable_sip": round(total_affordable_sip, 0),
+            "remaining_budget_for_goals": round(remaining_for_goals, 0),
+            "funding_gap": round(funding_gap, 0),
+            "fundable_percentage": round(fundable_percentage, 1),
+            "constraint_violated": total_ideal_sip > remaining_for_goals * 1.1 if remaining_for_goals > 0 else True,
+            "budget_exceeded_by": round(max(0, total_ideal_sip - remaining_for_goals), 0),
+        }
+        
         return {
             "riskFinalCategory": final_cat,
             "goals": items[:12],
@@ -1051,6 +1070,8 @@ class GoalsStrategyRunner(SectionRunner):
                 "health_insurance_gap": round(health_gap, 0),
                 "has_dependents": has_dependents,
             },
+            # NEW: Affordability Summary (for enforcing budget constraints)
+            "affordability_summary": affordability_summary,
         }
 
     def prompt(self, digest: Dict[str, Any]) -> Tuple[str, str]:
@@ -1059,18 +1080,44 @@ class GoalsStrategyRunner(SectionRunner):
         achievement_pct = priority_data.get("goal_achievement_percent", 100)
         bridge_recs = priority_data.get("bridge_recommendations") or []
         
+        # Extract affordability summary for budget enforcement
+        affordability = digest.get("affordability_summary") or {}
+        remaining_budget = affordability.get("remaining_budget_for_goals", 0)
+        total_ideal = affordability.get("total_ideal_sip_required", 0)
+        total_affordable = affordability.get("total_affordable_sip", 0)
+        funding_gap = affordability.get("funding_gap", 0)
+        fundable_pct = affordability.get("fundable_percentage", 100)
+        constraint_violated = affordability.get("constraint_violated", False)
+        
         system = (
             "You are a senior financial planner creating realistic goal strategies for Indian retail clients. "
             "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
             "Your role is to provide HONEST and PRACTICAL advice. "
-            "For each goal, compare the IDEAL SIP (what's mathematically needed) against what's AFFORDABLE. "
+            "CRITICAL: The sum of ALL recommended SIPs MUST NOT exceed the available budget. "
+            "You MUST use the 'affordable_sip' values from the data, NOT the 'ideal_sip' values. "
+            "The ideal_sip is only for showing what would be needed in a perfect scenario - it is NOT the recommendation. "
             "Goals are pre-sorted by priority (priority_rank=1 is highest priority). "
-            "If there's a gap (gap_exists=true), provide specific bridge recommendations. "
-            "Do NOT recommend SIPs that exceed the client's capacity."
+            "If there's a gap (gap_exists=true), provide specific bridge recommendations."
         )
         user = (
             "Section: Goal-wise Strategy with Priority Framework\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
+        )
+        
+        # Add CRITICAL budget constraint warning if goals are underfunded
+        if constraint_violated:
+            user += (
+                "⚠️ **CRITICAL BUDGET CONSTRAINT - READ CAREFULLY:**\n"
+                f"   - Available monthly budget for goals: Rs. {remaining_budget:,.0f}\n"
+                f"   - Total IDEAL SIP needed (if unlimited funds): Rs. {total_ideal:,.0f}\n"
+                f"   - Recommended SIP allocation (within budget): Rs. {total_affordable:,.0f}\n"
+                f"   - Funding gap: Rs. {funding_gap:,.0f}/month\n"
+                f"   - Goals can be {fundable_pct:.0f}% funded with current savings\n\n"
+                f"**YOU MUST RECOMMEND TOTAL SIPs OF Rs. {total_affordable:,.0f}/month OR LESS.**\n"
+                "**USE THE 'affordable_sip' VALUE FOR EACH GOAL, NOT 'ideal_sip'.**\n\n"
+            )
+        
+        user += (
             "IMPORTANT INSTRUCTIONS:\n\n"
             "**PRIORITY FRAMEWORK (MUST INCLUDE):**\n"
             "The priority_framework section shows allocation in this order:\n"
@@ -1096,10 +1143,11 @@ class GoalsStrategyRunner(SectionRunner):
             "   - 'Immediate' tier: Address within 1-2 years\n"
             "   - 'Short-term' tier: Address in years 3-5\n"
             "   - 'Long-term' tier: Can be deferred to year 5+\n\n"
-            "3. For each goal, clearly state:\n"
-            "   - IDEAL: 'To achieve Rs.[target] in [horizon] years, you need Rs.[ideal_sip]/month'\n"
-            "   - CURRENT CAPACITY: 'You can afford Rs.[affordable_sip]/month for this goal'\n"
-            "   - Use the calculation_assumptions to note the expected return used\n\n"
+            "3. For each goal, clearly state (IN THIS ORDER):\n"
+            "   - RECOMMENDED SIP: 'Allocate Rs.[affordable_sip]/month for [goal_name]' (THIS IS THE KEY NUMBER)\n"
+            "   - FUNDING GAP: If gap_exists=true, say 'This covers [100-shortfall_percent]% of the ideal requirement'\n"
+            "   - CONTEXT: 'Ideally, Rs.[ideal_sip]/month would be needed for full funding' (informational only)\n"
+            "   - IMPORTANT: The sum of all RECOMMENDED SIPs must equal the total affordable amount\n\n"
             "4. If gap_exists=true, provide BRIDGE RECOMMENDATIONS:\n"
             "   - 'Extend timeline to [required_horizon_at_affordable] years'\n"
             "   - 'Or reduce target to Rs.[achievable_amount]'\n"
@@ -1114,8 +1162,8 @@ class GoalsStrategyRunner(SectionRunner):
             "explain that goal-specific allocations are theoretical and the overall portfolio should stay within the recommended band.\n\n"
             "Output JSON with keys:\n"
             "- title: 'Goal Strategy: Prioritized Action Plan'\n"
-            "- bullets: First bullet = priority summary, then one per goal in priority order (max 6)\n"
-            "- paragraphs: 2-3 paragraphs covering priority framework, phased plan, and bridge strategies\n"
+            "- bullets: First bullet = priority summary (with TOTAL recommended SIP), then one per goal showing RECOMMENDED SIP (max 6)\n"
+            "- paragraphs: 2-3 paragraphs covering priority framework, phased plan, and bridge strategies if underfunded\n"
             "- actions: Specific phased recommendations including path to full achievement (max 5)"
         )
         return system, user
