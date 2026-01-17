@@ -1852,6 +1852,46 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
     itr = {}
 
     per_doc_extracts = []
+    
+    # Extract full ITR data from metadata_json (includes deductions_claimed, income_sources, etc.)
+    for upload in uploads:
+        doc_type = (upload.get("doc_type") or upload["doc_type"] if isinstance(upload, dict) else "").lower()
+        if "itr" in doc_type:
+            metadata_json = upload.get("metadata_json") or (upload["metadata_json"] if isinstance(upload, dict) else None)
+            if metadata_json:
+                try:
+                    metadata = json.loads(metadata_json) if isinstance(metadata_json, str) else metadata_json
+                    # Merge full ITR extracted data into itr dict
+                    # Include deductions_claimed, income_sources, tax_computation, etc.
+                    if metadata.get("deductions_claimed"):
+                        itr["deductions_claimed"] = metadata["deductions_claimed"]
+                    if metadata.get("income_sources"):
+                        itr["income_sources"] = metadata["income_sources"]
+                    if metadata.get("tax_computation"):
+                        itr["tax_computation"] = metadata["tax_computation"]
+                    if metadata.get("carry_forward_losses"):
+                        itr["carry_forward_losses"] = metadata["carry_forward_losses"]
+                    if metadata.get("assets_and_liabilities"):
+                        itr["assets_and_liabilities"] = metadata["assets_and_liabilities"]
+                    # Also get numeric fields from metadata if not already from metrics
+                    if metadata.get("gross_total_income") and not itr.get("gross_total_income"):
+                        try:
+                            itr["gross_total_income"] = float(metadata["gross_total_income"])
+                        except (ValueError, TypeError):
+                            pass
+                    if metadata.get("taxable_income") and not itr.get("taxable_income"):
+                        try:
+                            itr["taxable_income"] = float(metadata["taxable_income"])
+                        except (ValueError, TypeError):
+                            pass
+                    if metadata.get("total_tax_paid") and not itr.get("total_tax_paid"):
+                        try:
+                            itr["total_tax_paid"] = float(metadata["total_tax_paid"])
+                        except (ValueError, TypeError):
+                            pass
+                except Exception as e:
+                    print(f"Error parsing ITR metadata: {e}")
+                    continue
 
     for did in doc_ids:
         # 1) Deterministic summaries from indexed sections/tables
@@ -2851,6 +2891,7 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
         "analysis": analysis,
         "retirement_planning": retirement_planning,
         "term_insurance": term_insurance,
+        "itr": di.get("itr"),  # Full ITR data for tax optimization section
     }
     return facts
 
