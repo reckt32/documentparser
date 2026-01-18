@@ -3807,12 +3807,21 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     story.append(Paragraph("Page 7: Tax Optimization", styles["h1"]))
     
     itr = di.get("itr") or {}
+    
+    # Tax deduction limits
+    TAX_LIMITS = {
+        "80C": 150000,
+        "80CCD_1B": 50000,
+        "80D_self": 25000,
+        "80D_parents": 50000,
+    }
+    
     if itr:
         gross_income = _safe_float(itr.get("gross_total_income"), 0)
         taxable_income = _safe_float(itr.get("taxable_income"), 0)
         tax_paid = _safe_float(itr.get("total_tax_paid"), 0)
         deductions = itr.get("deductions_claimed") or []
-        total_deductions = sum(d.get("amount", 0) for d in deductions)
+        total_deductions = gross_income - taxable_income if gross_income > 0 and taxable_income > 0 else sum(d.get("amount", 0) for d in deductions)
         
         story.append(Paragraph("Tax Profile (from ITR)", styles["h2"]))
         tax_rows = [
@@ -3835,31 +3844,127 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         ]))
         story.append(tax_table)
         story.append(Spacer(1, 12))
+        
+        # Parse claimed deductions into a lookup
+        claimed = {}
+        for d in deductions:
+            section = str(d.get("section", "")).upper().strip()
+            amount = _safe_float(d.get("amount"), 0)
+            if "80C" in section and "80CCD" not in section:
+                claimed["80C"] = claimed.get("80C", 0) + amount
+            elif "80CCD" in section or "NPS" in section.upper():
+                claimed["80CCD_1B"] = claimed.get("80CCD_1B", 0) + amount
+            elif "80D" in section:
+                claimed["80D"] = claimed.get("80D", 0) + amount
+        
+        # Calculate marginal tax rate (simplified)
+        if taxable_income > 1000000:
+            marginal_rate = 0.30
+        elif taxable_income > 500000:
+            marginal_rate = 0.20
+        elif taxable_income > 250000:
+            marginal_rate = 0.05
+        else:
+            marginal_rate = 0.0
+        
+        # Calculate gaps and recommendations
+        recommendations = []
+        total_potential_saving = 0
+        
+        # 80C Gap
+        current_80c = claimed.get("80C", 0)
+        gap_80c = max(0, TAX_LIMITS["80C"] - current_80c)
+        if gap_80c > 0:
+            saving_80c = gap_80c * marginal_rate
+            total_potential_saving += saving_80c
+            recommendations.append({
+                "section": "Section 80C",
+                "current": current_80c,
+                "limit": TAX_LIMITS["80C"],
+                "gap": gap_80c,
+                "saving": saving_80c,
+                "action": f"Invest Rs. {_format_indian_amount(gap_80c)} in ELSS/PPF to save Rs. {_format_indian_amount(saving_80c)} in tax"
+            })
+        
+        # 80CCD(1B) Gap - NPS
+        current_nps = claimed.get("80CCD_1B", 0)
+        gap_nps = max(0, TAX_LIMITS["80CCD_1B"] - current_nps)
+        if gap_nps > 0:
+            saving_nps = gap_nps * marginal_rate
+            total_potential_saving += saving_nps
+            recommendations.append({
+                "section": "Section 80CCD(1B)",
+                "current": current_nps,
+                "limit": TAX_LIMITS["80CCD_1B"],
+                "gap": gap_nps,
+                "saving": saving_nps,
+                "action": f"Invest Rs. {_format_indian_amount(gap_nps)} in NPS (additional to 80C) to save Rs. {_format_indian_amount(saving_nps)}"
+            })
+        
+        # 80D Gap - Health Insurance
+        current_80d = claimed.get("80D", 0)
+        limit_80d = TAX_LIMITS["80D_self"] + TAX_LIMITS["80D_parents"]
+        gap_80d = max(0, limit_80d - current_80d)
+        if gap_80d > 0:
+            saving_80d = gap_80d * marginal_rate
+            total_potential_saving += saving_80d
+            recommendations.append({
+                "section": "Section 80D",
+                "current": current_80d,
+                "limit": limit_80d,
+                "gap": gap_80d,
+                "saving": saving_80d,
+                "action": f"Increase health insurance premium by Rs. {_format_indian_amount(gap_80d)} to save Rs. {_format_indian_amount(saving_80d)}"
+            })
+        
+        # Show personalized recommendations
+        if recommendations:
+            story.append(Paragraph("Your Tax Saving Opportunities", styles["h2"]))
+            story.append(Paragraph(f"<b>Based on your ITR, you can save up to Rs. {_format_indian_amount(total_potential_saving)} in tax next year!</b>", styles["BodyText"]))
+            story.append(Spacer(1, 8))
+            
+            rec_rows = []
+            for rec in recommendations:
+                rec_rows.append([
+                    rec["section"],
+                    f"Rs. {_format_indian_amount(rec['current'])} / Rs. {_format_indian_amount(rec['limit'])}",
+                    f"Rs. {_format_indian_amount(rec['gap'])}",
+                    f"Rs. {_format_indian_amount(rec['saving'])}"
+                ])
+            
+            rec_table = Table(
+                [["Section", "Used / Limit", "Gap", "Tax Saving"]] + rec_rows,
+                hAlign="LEFT",
+                colWidths=[120, 150, 100, 100]
+            )
+            rec_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2D6A4F')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('BOTTOMPADDING', (0,0), (-1,0), 6),
+            ]))
+            story.append(rec_table)
+            story.append(Spacer(1, 12))
+            
+            story.append(Paragraph("<b>Recommended Actions:</b>", styles["BodyText"]))
+            for i, rec in enumerate(recommendations, 1):
+                story.append(Paragraph(f"{i}. {rec['action']}", styles["BodyText"]))
+            story.append(Spacer(1, 8))
+            
+            story.append(Paragraph(f"<b>Total Potential Tax Saving: Rs. {_format_indian_amount(total_potential_saving)}</b>", styles["BodyText"]))
+        else:
+            story.append(Paragraph("Great! You have maximized all major tax deductions.", styles["BodyText"]))
     else:
-        story.append(Paragraph("No ITR data available. Upload ITR for tax optimization analysis.", styles["BodyText"]))
+        story.append(Paragraph("No ITR data available. Upload ITR for personalized tax optimization analysis.", styles["BodyText"]))
         story.append(Spacer(1, 12))
+        
+        # Show general guidance for users without ITR
+        story.append(Paragraph("General Tax Saving Opportunities", styles["h2"]))
+        story.append(Paragraph("• Section 80C: Invest up to Rs. 1,50,000 in ELSS, PPF, or Tax-saving FDs", styles["BodyText"]))
+        story.append(Paragraph("• Section 80CCD(1B): Additional Rs. 50,000 in NPS (over 80C limit)", styles["BodyText"]))
+        story.append(Paragraph("• Section 80D: Health insurance premium up to Rs. 75,000 (self + parents)", styles["BodyText"]))
     
-    # Tax Regime Framework
-    story.append(Paragraph("Tax Regime Assessment", styles["h2"]))
-    story.append(Paragraph("<b>Compare both regimes for your situation:</b>", styles["BodyText"]))
-    story.append(Spacer(1, 8))
-    
-    regime_rows = [
-        ["Old Tax Regime", "Higher rates, but deductions allowed"],
-        ["New Tax Regime", "Lower rates, no deductions"],
-    ]
-    regime_table = Table(regime_rows, hAlign="LEFT", colWidths=[150, 350])
-    regime_table.setStyle(TableStyle([
-        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-    ]))
-    story.append(regime_table)
-    story.append(Spacer(1, 12))
-    
-    story.append(Paragraph("<b>If choosing OLD regime - Available Deductions:</b>", styles["BodyText"]))
-    story.append(Paragraph("• Section 80C: Max Rs. 1,50,000 (ELSS, PPF, Tax-saving FDs, LIC)", styles["BodyText"]))
-    story.append(Paragraph("• Section 80D: Max Rs. 25,000 (Health insurance premiums)", styles["BodyText"]))
-    story.append(Paragraph("• Section 80CCD(1B): Additional Rs. 50,000 (NPS contributions)", styles["BodyText"]))
     story.append(PageBreak())
 
     # ==========================================================================
