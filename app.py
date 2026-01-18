@@ -2896,6 +2896,357 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     return facts
 
 
+# ------------------------ Financial Health Score Calculator ------------------------ #
+def compute_financial_health_score(analysis: dict, facts: dict) -> dict:
+    """
+    Compute overall financial health score (0-100) and component scores.
+    
+    Score = (Protection × 0.30) + (Liquidity × 0.20) + (PortfolioHealth × 0.20)
+            + (DebtManagement × 0.15) + (GoalReadiness × 0.10) + (TaxEfficiency × 0.05)
+    
+    Returns:
+        {
+            "overall": 56,
+            "overall_label": "Needs Attention",
+            "components": {
+                "protection": {"score": 0, "weight": 30, "weighted": 0, "label": "No Coverage"},
+                ...
+            },
+            "priority_areas": [("protection", "URGENT"), ("liquidity", "HIGH"), ...]
+        }
+    """
+    components = {}
+    
+    # 1. Protection Score (30% weight) - based on insurance gap
+    insurance_gap = analysis.get("insuranceGap", "Unknown")
+    if insurance_gap == "Adequate":
+        protection_score = 100
+        protection_label = "Adequate"
+    elif insurance_gap == "Underinsured":
+        protection_score = 50
+        protection_label = "Underinsured"
+    elif insurance_gap == "Critical":
+        protection_score = 20
+        protection_label = "Critical Gap"
+    else:
+        protection_score = 0
+        protection_label = "No Coverage"
+    
+    components["protection"] = {
+        "score": protection_score,
+        "weight": 30,
+        "weighted": protection_score * 0.30,
+        "label": protection_label,
+        "priority": "URGENT" if protection_score < 50 else ("MEDIUM" if protection_score < 80 else "GOOD")
+    }
+    
+    # 2. Liquidity Score (20% weight) - based on liquidity assessment
+    liquidity = analysis.get("liquidity", "Unknown")
+    if liquidity == "Adequate":
+        liquidity_score = 100
+        liquidity_label = "Adequate"
+    elif liquidity == "Low":
+        liquidity_score = 50
+        liquidity_label = "Low"
+    elif liquidity == "Critical":
+        liquidity_score = 20
+        liquidity_label = "Critical"
+    else:
+        liquidity_score = 50  # Unknown defaults to middle
+        liquidity_label = "Unknown"
+    
+    components["liquidity"] = {
+        "score": liquidity_score,
+        "weight": 20,
+        "weighted": liquidity_score * 0.20,
+        "label": liquidity_label,
+        "priority": "HIGH" if liquidity_score < 50 else ("MEDIUM" if liquidity_score < 80 else "GOOD")
+    }
+    
+    # 3. Portfolio Health Score (20% weight) - based on risk alignment
+    advanced_risk = analysis.get("advancedRisk") or {}
+    portfolio = facts.get("portfolio") or {}
+    current_equity = _safe_float(portfolio.get("equity"), 50)
+    rec_band = advanced_risk.get("recommendedEquityBand") or {}
+    rec_min = rec_band.get("min", 40)
+    rec_max = rec_band.get("max", 60)
+    
+    # Score based on how close to recommended band
+    if rec_min <= current_equity <= rec_max:
+        portfolio_score = 100
+        portfolio_label = "Well Balanced"
+    elif abs(current_equity - (rec_min + rec_max) / 2) <= 15:
+        portfolio_score = 70
+        portfolio_label = "Slightly Off"
+    elif abs(current_equity - (rec_min + rec_max) / 2) <= 30:
+        portfolio_score = 50
+        portfolio_label = "Needs Rebalancing"
+    else:
+        portfolio_score = 30
+        portfolio_label = "High Risk Deviation"
+    
+    components["portfolio_health"] = {
+        "score": portfolio_score,
+        "weight": 20,
+        "weighted": portfolio_score * 0.20,
+        "label": portfolio_label,
+        "current_equity": current_equity,
+        "recommended_range": f"{rec_min}%-{rec_max}%",
+        "priority": "MEDIUM" if portfolio_score < 70 else "GOOD"
+    }
+    
+    # 4. Debt Management Score (15% weight) - based on debt stress
+    debt_stress = analysis.get("debtStress", "Low")
+    if debt_stress == "Low":
+        debt_score = 100
+        debt_label = "Healthy"
+    elif debt_stress == "Moderate":
+        debt_score = 60
+        debt_label = "Moderate"
+    elif debt_stress == "High":
+        debt_score = 30
+        debt_label = "High Burden"
+    else:
+        debt_score = 80
+        debt_label = "Unknown"
+    
+    components["debt_management"] = {
+        "score": debt_score,
+        "weight": 15,
+        "weighted": debt_score * 0.15,
+        "label": debt_label,
+        "priority": "HIGH" if debt_score < 50 else ("MEDIUM" if debt_score < 70 else "GOOD")
+    }
+    
+    # 5. Goal Readiness Score (10% weight) - based on goal funding status
+    goals = facts.get("goals") or []
+    total_goals = len(goals)
+    # Use IHS or estimate from surplus
+    ihs = analysis.get("ihs") or {}
+    ihs_score = ihs.get("score", 50)
+    
+    # Approximate goal readiness from IHS and surplus band
+    surplus_band = analysis.get("surplusBand", "Unknown")
+    if surplus_band == "High":
+        goal_score = min(80, ihs_score)
+        goal_label = "Good Progress"
+    elif surplus_band == "Adequate":
+        goal_score = min(60, ihs_score)
+        goal_label = "Moderate"
+    elif surplus_band == "Low":
+        goal_score = min(40, ihs_score)
+        goal_label = "Needs Work"
+    else:
+        goal_score = 30
+        goal_label = "At Risk"
+    
+    components["goal_readiness"] = {
+        "score": goal_score,
+        "weight": 10,
+        "weighted": goal_score * 0.10,
+        "label": goal_label,
+        "total_goals": total_goals,
+        "priority": "MEDIUM" if goal_score < 60 else "GOOD"
+    }
+    
+    # 6. Tax Efficiency Score (5% weight) - based on ITR data if available
+    itr = facts.get("itr") or {}
+    if itr:
+        # If significantly using deductions, good score
+        deductions = itr.get("deductions_claimed") or []
+        total_deductions = sum(d.get("amount", 0) for d in deductions)
+        if total_deductions >= 150000:
+            tax_score = 80
+            tax_label = "Well Utilized"
+        elif total_deductions >= 50000:
+            tax_score = 50
+            tax_label = "Partial Utilization"
+        else:
+            tax_score = 30
+            tax_label = "Room for Improvement"
+    else:
+        tax_score = 50
+        tax_label = "Not Assessed"
+    
+    components["tax_efficiency"] = {
+        "score": tax_score,
+        "weight": 5,
+        "weighted": tax_score * 0.05,
+        "label": tax_label,
+        "priority": "MEDIUM" if tax_score < 60 else "GOOD"
+    }
+    
+    # Calculate overall score
+    overall = sum(c["weighted"] for c in components.values())
+    overall = round(overall, 0)
+    
+    # Overall label
+    if overall >= 80:
+        overall_label = "Excellent"
+    elif overall >= 60:
+        overall_label = "Good"
+    elif overall >= 40:
+        overall_label = "Needs Attention"
+    else:
+        overall_label = "Critical"
+    
+    # Priority areas (sorted by score ascending)
+    priority_areas = sorted(
+        [(k, v["priority"], v["score"]) for k, v in components.items()],
+        key=lambda x: x[2]
+    )[:3]  # Top 3 priority areas
+    
+    return {
+        "overall": int(overall),
+        "overall_label": overall_label,
+        "components": components,
+        "priority_areas": [(p[0], p[1]) for p in priority_areas]
+    }
+
+
+# ------------------------ Action Timeline Generator ------------------------ #
+def generate_action_timeline(analysis: dict, goals: list, facts: dict) -> dict:
+    """
+    Generate time-based action schedule from existing recommendations.
+    
+    Returns:
+        {
+            "week_1": [{"action": "...", "area": "Protection", "priority": "URGENT"}],
+            "week_2": [...],
+            "week_3": [...],
+            "week_4": [...],
+            "day_90": [...],
+            "quarterly": [...]
+        }
+    """
+    timeline = {
+        "week_1": [],
+        "week_2": [],
+        "week_3": [],
+        "week_4": [],
+        "day_90": [],
+        "quarterly": []
+    }
+    
+    insurance_gap = analysis.get("insuranceGap", "Unknown")
+    liquidity = analysis.get("liquidity", "Unknown")
+    debt_stress = analysis.get("debtStress", "Low")
+    advanced_risk = analysis.get("advancedRisk") or {}
+    portfolio = facts.get("portfolio") or {}
+    
+    # WEEK 1: Protection Assessment (highest priority)
+    if insurance_gap in ("Critical", "Unknown", "Underinsured"):
+        timeline["week_1"].append({
+            "action": "Check if you have term insurance. If yes, verify coverage is adequate. If no, prioritize obtaining term coverage.",
+            "area": "Protection",
+            "priority": "URGENT",
+            "time_estimate": "2-3 hours"
+        })
+        timeline["week_1"].append({
+            "action": "Check if you have health insurance. If yes, verify coverage is Rs. 10L+. If no, obtain health coverage.",
+            "area": "Protection", 
+            "priority": "URGENT",
+            "time_estimate": "1-2 hours"
+        })
+    
+    # WEEK 2: Emergency Fund Review
+    if liquidity in ("Critical", "Low", "Unknown"):
+        timeline["week_2"].append({
+            "action": "Calculate actual monthly essential expenses",
+            "area": "Emergency Fund",
+            "priority": "HIGH",
+            "time_estimate": "30 mins"
+        })
+        timeline["week_2"].append({
+            "action": "Check savings account + FD balances to determine current liquid savings",
+            "area": "Emergency Fund",
+            "priority": "HIGH",
+            "time_estimate": "30 mins"
+        })
+        timeline["week_2"].append({
+            "action": "Set up monthly transfer to build emergency fund (target: 6 months expenses)",
+            "area": "Emergency Fund",
+            "priority": "HIGH",
+            "time_estimate": "15 mins"
+        })
+    
+    # WEEK 3: Portfolio Review
+    current_equity = _safe_float(portfolio.get("equity"), 50)
+    rec_band = advanced_risk.get("recommendedEquityBand") or {}
+    rec_min = rec_band.get("min", 40)
+    rec_max = rec_band.get("max", 60)
+    
+    if current_equity < rec_min - 10 or current_equity > rec_max + 10:
+        timeline["week_3"].append({
+            "action": f"Assess portfolio rebalancing need. Current equity: {current_equity}%, Recommended: {rec_min}%-{rec_max}%",
+            "area": "Portfolio",
+            "priority": "MEDIUM",
+            "time_estimate": "1-2 hours"
+        })
+        timeline["week_3"].append({
+            "action": "Review goal affordability and SIP allocation",
+            "area": "Goals",
+            "priority": "MEDIUM",
+            "time_estimate": "1 hour"
+        })
+    
+    # WEEK 4: Tax Planning
+    itr = facts.get("itr") or {}
+    if itr:
+        deductions = itr.get("deductions_claimed") or []
+        total_deductions = sum(d.get("amount", 0) for d in deductions)
+        if total_deductions < 150000:
+            timeline["week_4"].append({
+                "action": "Calculate if old tax regime is beneficial for your situation",
+                "area": "Tax Planning",
+                "priority": "MEDIUM",
+                "time_estimate": "1 hour"
+            })
+            timeline["week_4"].append({
+                "action": "Plan 80C, 80D, 80CCD(1B) investments before financial year end",
+                "area": "Tax Planning",
+                "priority": "MEDIUM",
+                "time_estimate": "30 mins"
+            })
+    
+    # DAY 90: Full Progress Review
+    timeline["day_90"].append({
+        "action": "Review progress on all action items from Week 1-4",
+        "area": "Review",
+        "priority": "MEDIUM",
+        "time_estimate": "1 hour"
+    })
+    if goals:
+        timeline["day_90"].append({
+            "action": f"Review goal SIP progress for {len(goals)} goal(s)",
+            "area": "Goals",
+            "priority": "MEDIUM",
+            "time_estimate": "30 mins"
+        })
+    
+    # QUARTERLY: Ongoing Review Schedule
+    timeline["quarterly"].append({
+        "action": "Recalculate Financial Health Score",
+        "area": "Review",
+        "priority": "MEDIUM",
+        "time_estimate": "15 mins"
+    })
+    timeline["quarterly"].append({
+        "action": "Check if income, expenses, or goals have changed - update plan accordingly",
+        "area": "Review",
+        "priority": "MEDIUM",
+        "time_estimate": "30 mins"
+    })
+    timeline["quarterly"].append({
+        "action": "Review portfolio allocation and rebalance if needed",
+        "area": "Portfolio",
+        "priority": "MEDIUM",
+        "time_estimate": "30 mins"
+    })
+    
+    return timeline
+
+
 def _render_narrative_section(story, styles, section_key, section_obj):
     try:
         title = section_obj.get("title") or section_key.replace("_", " ").title()
@@ -2914,12 +3265,24 @@ def _render_narrative_section(story, styles, section_key, section_obj):
         pass
 
 def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_insights=None, narratives=None):
+    """
+    Generate 8-page Financial Plan PDF with new structure:
+    Page 1: Executive Summary with Financial Health Score
+    Page 2: Actuals vs Ideal Dashboard
+    Page 3: Protection Gap Analysis
+    Page 4: Liquidity & Emergency Fund
+    Page 5: Portfolio Rebalancing
+    Page 6: Goal Feasibility Analysis
+    Page 7: Tax Optimization (if applicable)
+    Page 8: Action Roadmap with Timeline
+    """
     styles = get_custom_styles()
     doc = SimpleDocTemplate(output_path, pagesize=letter,
                             rightMargin=inch*0.75, leftMargin=inch*0.75,
                             topMargin=inch, bottomMargin=inch)
     story = []
 
+    # Extract common data
     name = (q.get("personal_info") or {}).get("name") or "Client"
     age = (q.get("personal_info") or {}).get("age") or "N/A"
     family = q.get("family_info") or {}
@@ -2928,69 +3291,722 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     dependents = family.get("dependents") or []
     goals = (q.get("goals") or {}).get("items") or []
     lifestyle = (q.get("lifestyle") or {}) or {}
+    insurance = q.get("insurance") or {}
     di = doc_insights or {}
     bank = di.get("bank") or {}
     portfolio = (di.get("portfolio") if di else None) or {}
     ihs = analysis.get("ihs") or {}
-    advanced_risk = analysis.get("advancedRisk")
+    advanced_risk = analysis.get("advancedRisk") or {}
     categorized = _categorize_recommendations(analysis.get("recommendations") or [])
+    
+    # Build facts dict for helper functions
+    facts = {
+        "goals": goals,
+        "portfolio": portfolio,
+        "itr": di.get("itr"),
+    }
+    
+    # Compute Financial Health Score
+    health_score = compute_financial_health_score(analysis, facts)
+    
+    # Generate Timeline
+    timeline = generate_action_timeline(analysis, goals, facts)
+    
+    # Get CAS data
+    cas_data = _get_cas_data_for_questionnaire(q.get("id"))
+    trans_sum = (cas_data.get("transaction_summary") if cas_data else {}) or {}
+    inv_snapshot = (cas_data.get("investment_snapshot") if cas_data else {}) or {}
+    sip_details = (cas_data.get("sip_details") if cas_data else []) or []
+    
+    # Calculate key numbers
+    annual_income = _safe_float(lifestyle.get("annual_income"), 0)
+    monthly_income = annual_income / 12 if annual_income else 0
+    monthly_expenses = _safe_float(lifestyle.get("monthly_expenses"), 0)
+    monthly_emi = _safe_float(lifestyle.get("monthly_emi"), 0)
+    monthly_surplus = monthly_income - monthly_expenses - monthly_emi
+    savings_rate = (monthly_surplus / monthly_income * 100) if monthly_income > 0 else 0
+    
+    # Portfolio values
+    current_portfolio = trans_sum.get("total_current_value") or inv_snapshot.get("current_value") or 0
+    unrealized_gains = trans_sum.get("total_unrealized_gain") or inv_snapshot.get("net_gain") or 0
+    current_equity = _safe_float(portfolio.get("equity"), 0)
+    total_monthly_sip = sum(
+        s.get("sip_amount", 0) 
+        for s in sip_details 
+        if (s.get("frequency") or "").lower() == "monthly"
+    )
+    
+    # Protection values
+    life_cover = _safe_float(insurance.get("life_cover"), 0)
+    health_cover = _safe_float(insurance.get("health_cover"), 0)
+    required_term_cover = compute_term_insurance_need(age if isinstance(age, (int, float)) else 30, monthly_income)
+    required_health_cover = 1000000  # Rs. 10L recommended minimum
+    
+    # Emergency fund
+    emergency_fund_target = monthly_expenses * 6 if monthly_expenses > 0 else 120000
 
     # ==========================================================================
-    # PAGE 1: INPUTS & DATA CAPTURED
+    # PAGE 1: EXECUTIVE SUMMARY WITH FINANCIAL HEALTH SCORE
     # ==========================================================================
     story.append(Paragraph("Financial Plan", styles["Title"]))
-    story.append(Paragraph("Page 1: Inputs & Data Captured", styles["h1"]))
-
-    # Client Profile Section
-    story.append(Paragraph("Client Profile", styles["h2"]))
-    profile_rows = [
-        ["Name", name],
-        ["Age", str(age)],
-        ["Marital Status", "Married" if spouse else "Single"],
-        ["Children", str(len(children))],
-        ["Other Dependents", str(len(dependents))],
+    story.append(Paragraph("Page 1: Executive Summary", styles["h1"]))
+    story.append(Spacer(1, 8))
+    
+    # Financial Health Score Box
+    story.append(Paragraph("Financial Health Score", styles["h2"]))
+    score = health_score["overall"]
+    score_label = health_score["overall_label"]
+    
+    score_rows = [
+        ["Overall Score", f"{score}/100"],
+        ["Status", score_label],
     ]
-    profile_table = Table(
-        [["Field", "Value"]] + profile_rows,
+    score_table = Table(score_rows, hAlign="LEFT", colWidths=[150, 350])
+    score_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (0,-1), colors.HexColor('#1D3557')),
+        ('TEXTCOLOR', (0,0), (0,-1), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+    ]))
+    story.append(score_table)
+    story.append(Spacer(1, 8))
+    
+    # Score Components Table
+    story.append(Paragraph("Score Components", styles["BodyText"]))
+    comp = health_score["components"]
+    component_rows = []
+    for key, val in comp.items():
+        display_name = key.replace("_", " ").title()
+        component_rows.append([
+            display_name, 
+            f"{val['score']}/100",
+            f"{val['weight']}%",
+            val['label']
+        ])
+    
+    comp_table = Table(
+        [["Area", "Score", "Weight", "Status"]] + component_rows,
         hAlign="LEFT",
-        colWidths=[180, 320],
+        colWidths=[120, 70, 60, 250]
     )
-    profile_table.setStyle(TableStyle([
+    comp_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
         ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-        ('BOTTOMPADDING',(0,0),(-1,0),6),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
     ]))
-    story.append(profile_table)
+    story.append(comp_table)
     story.append(Spacer(1, 12))
-
-    # Data Sources Status
-    story.append(Paragraph("Data Sources Status", styles["h2"]))
-    income_declared = bool(lifestyle.get("annual_income"))
-    expenses_declared = bool(lifestyle.get("monthly_expenses"))
-    netcf = bank.get("net_cashflow")
-
-    data_rows = [
-        ["Income Declaration", "Provided" if income_declared else "Not declared (derived bands used)"],
-        ["Expense Data", "Captured" if expenses_declared else "Not declared (emergency fund based)"],
-        ["Cashflow Pattern", f"{'Surplus' if netcf >= 0 else 'Deficit'} pattern" if netcf is not None else "Cannot be inferred"],
+    
+    # Your Snapshot Table
+    story.append(Paragraph("Your Snapshot", styles["h2"]))
+    rec_band = advanced_risk.get("recommendedEquityBand") or {}
+    rec_equity_range = f"{rec_band.get('min', 40)}%-{rec_band.get('max', 60)}%"
+    
+    snapshot_rows = [
+        ["Life Cover", f"Rs. {_format_indian_amount(life_cover)}" if life_cover > 0 else "Rs. 0", 
+         f"Rs. {_format_indian_amount(required_term_cover)}", 
+         "URGENT" if life_cover < required_term_cover * 0.5 else "MEDIUM" if life_cover < required_term_cover else "GOOD"],
+        ["Health Cover", f"Rs. {_format_indian_amount(health_cover)}" if health_cover > 0 else "Rs. 0",
+         f"Rs. {_format_indian_amount(required_health_cover)}",
+         "URGENT" if health_cover < required_health_cover * 0.5 else "MEDIUM" if health_cover < required_health_cover else "GOOD"],
+        ["Emergency Fund", "Unknown", f"Rs. {_format_indian_amount(emergency_fund_target)}", "HIGH"],
+        ["Equity Allocation", f"{current_equity:.0f}%", rec_equity_range, 
+         "MEDIUM" if abs(current_equity - (rec_band.get('min', 40) + rec_band.get('max', 60))/2) > 15 else "GOOD"],
+        ["EMI Burden", f"{(monthly_emi/monthly_income*100) if monthly_income > 0 else 0:.0f}%", "<40%", 
+         "HIGH" if monthly_emi/monthly_income > 0.4 else "GOOD" if monthly_income > 0 else "UNKNOWN"],
+        ["Goals Funded", f"0/{len(goals)}", f"{len(goals)}/{len(goals)}", "MEDIUM"],
     ]
+    
+    snapshot_table = Table(
+        [["Area", "Current", "Ideal", "Priority"]] + snapshot_rows,
+        hAlign="LEFT",
+        colWidths=[120, 100, 100, 80]
+    )
+    snapshot_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+    ]))
+    story.append(snapshot_table)
+    story.append(Spacer(1, 12))
+    
+    # Key Numbers Boxes
+    story.append(Paragraph("Key Numbers", styles["h2"]))
+    
+    # Income & Cashflow
+    key_rows_1 = [
+        ["Annual Income", f"Rs. {_format_indian_amount(annual_income)}" if annual_income > 0 else "-"],
+        ["Monthly Surplus", f"Rs. {_format_indian_amount(monthly_surplus)}" if monthly_surplus != 0 else "-"],
+        ["Savings Rate", f"{savings_rate:.0f}%" if monthly_income > 0 else "-"],
+    ]
+    # Investments
+    key_rows_2 = [
+        ["Current Portfolio", f"Rs. {_format_indian_amount(current_portfolio)}" if current_portfolio > 0 else "-"],
+        ["Equity Allocation", f"{current_equity:.0f}%"],
+        ["Active SIP", f"Rs. {total_monthly_sip:,.0f}/month" if total_monthly_sip > 0 else "-"],
+    ]
+    
+    key_table = Table(
+        [["Income & Cashflow", ""]] + key_rows_1 + [["-", "-"]] + [["Investments", ""]] + key_rows_2,
+        hAlign="LEFT",
+        colWidths=[200, 300]
+    )
+    key_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#2D6A4F')),
+        ('BACKGROUND', (0,4), (-1,4), colors.HexColor('#457B9D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('TEXTCOLOR', (0,4), (-1,4), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTNAME', (0,4), (-1,4), 'Helvetica-Bold'),
+        ('SPAN', (0,0), (-1,0)),
+        ('SPAN', (0,4), (-1,4)),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    ]))
+    story.append(key_table)
+    story.append(Spacer(1, 12))
+    
+    # Top 3 Priorities
+    story.append(Paragraph("Your Top 3 Priorities", styles["h2"]))
+    priority_areas = health_score.get("priority_areas", [])
+    for i, (area, priority) in enumerate(priority_areas[:3], 1):
+        area_display = area.replace("_", " ").title()
+        story.append(Paragraph(f"<b>Priority {i}:</b> {area_display} ({priority})", styles["BodyText"]))
+    
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("<i>Time to review this report: 15 minutes</i>", styles["BodyText"]))
+    story.append(PageBreak())
 
-    # Document Upload Status
-    uploads = list_questionnaire_uploads(q.get("id"))
-    present_types = {row["doc_type"] for row in uploads}
-    expected_types = {
-        "Bank statement",
-        "ITR",
-        "Insurance document",
-        "Mutual fund CAS (Consolidated Account Statement)",
+    # ==========================================================================
+    # PAGE 2: ACTUALS VS IDEAL DASHBOARD
+    # ==========================================================================
+    story.append(Paragraph("Page 2: Actuals vs Ideal", styles["h1"]))
+    story.append(Paragraph("Financial Health Dashboard", styles["h2"]))
+    
+    # Comparison table for each area
+    comparison_rows = [
+        ["Protection - Life", f"Rs. {_format_indian_amount(life_cover)}", f"Rs. {_format_indian_amount(required_term_cover)}+", 
+         f"{(life_cover/required_term_cover*100) if required_term_cover > 0 else 0:.0f}%"],
+        ["Protection - Health", f"Rs. {_format_indian_amount(health_cover)}", f"Rs. {_format_indian_amount(required_health_cover)}+",
+         f"{(health_cover/required_health_cover*100) if required_health_cover > 0 else 0:.0f}%"],
+        ["Emergency Fund", "Unknown", f"Rs. {_format_indian_amount(emergency_fund_target)}", "Assess"],
+        ["Equity Allocation", f"{current_equity:.0f}%", rec_equity_range, 
+         "In Range" if rec_band.get('min', 40) <= current_equity <= rec_band.get('max', 60) else "Rebalance"],
+        ["Debt Allocation", f"{100 - current_equity:.0f}%", f"{100-rec_band.get('max', 60)}%-{100-rec_band.get('min', 40)}%", "-"],
+        ["EMI/Income Ratio", f"{(monthly_emi/monthly_income*100) if monthly_income > 0 else 0:.0f}%", "<40%", 
+         "Good" if (monthly_emi/monthly_income if monthly_income > 0 else 0) < 0.4 else "High"],
+    ]
+    
+    comparison_table = Table(
+        [["Area", "You", "Recommended", "Status"]] + comparison_rows,
+        hAlign="LEFT",
+        colWidths=[130, 100, 130, 100]
+    )
+    comparison_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1D3557')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+    ]))
+    story.append(comparison_table)
+    story.append(Spacer(1, 12))
+    
+    # Priority Ranking Table
+    story.append(Paragraph("Priority Ranking", styles["h2"]))
+    priority_mapping = {
+        "protection": comp["protection"]["score"],
+        "liquidity": comp["liquidity"]["score"],
+        "portfolio_health": comp["portfolio_health"]["score"],
+        "debt_management": comp["debt_management"]["score"],
+        "goal_readiness": comp["goal_readiness"]["score"],
+        "tax_efficiency": comp["tax_efficiency"]["score"],
     }
-    missing = expected_types - present_types
+    sorted_priorities = sorted(priority_mapping.items(), key=lambda x: x[1])
+    
+    priority_rows = []
+    for area, score in sorted_priorities:
+        area_display = area.replace("_", " ").title()
+        if score < 40:
+            action = "Immediate"
+        elif score < 60:
+            action = "Assess & Improve"
+        elif score < 80:
+            action = "Review"
+        else:
+            action = "Maintain"
+        priority_rows.append([area_display, f"{score}/100", action])
+    
+    priority_rows.append(["OVERALL", f"{health_score['overall']}/100", health_score['overall_label'].upper()])
+    
+    priority_table = Table(
+        [["Area", "Score", "Action Required"]] + priority_rows,
+        hAlign="LEFT",
+        colWidths=[200, 100, 200]
+    )
+    priority_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#1D3557')),
+        ('TEXTCOLOR', (0,-1), (-1,-1), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+    ]))
+    story.append(priority_table)
+    story.append(Spacer(1, 12))
+    
+    # When to recalculate
+    story.append(Paragraph("<b>When to recalculate this score:</b>", styles["BodyText"]))
+    recalc_items = [
+        "Quarterly review (every 3 months)",
+        "After change in income or expenses",
+        "After major asset/liability changes",
+        "Before making significant financial decisions"
+    ]
+    for item in recalc_items:
+        story.append(Paragraph(f"• {item}", styles["BodyText"]))
+    story.append(PageBreak())
 
-    for doc_type in sorted(expected_types):
-        status = "Uploaded" if doc_type in present_types else "Missing"
-        data_rows.append([doc_type, status])
+    # ==========================================================================
+    # PAGE 3: PROTECTION GAP ANALYSIS
+    # ==========================================================================
+    story.append(Paragraph("Page 3: Protection Gap Analysis", styles["h1"]))
+    
+    # Life Insurance Section
+    story.append(Paragraph("Life Insurance", styles["h2"]))
+    life_status = "Adequate" if life_cover >= required_term_cover else ("Underinsured" if life_cover > 0 else "No coverage")
+    life_rows = [
+        ["Current Status", life_status],
+        ["Current Coverage", f"Rs. {_format_indian_amount(life_cover)}" if life_cover > 0 else "Rs. 0"],
+        ["Recommended Coverage", f"Rs. {_format_indian_amount(required_term_cover)} minimum"],
+        ["Basis", "10x annual income"],
+        ["Gap", f"Rs. {_format_indian_amount(max(0, required_term_cover - life_cover))}"],
+    ]
+    life_table = Table(
+        [["Parameter", "Value"]] + life_rows,
+        hAlign="LEFT",
+        colWidths=[200, 300]
+    )
+    life_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#9D4B45') if life_cover < required_term_cover else colors.HexColor('#2D6A4F')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+    ]))
+    story.append(life_table)
+    story.append(Spacer(1, 8))
+    
+    story.append(Paragraph("<b>What to look for:</b>", styles["BodyText"]))
+    story.append(Paragraph("• Pure term insurance (no investment component)", styles["BodyText"]))
+    story.append(Paragraph("• Coverage tenure until age 60-65", styles["BodyText"]))
+    story.append(Paragraph(f"• Sum assured: Rs. {_format_indian_amount(required_term_cover)} minimum", styles["BodyText"]))
+    story.append(Paragraph("• Consider critical illness rider for comprehensive protection", styles["BodyText"]))
+    story.append(Spacer(1, 12))
+    
+    # Health Insurance Section
+    story.append(Paragraph("Health Insurance", styles["h2"]))
+    health_status = "Adequate" if health_cover >= required_health_cover else ("Underinsured" if health_cover > 0 else "No coverage")
+    health_rows = [
+        ["Current Status", health_status],
+        ["Current Coverage", f"Rs. {_format_indian_amount(health_cover)}" if health_cover > 0 else "Rs. 0"],
+        ["Recommended Coverage", f"Rs. {_format_indian_amount(required_health_cover)}-15L"],
+        ["Structure", "Family floater adequate for married couple"],
+        ["Gap", f"Rs. {_format_indian_amount(max(0, required_health_cover - health_cover))}"],
+    ]
+    health_table = Table(
+        [["Parameter", "Value"]] + health_rows,
+        hAlign="LEFT",
+        colWidths=[200, 300]
+    )
+    health_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#9D4B45') if health_cover < required_health_cover else colors.HexColor('#2D6A4F')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+    ]))
+    story.append(health_table)
+    story.append(Spacer(1, 8))
+    
+    story.append(Paragraph("<b>What to look for:</b>", styles["BodyText"]))
+    story.append(Paragraph("• Family floater covering both spouses", styles["BodyText"]))
+    story.append(Paragraph("• Rs. 10-15 lakh sum insured", styles["BodyText"]))
+    story.append(Paragraph("• Cashless facility at major hospitals", styles["BodyText"]))
+    story.append(Paragraph("• No room rent capping (or minimum 2% of sum insured)", styles["BodyText"]))
+    story.append(Paragraph("<i>Tax benefit: Premiums eligible for 80D deduction (up to Rs. 25,000)</i>", styles["BodyText"]))
+    story.append(PageBreak())
+
+    # ==========================================================================
+    # PAGE 4: LIQUIDITY & EMERGENCY FUND
+    # ==========================================================================
+    story.append(Paragraph("Page 4: Liquidity & Emergency Fund", styles["h1"]))
+    
+    story.append(Paragraph("Emergency Fund Assessment", styles["h2"]))
+    ef_rows = [
+        ["Target Amount", f"Rs. {_format_indian_amount(emergency_fund_target)}"],
+        ["Basis", "6 months of essential expenses"],
+        ["Monthly Expenses Used", f"Rs. {_format_indian_amount(monthly_expenses)}" if monthly_expenses > 0 else "Estimated Rs. 20,000"],
+        ["Current Status", "Assess your savings account + FD balances"],
+    ]
+    ef_table = Table(
+        [["Parameter", "Value"]] + ef_rows,
+        hAlign="LEFT",
+        colWidths=[200, 300]
+    )
+    ef_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+    ]))
+    story.append(ef_table)
+    story.append(Spacer(1, 12))
+    
+    story.append(Paragraph("<b>Building Strategy (if starting from zero):</b>", styles["BodyText"]))
+    monthly_ef_12 = emergency_fund_target / 12
+    monthly_ef_18 = emergency_fund_target / 18
+    monthly_ef_24 = emergency_fund_target / 24
+    story.append(Paragraph(f"• Option A (12 months): Set aside Rs. {monthly_ef_12:,.0f}/month", styles["BodyText"]))
+    story.append(Paragraph(f"• Option B (18 months): Set aside Rs. {monthly_ef_18:,.0f}/month", styles["BodyText"]))
+    story.append(Paragraph(f"• Option C (24 months): Set aside Rs. {monthly_ef_24:,.0f}/month", styles["BodyText"]))
+    story.append(Spacer(1, 12))
+    
+    story.append(Paragraph("<b>Where to Park Emergency Fund:</b>", styles["BodyText"]))
+    tier1 = emergency_fund_target * 0.4
+    tier2 = emergency_fund_target * 0.4
+    tier3 = emergency_fund_target * 0.2
+    story.append(Paragraph(f"• Tier 1 - Instant Access (40%): Rs. {tier1:,.0f} in savings bank account", styles["BodyText"]))
+    story.append(Paragraph(f"• Tier 2 - Quick Access (40%): Rs. {tier2:,.0f} in liquid funds or sweep-in FD", styles["BodyText"]))
+    story.append(Paragraph(f"• Tier 3 - Short-term (20%): Rs. {tier3:,.0f} in short-term fixed deposits", styles["BodyText"]))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph("<b>Priority:</b> Build emergency fund BEFORE investing in long-term goals", styles["BodyText"]))
+    story.append(PageBreak())
+
+    # ==========================================================================
+    # PAGE 5: PORTFOLIO REBALANCING
+    # ==========================================================================
+    story.append(Paragraph("Page 5: Portfolio Rebalancing", styles["h1"]))
+    
+    story.append(Paragraph("Current Portfolio Analysis", styles["h2"]))
+    portfolio_rows = [
+        ["Current Value", f"Rs. {_format_indian_amount(current_portfolio)}" if current_portfolio > 0 else "-"],
+        ["Equity Allocation", f"{current_equity:.0f}%"],
+        ["Debt Allocation", f"{100 - current_equity:.0f}%"],
+        ["Unrealized Gains", f"Rs. {_format_indian_amount(unrealized_gains)}" if unrealized_gains != 0 else "-"],
+    ]
+    portfolio_table = Table(
+        [["Metric", "Value"]] + portfolio_rows,
+        hAlign="LEFT",
+        colWidths=[200, 300]
+    )
+    portfolio_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+    ]))
+    story.append(portfolio_table)
+    story.append(Spacer(1, 8))
+    
+    # Risk Assessment
+    story.append(Paragraph("<b>Risk Assessment:</b>", styles["BodyText"]))
+    if current_equity > rec_band.get('max', 60) + 10:
+        story.append(Paragraph(f"• {current_equity:.0f}% equity allocation is aggressive for your goal mix", styles["BodyText"]))
+        story.append(Paragraph("• No debt cushion for near-term goals", styles["BodyText"]))
+    elif current_equity < rec_band.get('min', 40) - 10:
+        story.append(Paragraph(f"• {current_equity:.0f}% equity allocation may be too conservative", styles["BodyText"]))
+        story.append(Paragraph("• May not meet inflation-adjusted growth requirements", styles["BodyText"]))
+    else:
+        story.append(Paragraph("• Current allocation is within recommended range", styles["BodyText"]))
+    story.append(Spacer(1, 12))
+    
+    # Recommended Rebalancing
+    story.append(Paragraph("Recommended Allocation", styles["h2"]))
+    rec_mid = (rec_band.get('min', 40) + rec_band.get('max', 60)) / 2
+    rebal_rows = [
+        ["Current Equity", f"{current_equity:.0f}%", "Target Equity", f"{rec_mid:.0f}%"],
+        ["Current Debt", f"{100 - current_equity:.0f}%", "Target Debt", f"{100 - rec_mid:.0f}%"],
+    ]
+    rebal_table = Table(rebal_rows, hAlign="LEFT", colWidths=[120, 80, 120, 80])
+    rebal_table.setStyle(TableStyle([
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('BACKGROUND', (0,0), (1,-1), colors.HexColor('#F4F4F4')),
+        ('BACKGROUND', (2,0), (-1,-1), colors.HexColor('#E8F5E9')),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    ]))
+    story.append(rebal_table)
+    story.append(Spacer(1, 12))
+    
+    # What you control
+    story.append(Paragraph("<b>What You Control:</b>", styles["BodyText"]))
+    story.append(Paragraph("□ Which funds/instruments to use", styles["BodyText"]))
+    story.append(Paragraph("□ When to execute rebalancing", styles["BodyText"]))
+    story.append(Paragraph("□ How to split equity vs debt within each goal", styles["BodyText"]))
+    story.append(Paragraph("□ Which goals to prioritize if all aren't affordable", styles["BodyText"]))
+    story.append(PageBreak())
+
+    # ==========================================================================
+    # PAGE 6: GOAL FEASIBILITY ANALYSIS
+    # ==========================================================================
+    story.append(Paragraph("Page 6: Goal Feasibility Analysis", styles["h1"]))
+    
+    if goals:
+        for i, g in enumerate(goals[:5], 1):  # Limit to 5 goals
+            g_name = g.get("name") or g.get("goal") or f"Goal {i}"
+            g_target = _safe_float(g.get("target_amount"), 0)
+            g_horizon = g.get("horizon_years") or g.get("horizon") or "-"
+            
+            story.append(Paragraph(f"<b>Goal {i}: {sanitize_pdf_text(g_name)}</b>", styles["h2"]))
+            
+            goal_rows = [
+                ["Target Amount", f"Rs. {_format_indian_amount(g_target)}" if g_target > 0 else "-"],
+                ["Horizon", f"{g_horizon} years" if g_horizon != "-" else "-"],
+                ["Feasibility", "Assess based on monthly surplus"],
+            ]
+            goal_table = Table(
+                [["Parameter", "Value"]] + goal_rows,
+                hAlign="LEFT",
+                colWidths=[200, 300]
+            )
+            goal_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('BOTTOMPADDING', (0,0), (-1,0), 6),
+            ]))
+            story.append(goal_table)
+            story.append(Spacer(1, 8))
+    else:
+        story.append(Paragraph("No goals recorded. Please add your financial goals for feasibility analysis.", styles["BodyText"]))
+    
+    # Summary table
+    story.append(Spacer(1, 12))
+    story.append(Paragraph("<b>Summary: What's Affordable vs What's Needed</b>", styles["h2"]))
+    story.append(Paragraph(f"• Total Goals: {len(goals)}", styles["BodyText"]))
+    story.append(Paragraph(f"• Available Monthly Surplus: Rs. {_format_indian_amount(monthly_surplus)}" if monthly_surplus > 0 else "• Available Monthly Surplus: Assess", styles["BodyText"]))
+    story.append(Paragraph(f"• Current SIP: Rs. {total_monthly_sip:,.0f}/month" if total_monthly_sip > 0 else "• Current SIP: None", styles["BodyText"]))
+    story.append(PageBreak())
+
+    # ==========================================================================
+    # PAGE 7: TAX OPTIMIZATION (if applicable)
+    # ==========================================================================
+    story.append(Paragraph("Page 7: Tax Optimization", styles["h1"]))
+    
+    itr = di.get("itr") or {}
+    if itr:
+        gross_income = _safe_float(itr.get("gross_total_income"), 0)
+        taxable_income = _safe_float(itr.get("taxable_income"), 0)
+        tax_paid = _safe_float(itr.get("total_tax_paid"), 0)
+        deductions = itr.get("deductions_claimed") or []
+        total_deductions = sum(d.get("amount", 0) for d in deductions)
+        
+        story.append(Paragraph("Tax Profile (from ITR)", styles["h2"]))
+        tax_rows = [
+            ["Gross Income", f"Rs. {_format_indian_amount(gross_income)}" if gross_income > 0 else "-"],
+            ["Total Deductions", f"Rs. {_format_indian_amount(total_deductions)}"],
+            ["Taxable Income", f"Rs. {_format_indian_amount(taxable_income)}" if taxable_income > 0 else "-"],
+            ["Tax Paid", f"Rs. {_format_indian_amount(tax_paid)}" if tax_paid > 0 else "-"],
+        ]
+        tax_table = Table(
+            [["Parameter", "Value"]] + tax_rows,
+            hAlign="LEFT",
+            colWidths=[200, 300]
+        )
+        tax_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0,0), (-1,0), 6),
+        ]))
+        story.append(tax_table)
+        story.append(Spacer(1, 12))
+    else:
+        story.append(Paragraph("No ITR data available. Upload ITR for tax optimization analysis.", styles["BodyText"]))
+        story.append(Spacer(1, 12))
+    
+    # Tax Regime Framework
+    story.append(Paragraph("Tax Regime Assessment", styles["h2"]))
+    story.append(Paragraph("<b>Compare both regimes for your situation:</b>", styles["BodyText"]))
+    story.append(Spacer(1, 8))
+    
+    regime_rows = [
+        ["Old Tax Regime", "Higher rates, but deductions allowed"],
+        ["New Tax Regime", "Lower rates, no deductions"],
+    ]
+    regime_table = Table(regime_rows, hAlign="LEFT", colWidths=[150, 350])
+    regime_table.setStyle(TableStyle([
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    ]))
+    story.append(regime_table)
+    story.append(Spacer(1, 12))
+    
+    story.append(Paragraph("<b>If choosing OLD regime - Available Deductions:</b>", styles["BodyText"]))
+    story.append(Paragraph("• Section 80C: Max Rs. 1,50,000 (ELSS, PPF, Tax-saving FDs, LIC)", styles["BodyText"]))
+    story.append(Paragraph("• Section 80D: Max Rs. 25,000 (Health insurance premiums)", styles["BodyText"]))
+    story.append(Paragraph("• Section 80CCD(1B): Additional Rs. 50,000 (NPS contributions)", styles["BodyText"]))
+    story.append(PageBreak())
+
+    # ==========================================================================
+    # PAGE 8: ACTION ROADMAP WITH TIMELINE (NEW)
+    # ==========================================================================
+    story.append(Paragraph("Page 8: Your Action Roadmap", styles["h1"]))
+    story.append(Paragraph("Timeline for Financial Actions", styles["h2"]))
+    
+    # Week-by-week actions
+    week_labels = {
+        "week_1": "WEEK 1: Protection Assessment",
+        "week_2": "WEEK 2: Emergency Fund Review", 
+        "week_3": "WEEK 3: Portfolio Review",
+        "week_4": "WEEK 4: Tax Planning",
+        "day_90": "DAY 90: Full Progress Review",
+        "quarterly": "QUARTERLY: Ongoing Review",
+    }
+    
+    for week_key, week_label in week_labels.items():
+        actions = timeline.get(week_key, [])
+        if actions:
+            story.append(Paragraph(f"<b>{week_label}</b>", styles["BodyText"]))
+            for action in actions:
+                time_est = action.get("time_estimate", "")
+                time_str = f" ({time_est})" if time_est else ""
+                story.append(Paragraph(f"□ {action['action']}{time_str}", styles["BodyText"]))
+            story.append(Spacer(1, 8))
+    
+    story.append(Spacer(1, 12))
+    
+    # What this report contains
+    story.append(Paragraph("What This Report Contains", styles["h2"]))
+    contents = [
+        "Financial health assessment across 6 areas",
+        "Protection gap analysis",
+        "Portfolio risk evaluation",
+        "Goal feasibility assessment",
+        "Tax optimization opportunities",
+        "Prioritized action roadmap",
+    ]
+    for c in contents:
+        story.append(Paragraph(f"✓ {c}", styles["BodyText"]))
+    story.append(Spacer(1, 12))
+    
+    # Disclaimers
+    story.append(Paragraph("Important Notes", styles["h2"]))
+    disclaimers = [
+        "This is an educational financial plan, not personalized investment advice.",
+        "Calculations based on standard assumptions and data provided.",
+        "Product selection and execution are your decisions.",
+        "Market conditions and regulations may change.",
+        "Review quarterly or after significant life events.",
+    ]
+    for d in disclaimers:
+        story.append(Paragraph(f"• {d}", styles["BodyText"]))
+    story.append(Spacer(1, 12))
+    
+    # Review Schedule
+    story.append(Paragraph("<b>Review Schedule:</b>", styles["BodyText"]))
+    story.append(Paragraph("• IMMEDIATE: Complete Priority 1 & 2 (Protection + Emergency)", styles["BodyText"]))
+    story.append(Paragraph("• 30 DAYS: Portfolio rebalancing + Tax planning", styles["BodyText"]))
+    story.append(Paragraph("• 90 DAYS: Full progress review", styles["BodyText"]))
+    story.append(Paragraph("• QUARTERLY: Recalculate Financial Health Score", styles["BodyText"]))
+    story.append(Paragraph("• ANNUALLY: Comprehensive plan update", styles["BodyText"]))
+
+    # Build PDF with header and footer on all pages
+    def header_and_footer(canvas, doc):
+        header(canvas, doc)
+        footer(canvas, doc)
+    
+    doc.build(story, onFirstPage=header_and_footer, onLaterPages=header_and_footer)
+
+# --- Narrative helpers for qualitative interpretations ---
+
+
+def _interpret_surplus(band: str):
+    m = (band or "").lower()
+    if m == "low":
+        return "Limited savings capacity; prioritize increasing systematic savings."
+    if m == "adequate":
+        return "Reasonable surplus; allocate efficiently across priority goals."
+    if m == "strong":
+        return "Healthy surplus enabling acceleration of long-term goals."
+    return "Surplus position unclear; gather more cashflow data."
+
+def _interpret_insurance(status: str):
+    s = (status or "").lower()
+    if s == "underinsured":
+        return "Protection gap exists; increase term coverage to benchmark (~10x income)."
+    if s == "adequate":
+        return "Coverage at or above benchmark; schedule periodic review."
+    return "Coverage status indeterminate; verify policy details."
+
+def _interpret_debt(status: str):
+    s = (status or "").lower()
+    if s == "high":
+        return "Debt load stressing cash flows; consider refinancing or accelerated repayment."
+    if s == "moderate":
+        return "Manageable leverage; monitor to avoid escalation."
+    if s == "healthy":
+        return "Debt load within prudent limits."
+    return "Debt position unclear; capture EMI details."
+
+def _interpret_liquidity(status: str):
+    s = (status or "").lower()
+    if s == "insufficient":
+        return "Emergency reserves below 6 months; build liquid buffer."
+    if s == "adequate":
+        return "Emergency reserve at guideline level."
+    return "Liquidity status unconfirmed; record emergency fund amount."
+
+def _interpret_ihs(band: str):
+    b = (band or "").lower()
+    if b == "poor":
+        return "Structure weak; raise savings rate and diversify holdings."
+    if b == "average":
+        return "Improve allocation balance and goal alignment."
+    if b == "good":
+        return "Solid foundation; refine tax and risk efficiency."
+    if b == "excellent":
+        return "Optimized; maintain discipline and periodic rebalancing."
+    return "Investment health unclear; collect product and allocation details."
+
+def _categorize_recommendations(recs):
+    cats = {
+        "Risk Profile Based Advice": [],
+        "Insurance Improvement": [],
+        "Debt Optimization": [],
+        "Liquidity Management": [],
+        "Investment Health": [],
+        "General Planning": [],
+    }
+    for r in recs:
+        rl = r.lower()
+        if any(k in rl for k in ["equity", "allocation", "volatility", "mix"]):
+            cats["Risk Profile Based Advice"].append(r)
+        elif any(k in rl for k in ["cover", "insurance", "term", "health"]):
+            cats["Insurance Improvement"].append(r)
+        elif any(k in rl for k in ["debt", "emi", "borrow", "refinance"]):
+            cats["Debt Optimization"].append(r)
+        elif any(k in rl for k in ["liquid", "emergency"]):
+            cats["Liquidity Management"].append(r)
+        elif any(k in rl for k in ["savings", "diversify", "portfolio", "rebalance", "products"]):
+            cats["Investment Health"].append(r)
+        else:
+            cats["General Planning"].append(r)
+    return {k: v for k, v in cats.items() if v}
 
     data_table = Table(
         [["Data Source", "Status"]] + data_rows,
@@ -3671,7 +4687,7 @@ def footer(canvas, doc):
     # Educational disclaimer - displayed on every page
     disclaimer_text = (
         "This is an educational analysis tool, not financial advice. "
-        "This report is for informational purposes only. "
+        "This report is for information purposes only. "
         "Consult a SEBI-registered Investment Advisor before making decisions. "
         "We do not recommend specific securities or products."
     )

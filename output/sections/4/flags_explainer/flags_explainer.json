@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "questionnaire_id": 4,
+    "section": "flags_explainer",
+    "model": "gpt-4o",
+    "ts": 1768723626,
+    "facts_hash": "755dcb71ab6e5bee482227e50c4ec1462851f7c6bc6b62ef7f3d61d51c326f6b",
+    "prompt": {
+      "system": "You are a senior financial planner writing for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Be precise, neutral, and practical. No guarantees or forward-looking promises. Return valid JSON with keys: title (string), bullets (array of short points), paragraphs (2-3 short paragraphs), actions (checklist items).",
+      "user": "Section: Flags and Actions\nFactsDigest JSON (<=2KB):\n{\"client\": {\"age\": \"32\", \"dependents\": 0}, \"flags\": [\"Underinsured: Cover Rs. 5 vs Required Rs. 38.4 L\", \"Insufficient Liquidity: Emergency fund 0.0 months vs Benchmark 6+\", \"Score = 40.0 -> Average: Saving 49.3% income, high equity concentration\"], \"kpis\": {\"debtStress\": \"Healthy\", \"emiPct\": 0.0, \"ihsBand\": \"Average\", \"insuranceGap\": \"Underinsured\", \"liquidity\": \"Insufficient\", \"liquidityMonths\": 0.0, \"surplusBand\": \"Strong\"}}\n\nConstraints:\n- Max 6 bullets, each <= 20 words.\n- 1-2 paragraphs, each <= 80 words.\n- Max 5 actions, each actionable and specific.\n"
+    },
+    "usage": {
+      "prompt_tokens": 291,
+      "completion_tokens": 245,
+      "total_tokens": 536
+    }
+  },
+  "content": {
+    "title": "Financial Health Assessment and Recommendations",
+    "bullets": [
+      "Underinsured by Rs. 33.4 L.",
+      "No emergency fund; benchmark is 6+ months.",
+      "Saving 49.3% of income.",
+      "High equity concentration in investments.",
+      "Debt stress is healthy.",
+      "EMI percentage is 0.0%."
+    ],
+    "paragraphs": [
+      "The client is currently underinsured with a gap of Rs. 33.4 L, which poses a significant risk. Additionally, the absence of an emergency fund leaves the client vulnerable to unexpected expenses.",
+      "While the client saves a substantial portion of their income, the high concentration in equities could increase risk. It's crucial to diversify investments to balance potential returns and risks."
+    ],
+    "actions": [
+      "Increase insurance coverage to close the Rs. 33.4 L gap.",
+      "Establish an emergency fund covering at least 6 months of expenses.",
+      "Diversify investment portfolio to reduce equity concentration.",
+      "Review and adjust savings strategy to maintain financial stability.",
+      "Regularly assess financial goals and adjust plans as needed."
+    ]
+  }
+}

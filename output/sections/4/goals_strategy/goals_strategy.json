@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "questionnaire_id": 4,
+    "section": "goals_strategy",
+    "model": "gpt-4o",
+    "ts": 1768724194,
+    "facts_hash": "4ab7bb33d043862b98f467256ad72270c1e8601605e5832bc3675382d2826326",
+    "prompt": {
+      "system": "You are a senior financial planner creating realistic goal strategies for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Your role is to provide HONEST and PRACTICAL advice. CRITICAL: The sum of ALL recommended SIPs MUST NOT exceed the available budget. You MUST use the 'affordable_sip' values from the data, NOT the 'ideal_sip' values. The ideal_sip is only for showing what would be needed in a perfect scenario - it is NOT the recommendation. Goals are pre-sorted by priority (priority_rank=1 is highest priority). If there's a gap (gap_exists=true), provide specific bridge recommendations.",
+      "user": "Section: Goal-wise Strategy with Priority Framework\nFactsDigest:\n{\"affordability_summary\": {\"budget_exceeded_by\": 0, \"constraint_violated\": true, \"fundable_percentage\": 100.0, \"funding_gap\": 0, \"remaining_budget_for_goals\": 0, \"total_affordable_sip\": 0, \"total_ideal_sip_required\": 0.0}, \"calculation_assumptions_note\": \"Calculations use expected returns of 7.4%-14% p.a. (based on risk category) and 6.0% inflation.\", \"financial_capacity\": {\"available_surplus\": 0, \"existing_sip_commitments\": 0.0, \"monthly_emi\": 0.0, \"monthly_expenses\": 38965.72, \"monthly_income\": 32002.75, \"net_available_for_new_goals\": 0, \"per_goal_budget\": 0.0, \"total_ideal_sip_required\": 0.0}, \"goals\": [], \"insurance_gaps\": {\"has_dependents\": false, \"health_insurance_gap\": 1000000.0, \"term_insurance_gap\": 3840330.0}, \"overall_gap_exists\": true, \"overall_recommended_equity_band\": {\"max\": 55, \"min\": 40}, \"priority_framework\": {\"allocated_to_insurance\": 2083.0, \"bridge_recommendations\": [], \"goal_achievement_percent\": 100.0, \"monthly_surplus\": 0, \"priority_breakdown\": [{\"monthly_amount\": 0, \"name\": \"Term Insurance\", \"note\": \"Cover gap: Rs. 3,840,330\", \"priority\": 1, \"status\": \"Not Required\", \"yearly_amount\": 19202.0}, {\"monthly_amount\": 2083.0, \"name\": \"Health Insurance\", \"note\": \"Cover gap: Rs. 1,000,000\", \"priority\": 2, \"status\": \"Gap Exists\", \"yearly_amount\": 25000.0}, {\"ideal_amount\": 0, \"monthly_amount\": 0, \"name\": \"Goal SIPs\", \"note\": \"Can fund 100% of goal requirements\", \"priority\": 3, \"status\": \"Full\"}], \"remaining_for_goals\": 0, \"savings_shortfall\": 0, \"summary\": \"With Rs. 0/month surplus: Insurance needs Rs. 0, leaving Rs. 0 for goals (100% of requirement).\", \"total_ideal_sip_needed\": 0}, \"riskFinalCategory\": \"Moderate\"}\n\n⚠️ **CRITICAL BUDGET CONSTRAINT - READ CAREFULLY:**\n   - Available monthly budget for goals: Rs. 0\n   - Total IDEAL SIP needed (if unlimited funds): Rs. 0\n   - Recommended SIP allocation (within budget): Rs. 0\n   - Funding gap: Rs. 0/month\n   - Goals can be 100% funded with current savings\n\n**YOU MUST RECOMMEND TOTAL SIPs OF Rs. 0/month OR LESS.**\n**USE THE 'affordable_sip' VALUE FOR EACH GOAL, NOT 'ideal_sip'.**\n\nIMPORTANT INSTRUCTIONS:\n\n**PRIORITY FRAMEWORK (MUST INCLUDE):**\nThe priority_framework section shows allocation in this order:\n  Priority 1: Term Insurance (if dependents exist)\n  Priority 2: Health Insurance (if gap exists)\n  Priority 3: Goal SIPs (remaining surplus)\n\nCurrent goal achievement level: 100% of total goal requirements.\n1. START WITH PRIORITY SUMMARY: Begin with a bullet stating:\n   'With Rs.[surplus]/month: Rs.[X] for insurance, Rs.[Y] remaining for goals ([Z]% of requirement)'\n\n2. GOAL PRIORITY ORDER: Discuss goals in priority order (priority_rank=1 first).\n   - 'Immediate' tier: Address within 1-2 years\n   - 'Short-term' tier: Address in years 3-5\n   - 'Long-term' tier: Can be deferred to year 5+\n\n3. For each goal, clearly state (IN THIS ORDER):\n   - RECOMMENDED SIP: 'Allocate Rs.[affordable_sip]/month for [goal_name]' (THIS IS THE KEY NUMBER)\n   - FUNDING GAP: If gap_exists=true, say 'This covers [100-shortfall_percent]% of the ideal requirement'\n   - CONTEXT: 'Ideally, Rs.[ideal_sip]/month would be needed for full funding' (informational only)\n   - IMPORTANT: The sum of all RECOMMENDED SIPs must equal the total affordable amount\n\n4. If gap_exists=true, provide BRIDGE RECOMMENDATIONS:\n   - 'Extend timeline to [required_horizon_at_affordable] years'\n   - 'Or reduce target to Rs.[achievable_amount]'\n   - 'Or increase savings rate and reanalyze'\n\n5. PATH TO FULL ACHIEVEMENT: If achievement < 100%, explain how to reach 100%:\n   - Specific amount to reduce expenses\n   - Or specific amount to increase income\n   - Or start with current SIP and increase annually\n\n6. ASSUMPTIONS NOTE: Mention in one of the paragraphs:\n   'Calculations use expected returns of 7.4%-14% p.a. (based on risk category) and 6.0% inflation.'\n\n7. EQUITY RECONCILIATION: If per-goal allocations differ from overall_recommended_equity_band, explai"
+    },
+    "usage": {
+      "prompt_tokens": 1432,
+      "completion_tokens": 357,
+      "total_tokens": 1789
+    }
+  },
+  "content": {
+    "title": "Goal Strategy: Prioritized Action Plan",
+    "bullets": [
+      "With Rs.0/month: Rs.2083 for insurance, Rs.0 remaining for goals (100% of requirement)"
+    ],
+    "paragraphs": [
+      "The current financial strategy prioritizes addressing insurance gaps first, as there are no dependents, term insurance is not required. However, there is a health insurance gap of Rs. 1,000,000, for which Rs. 2083/month is allocated. This allocation ensures that the health insurance gap is covered, leaving no surplus for goal SIPs. Despite this, the goals can be fully funded with current savings, achieving 100% of the requirements.",
+      "Given the critical budget constraint, there is no available surplus for new goal SIPs. The strategy focuses on maintaining the current savings level to ensure all goals are met. Calculations use expected returns of 7.4%-14% p.a. (based on risk category) and 6.0% inflation, which supports the full funding of goals with existing savings.",
+      "While the individual goal allocations are theoretical, the overall portfolio should remain within the recommended equity band of 40% to 55%. This ensures that the investment strategy aligns with the moderate risk category and maximizes the potential for achieving financial goals."
+    ],
+    "actions": [
+      "Maintain current savings level to ensure 100% goal funding.",
+      "Allocate Rs. 2083/month to cover the health insurance gap.",
+      "Monitor expenses closely to avoid any increase that could affect savings.",
+      "Consider increasing income through additional sources if possible.",
+      "Review financial plan annually to adjust for any changes in income or expenses."
+    ]
+  }
+}

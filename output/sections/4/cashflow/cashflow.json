@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "questionnaire_id": 4,
+    "section": "cashflow",
+    "model": "gpt-4o",
+    "ts": 1768723636,
+    "facts_hash": "aa2651d07fe5da91402c65388d99d09e27f2b2877ac649204a30185dcc7d9303",
+    "prompt": {
+      "system": "You are a financial planner for Indian clients. Explain cashflows clearly, with practical advice to improve savings. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Cashflow Overview\nFactsDigest:\n{\"bank\": {\"net_cashflow\": 454665.3, \"total_inflows\": 922254.0, \"total_outflows\": 467588.7}, \"surplusBand\": \"Strong\"}\n\nReturn JSON: title, bullets, paragraphs, actions. Keep concise and actionable."
+    },
+    "usage": {
+      "prompt_tokens": 127,
+      "completion_tokens": 320,
+      "total_tokens": 447
+    }
+  },
+  "content": {
+    "title": "Cashflow Overview and Savings Strategy",
+    "bullets": [
+      "Net Cashflow: Rs. 4,54,665.30",
+      "Total Inflows: Rs. 9,22,254.00",
+      "Total Outflows: Rs. 4,67,588.70",
+      "Surplus Band: Strong"
+    ],
+    "paragraphs": [
+      "Your current financial situation shows a strong surplus, indicating that your inflows significantly exceed your outflows. This is a positive position, allowing you to focus on enhancing your savings and investment strategies.",
+      "With a net cashflow of Rs. 4,54,665.30, you have a substantial amount of funds available after covering all expenses. This provides an excellent opportunity to allocate more towards savings and investments, ensuring long-term financial security."
+    ],
+    "actions": [
+      "Increase your savings allocation by setting aside a fixed percentage of your net cashflow each month. Aim for at least 20% of Rs. 4,54,665.30, which is approximately Rs. 90,933.06.",
+      "Consider diversifying your investments. Explore options such as mutual funds, fixed deposits, or stocks, depending on your risk appetite.",
+      "Review your expenses to identify any areas where you can reduce unnecessary spending. Redirect these savings towards your financial goals.",
+      "Set up an emergency fund if you haven't already. Aim to save at least 3-6 months' worth of expenses to cover unforeseen circumstances."
+    ]
+  }
+}
