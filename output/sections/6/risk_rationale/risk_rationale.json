@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "questionnaire_id": 6,
+    "section": "risk_rationale",
+    "model": "gpt-4o",
+    "ts": 1768933695,
+    "facts_hash": "1d07da9f6996c9ddb1ebefba9c6197ba85a95379fb2d41972fbc009f5c3ef080",
+    "prompt": {
+      "system": "You explain risk profile and asset allocation rationale for Indian clients simply and accurately. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Risk Profile & Allocation Rationale\nFactsDigest:\n{\"appetiteCategory\": \"Moderate\", \"finalCategory\": \"Moderate\", \"reasoningText\": \"Score 2.90 -> Appetite Moderate | Tenure limit Growth | Baseline after adjustments Moderate | Final Moderate\", \"recommendedEquityBand\": {\"max\": 55, \"min\": 40}, \"recommendedEquityMid\": 47.5, \"tenureLimitCategory\": \"Growth\"}\n\nReturn JSON: title, bullets, paragraphs. Optionally actions. Avoid technical jargon."
+    },
+    "usage": {
+      "prompt_tokens": 165,
+      "completion_tokens": 304,
+      "total_tokens": 469
+    }
+  },
+  "content": {
+    "title": "Understanding Your Risk Profile and Asset Allocation",
+    "bullets": [
+      "Your risk appetite is categorized as Moderate.",
+      "The recommended equity allocation for you is between 40% and 55%.",
+      "A balanced approach suggests a mid-point equity allocation of 47.5%.",
+      "Your investment tenure supports a Growth strategy."
+    ],
+    "paragraphs": [
+      "Based on your risk profile, you have a Moderate appetite for risk. This means you are comfortable with some level of market fluctuations in exchange for potential growth. Your investment strategy should reflect this balance between risk and reward.",
+      "The recommended equity allocation for your portfolio is between 40% and 55%. This range allows you to benefit from potential growth opportunities in the stock market while maintaining a level of stability with other asset classes.",
+      "A mid-point equity allocation of 47.5% is suggested for a balanced approach. This allocation aims to optimize growth potential while managing risk, aligning with your Moderate risk profile.",
+      "Your investment tenure supports a Growth strategy, indicating that you have the time horizon to potentially benefit from higher returns associated with equities. This aligns well with your Moderate risk profile, allowing for a diversified approach to asset allocation."
+    ],
+    "actions": [
+      "Consider reviewing your portfolio regularly to ensure it aligns with your risk profile and financial goals.",
+      "Consult with a financial advisor to tailor your asset allocation to your specific needs and market conditions."
+    ]
+  }
+}

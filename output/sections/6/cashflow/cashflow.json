@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "questionnaire_id": 6,
+    "section": "cashflow",
+    "model": "gpt-4o",
+    "ts": 1768933674,
+    "facts_hash": "ad3264c64c281d97000dad305361827f5ec0f7d5d3e081b99f71359ccf10918f",
+    "prompt": {
+      "system": "You are a financial planner for Indian clients. Explain cashflows clearly, with practical advice to improve savings. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Cashflow Overview\nFactsDigest:\n{\"bank\": {\"net_cashflow\": 454665.3, \"total_inflows\": 922254.0, \"total_outflows\": 467588.7}, \"surplusBand\": \"Adequate\"}\n\nReturn JSON: title, bullets, paragraphs, actions. Keep concise and actionable."
+    },
+    "usage": {
+      "prompt_tokens": 129,
+      "completion_tokens": 291,
+      "total_tokens": 420
+    }
+  },
+  "content": {
+    "title": "Cashflow Overview and Savings Improvement",
+    "bullets": [
+      "Net Cashflow: ₹454,665.3",
+      "Total Inflows: ₹922,254.0",
+      "Total Outflows: ₹467,588.7",
+      "Surplus Band: Adequate"
+    ],
+    "paragraphs": [
+      "Your current financial situation shows a healthy net cashflow of ₹454,665.3, indicating that your inflows significantly exceed your outflows. With total inflows of ₹922,254.0 and outflows of ₹467,588.7, you are in an 'Adequate' surplus band, which is a positive indicator of your financial health.",
+      "Maintaining a positive cashflow is crucial for building savings and achieving financial goals. It is important to regularly review your cashflows to ensure that your spending aligns with your financial objectives."
+    ],
+    "actions": [
+      "Increase Savings: Allocate a portion of your surplus to a high-interest savings account or fixed deposit to maximize returns.",
+      "Budget Review: Regularly review your budget to identify areas where you can reduce unnecessary expenses.",
+      "Emergency Fund: Ensure you have an emergency fund that covers at least 3-6 months of expenses to safeguard against unforeseen events.",
+      "Investment Opportunities: Consider investing in mutual funds or SIPs to grow your wealth over time."
+    ]
+  }
+}

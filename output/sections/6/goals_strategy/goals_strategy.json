@@ -1,0 +1,39 @@
+{
+  "_meta": {
+    "questionnaire_id": 6,
+    "section": "goals_strategy",
+    "model": "gpt-4o",
+    "ts": 1768933705,
+    "facts_hash": "460e2b4b6230b990f663e591c1d3e9847135583059df0bae8d9a164a343c4993",
+    "prompt": {
+      "system": "You are a senior financial planner creating realistic goal strategies for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Your role is to provide HONEST and PRACTICAL advice. CRITICAL: The sum of ALL recommended SIPs MUST NOT exceed the available budget. You MUST use the 'affordable_sip' values from the data, NOT the 'ideal_sip' values. The ideal_sip is only for showing what would be needed in a perfect scenario - it is NOT the recommendation. Goals are pre-sorted by priority (priority_rank=1 is highest priority). If there's a gap (gap_exists=true), provide specific bridge recommendations.",
+      "user": "Section: Goal-wise Strategy with Priority Framework\nFactsDigest:\n{\"affordability_summary\": {\"budget_exceeded_by\": 192949.0, \"constraint_violated\": true, \"fundable_percentage\": 0.0, \"funding_gap\": 192949.0, \"remaining_budget_for_goals\": 0, \"total_affordable_sip\": 0.0, \"total_ideal_sip_required\": 192949.0}, \"calculation_assumptions_note\": \"Calculations use expected returns of 7.4%-14% p.a. (based on risk category) and 6.0% inflation.\", \"financial_capacity\": {\"available_surplus\": 0, \"existing_sip_commitments\": 0.0, \"monthly_emi\": 0.0, \"monthly_expenses\": 38965.72, \"monthly_income\": 32002.75, \"net_available_for_new_goals\": 0, \"per_goal_budget\": 0.0, \"total_ideal_sip_required\": 192948.77}, \"goals\": [{\"achievable_amount\": null, \"affordable_sip\": null, \"calculation_assumptions\": {\"expected_return_percent\": 11.4, \"inflation_percent\": 6.0, \"real_return_percent\": 5.4}, \"gap_exists\": false, \"horizon_years\": 25.0, \"ideal_sip\": 164220.38, \"name\": \"Retirement Corpus\", \"priority_rank\": 1, \"priority_score\": 50, \"priority_tier\": \"Long-term\", \"required_horizon_at_affordable\": null, \"risk_category\": \"Moderate\", \"risk_inputs\": {\"behavior\": \"hold\", \"flexibility\": \"fixed\", \"importance\": \"essential\", \"tolerance\": \"medium\"}, \"shortfall_percent\": 0, \"target_amount\": 250000000.0}, {\"achievable_amount\": null, \"affordable_sip\": null, \"calculation_assumptions\": {\"expected_return_percent\": 11.4, \"inflation_percent\": 6.0, \"real_return_percent\": 5.4}, \"gap_exists\": false, \"horizon_years\": 15.0, \"ideal_sip\": 22406.98, \"name\": \"Wealth Creation\", \"priority_rank\": 2, \"priority_score\": 70, \"priority_tier\": \"Long-term\", \"required_horizon_at_affordable\": null, \"risk_category\": \"Growth\", \"risk_inputs\": {\"behavior\": \"buy\", \"flexibility\": \"critical\", \"importance\": \"important\", \"tolerance\": \"medium\"}, \"shortfall_percent\": 0, \"target_amount\": 10000000.0}, {\"achievable_amount\": null, \"affordable_sip\": null, \"calculation_assumptions\": {\"expected_return_percent\": 11.4, \"inflation_percent\": 6.0, \"real_return_percent\": 5.4}, \"gap_exists\": false, \"horizon_years\": 5.0, \"ideal_sip\": 6321.41, \"name\": \"Lifestyle (Bike/Car/etc)\", \"priority_rank\": 3, \"priority_score\": 70, \"priority_tier\": \"Short-term\", \"required_horizon_at_affordable\": null, \"risk_category\": \"Moderate\", \"risk_inputs\": {\"behavior\": \"sell\", \"flexibility\": \"fixed\", \"importance\": \"lifestyle\", \"tolerance\": \"medium\"}, \"shortfall_percent\": 0, \"target_amount\": 500000.0}], \"insurance_gaps\": {\"has_dependents\": true, \"health_insurance_gap\": 1500000.0, \"term_insurance_gap\": 3840330.0}, \"overall_gap_exists\": true, \"overall_recommended_equity_band\": {\"max\": 55, \"min\": 40}, \"priority_framework\": {\"allocated_to_insurance\": 4725.0, \"bridge_recommendations\": [{\"action\": \"Reduce monthly expenses by Rs. 192,949 to fully fund all goals\", \"amount\": 192949, \"option\": \"Reduce Expenses\"}, {\"action\": \"Increase monthly income by Rs. 250,833 (assuming current savings rate)\", \"amount\": 250833, \"option\": \"Increase Income\"}, {\"action\": \"Extend goal target dates to reduce monthly SIP requirement\", \"amount\": null, \"option\": \"Extend Goal Timelines\"}], \"goal_achievement_percent\": 0.0, \"monthly_surplus\": 0, \"priority_breakdown\": [{\"monthly_amount\": 1600.0, \"name\": \"Term Insurance\", \"note\": \"Cover gap: Rs. 3,840,330\", \"priority\": 1, \"status\": \"Critical Gap\", \"yearly_amount\": 19202.0}, {\"monthly_amount\": 3125.0, \"name\": \"Health Insurance\", \"note\": \"Cover gap: Rs. 1,500,000\", \"priority\": 2, \"status\": \"Gap Exists\", \"yearly_amount\": 37500.0}, {\"ideal_amount\": 192949.0, \"monthly_amount\": 0, \"name\": \"Goal SIPs\", \"note\": \"Can fund 0% of goal requirements\", \"priority\": 3, \"status\": \"Cannot Fund\"}], \"remaining_for_goals\": 0, \"savings_shortfall\": 192949.0, \"summary\": \"With Rs. 0/month surplus: Insurance needs Rs. 0, leaving Rs. 0 for goals (0% of requirement).\", \"total_ideal_sip_needed\": 192949.0}, \"riskFinalCategory\": \"Moderate\"}\n\n⚠️ **CRITICAL BUDGET CONSTRAINT - READ CAREFULLY:**\n   - Available monthly budget for goals: Rs. 0\n   - Total IDEAL SIP needed (if "
+    },
+    "usage": {
+      "prompt_tokens": 2165,
+      "completion_tokens": 400,
+      "total_tokens": 2565
+    }
+  },
+  "content": {
+    "title": "Goal Strategy: Prioritized Action Plan",
+    "bullets": [
+      "With Rs.0/month: Rs.0 for insurance, Rs.0 remaining for goals (0% of requirement)",
+      "Allocate Rs.0/month for Retirement Corpus",
+      "Allocate Rs.0/month for Wealth Creation",
+      "Allocate Rs.0/month for Lifestyle (Bike/Car/etc)"
+    ],
+    "paragraphs": [
+      "Given the current financial constraints, the priority framework emphasizes the critical need for insurance coverage before addressing goal SIPs. With no surplus available, the immediate focus should be on bridging the funding gap through alternative strategies. Calculations use expected returns of 7.4%-14% p.a. (based on risk category) and 6.0% inflation.",
+      "For the Retirement Corpus, ideally, Rs.164,220.38/month would be needed for full funding. Similarly, Wealth Creation requires Rs.22,406.98/month, and Lifestyle goals need Rs.6,321.41/month. However, with a current budget of Rs.0, these goals remain unfunded. To bridge this gap, consider reducing expenses by Rs.192,949 or increasing income by Rs.250,833. Alternatively, extending goal timelines could also reduce the monthly SIP requirement.",
+      "While individual goal allocations are theoretical, it's crucial to maintain the overall portfolio within the recommended equity band of 40-55%. This ensures a balanced risk approach while pursuing long-term financial goals."
+    ],
+    "actions": [
+      "Reduce monthly expenses by Rs.192,949 to fully fund all goals.",
+      "Increase monthly income by Rs.250,833 to meet the current savings rate.",
+      "Extend goal timelines to reduce the monthly SIP requirement.",
+      "Start with current SIP allocations and plan to increase annually as financial conditions improve.",
+      "Reassess financial strategy periodically to align with changing income and expense patterns."
+    ]
+  }
+}

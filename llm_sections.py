@@ -1404,6 +1404,149 @@ def detect_tax_regime(deductions_claimed: List[Dict[str, Any]], total_deductions
     return "regime_unclear"
 
 
+def compute_regime_comparison(
+    gross_income: float,
+    deductions_80c: float = 0,
+    deductions_80d: float = 0,
+    deductions_nps: float = 0,
+    hra_exemption: float = 0,
+    other_deductions: float = 0
+) -> Dict[str, Any]:
+    """
+    Compare Old vs New tax regime for FY 2024-25.
+    
+    Old Regime (FY 2024-25):
+      - 0-2.5L: Nil
+      - 2.5-5L: 5%
+      - 5-10L: 20%
+      - >10L: 30%
+      - Standard deduction: 50,000
+      - All deductions (80C, 80D, HRA, etc.) allowed
+    
+    New Regime (FY 2024-25):
+      - 0-3L: Nil
+      - 3-7L: 5%
+      - 7-10L: 10%
+      - 10-12L: 15%
+      - 12-15L: 20%
+      - >15L: 30%
+      - Standard deduction: 75,000
+      - NO deductions allowed (except standard deduction)
+    
+    Returns dict with:
+      - old_regime: {taxable_income, tax_liability, effective_rate}
+      - new_regime: {taxable_income, tax_liability, effective_rate}
+      - better_regime: "old" or "new"
+      - savings: amount saved by choosing better regime
+      - recommendation: text recommendation
+    """
+    if gross_income <= 0:
+        return {
+            "old_regime": {"taxable_income": 0, "tax_liability": 0, "effective_rate": 0},
+            "new_regime": {"taxable_income": 0, "tax_liability": 0, "effective_rate": 0},
+            "better_regime": "new",
+            "savings": 0,
+            "recommendation": "No income to tax."
+        }
+    
+    # OLD REGIME CALCULATION
+    old_std_deduction = 50000
+    total_deductions_old = (
+        min(deductions_80c, 150000) +  # 80C capped at 1.5L
+        min(deductions_nps, 50000) +   # 80CCD(1B) capped at 50K
+        min(deductions_80d, 75000) +   # 80D capped at 75K (self + parents)
+        hra_exemption +
+        other_deductions +
+        old_std_deduction
+    )
+    
+    taxable_old = max(0, gross_income - total_deductions_old)
+    
+    # Old regime tax calculation
+    tax_old = 0
+    if taxable_old > 1000000:
+        tax_old = 112500 + (taxable_old - 1000000) * 0.30
+    elif taxable_old > 500000:
+        tax_old = 12500 + (taxable_old - 500000) * 0.20
+    elif taxable_old > 250000:
+        tax_old = (taxable_old - 250000) * 0.05
+    
+    # Rebate u/s 87A for old regime (if taxable income <= 5L)
+    if taxable_old <= 500000:
+        tax_old = max(0, tax_old - 12500)
+    
+    # Add 4% cess
+    tax_old_with_cess = tax_old * 1.04
+    
+    # NEW REGIME CALCULATION
+    new_std_deduction = 75000
+    taxable_new = max(0, gross_income - new_std_deduction)
+    
+    # New regime tax calculation (FY 2024-25 slabs)
+    tax_new = 0
+    if taxable_new > 1500000:
+        tax_new = 150000 + (taxable_new - 1500000) * 0.30
+    elif taxable_new > 1200000:
+        tax_new = 90000 + (taxable_new - 1200000) * 0.20
+    elif taxable_new > 1000000:
+        tax_new = 60000 + (taxable_new - 1000000) * 0.15
+    elif taxable_new > 700000:
+        tax_new = 30000 + (taxable_new - 700000) * 0.10
+    elif taxable_new > 300000:
+        tax_new = (taxable_new - 300000) * 0.05
+    
+    # Rebate u/s 87A for new regime (if taxable income <= 7L, full rebate up to 25K)
+    if taxable_new <= 700000:
+        tax_new = max(0, tax_new - 25000)
+    
+    # Add 4% cess
+    tax_new_with_cess = tax_new * 1.04
+    
+    # Determine better regime (prefer New when equal - simpler compliance)
+    if tax_new_with_cess < tax_old_with_cess:
+        better = "new"
+        savings = tax_old_with_cess - tax_new_with_cess
+    elif tax_old_with_cess < tax_new_with_cess:
+        better = "old"
+        savings = tax_new_with_cess - tax_old_with_cess
+    else:
+        # Equal taxes - prefer New Regime (simpler, government default)
+        better = "new"
+        savings = 0
+    
+    # Generate recommendation
+    if gross_income <= 700000:
+        recommendation = "With income ≤ ₹7L, New Regime is better (full rebate, zero tax)."
+    elif gross_income <= 1200000:
+        if total_deductions_old - old_std_deduction >= 150000:
+            recommendation = f"With ₹{total_deductions_old - old_std_deduction:,.0f} in deductions, Old Regime saves ₹{savings:,.0f}." if better == "old" else f"Even with deductions, New Regime saves ₹{savings:,.0f}."
+        else:
+            recommendation = "With limited deductions, New Regime is likely better."
+    else:
+        if total_deductions_old - old_std_deduction >= 375000:  # Max 80C + NPS + 80D + some HRA
+            recommendation = f"With significant deductions (₹{total_deductions_old - old_std_deduction:,.0f}), Old Regime saves ₹{savings:,.0f}."
+        else:
+            recommendation = f"{'Old' if better == 'old' else 'New'} Regime saves ₹{savings:,.0f}. Consider maximizing deductions to review."
+    
+    return {
+        "old_regime": {
+            "taxable_income": round(taxable_old, 0),
+            "total_deductions": round(total_deductions_old, 0),
+            "tax_liability": round(tax_old_with_cess, 0),
+            "effective_rate": round((tax_old_with_cess / gross_income) * 100, 2) if gross_income > 0 else 0
+        },
+        "new_regime": {
+            "taxable_income": round(taxable_new, 0),
+            "standard_deduction": new_std_deduction,
+            "tax_liability": round(tax_new_with_cess, 0),
+            "effective_rate": round((tax_new_with_cess / gross_income) * 100, 2) if gross_income > 0 else 0
+        },
+        "better_regime": better,
+        "savings": round(savings, 0),
+        "recommendation": recommendation
+    }
+
+
 def compute_effective_tax_rate(tax_paid: float, gross_income: float) -> float:
     """Calculate effective tax rate as percentage."""
     if gross_income <= 0:

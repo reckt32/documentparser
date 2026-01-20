@@ -18,7 +18,7 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from datetime import datetime
 from reportlab.pdfgen import canvas
 from extractors import index_and_extract, extract_and_store_from_indexed
-from llm_sections import run_report_sections
+from llm_sections import run_report_sections, compute_goal_sip, compute_regime_comparison
 from db import (
     list_sections,
     list_metrics,
@@ -3763,26 +3763,92 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     # ==========================================================================
     story.append(Paragraph("Page 6: Goal Feasibility Analysis", styles["h1"]))
     
+    # Calculate SIPs and funding status for all goals
+    total_required_sip = 0
+    goal_analysis = []
+    
     if goals:
+        # Get risk profile for SIP calculations
+        final_category = advanced_risk.get("finalCategory") or "Moderate"
+        
         for i, g in enumerate(goals[:5], 1):  # Limit to 5 goals
             g_name = g.get("name") or g.get("goal") or f"Goal {i}"
             g_target = _safe_float(g.get("target_amount"), 0)
-            g_horizon = g.get("horizon_years") or g.get("horizon") or "-"
+            g_horizon = g.get("horizon_years") or g.get("horizon") or None
+            
+            # Get per-goal risk tolerance if available, else use overall
+            goal_risk = g.get("risk_tolerance") or final_category
+            
+            # Calculate required SIP using the function from llm_sections
+            required_sip = None
+            if g_target > 0 and g_horizon:
+                try:
+                    required_sip = compute_goal_sip(g_target, g_horizon, goal_risk)
+                except:
+                    required_sip = None
+            
+            goal_analysis.append({
+                "name": g_name,
+                "target": g_target,
+                "horizon": g_horizon,
+                "required_sip": required_sip or 0,
+            })
+            
+            if required_sip:
+                total_required_sip += required_sip
+        
+        # Determine funding status
+        available_for_goals = monthly_surplus - total_monthly_sip  # What's left after existing SIPs
+        if available_for_goals < 0:
+            available_for_goals = monthly_surplus  # If already over-commited, use full surplus
+        
+        funding_pct = (available_for_goals / total_required_sip * 100) if total_required_sip > 0 else 100
+        shortfall = max(0, total_required_sip - available_for_goals)
+        
+        # Render each goal with SIP analysis
+        for i, ga in enumerate(goal_analysis, 1):
+            g_name = ga["name"]
+            g_target = ga["target"]
+            g_horizon = ga["horizon"]
+            required_sip = ga["required_sip"]
+            
+            # Calculate per-goal funding status
+            if total_required_sip > 0 and required_sip > 0:
+                allocated_sip = (required_sip / total_required_sip) * available_for_goals
+                if allocated_sip >= required_sip * 0.95:
+                    status = "Fully Funded"
+                    status_color = colors.HexColor('#2D6A4F')  # Green
+                elif allocated_sip >= required_sip * 0.5:
+                    status = "Partially Funded"
+                    status_color = colors.HexColor('#E9C46A')  # Yellow
+                else:
+                    status = "Gap Exists"
+                    status_color = colors.HexColor('#9D4B45')  # Red
+                gap = max(0, required_sip - allocated_sip)
+            else:
+                status = "Not Calculable"
+                status_color = colors.HexColor('#457B9D')
+                gap = 0
+                allocated_sip = 0
             
             story.append(Paragraph(f"<b>Goal {i}: {sanitize_pdf_text(g_name)}</b>", styles["h2"]))
             
             goal_rows = [
                 ["Target Amount", f"Rs. {_format_indian_amount(g_target)}" if g_target > 0 else "-"],
-                ["Horizon", f"{g_horizon} years" if g_horizon != "-" else "-"],
-                ["Feasibility", "Assess based on monthly surplus"],
+                ["Horizon", f"{g_horizon} years" if g_horizon else "-"],
+                ["Required SIP", f"Rs. {required_sip:,.0f}/month" if required_sip else "Not calculable"],
+                ["Status", status],
             ]
+            if gap > 0:
+                goal_rows.append(["Shortfall", f"Rs. {gap:,.0f}/month"])
+            
             goal_table = Table(
                 [["Parameter", "Value"]] + goal_rows,
                 hAlign="LEFT",
                 colWidths=[200, 300]
             )
             goal_table.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+                ('BACKGROUND', (0,0), (-1,0), status_color),
                 ('TEXTCOLOR', (0,0), (-1,0), colors.white),
                 ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
@@ -3792,13 +3858,60 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
             story.append(Spacer(1, 8))
     else:
         story.append(Paragraph("No goals recorded. Please add your financial goals for feasibility analysis.", styles["BodyText"]))
+        total_required_sip = 0
+        shortfall = 0
+        funding_pct = 100
+        available_for_goals = monthly_surplus
     
-    # Summary table
+    # Reality Check Summary Box
     story.append(Spacer(1, 12))
-    story.append(Paragraph("<b>Summary: What's Affordable vs What's Needed</b>", styles["h2"]))
-    story.append(Paragraph(f"• Total Goals: {len(goals)}", styles["BodyText"]))
-    story.append(Paragraph(f"• Available Monthly Surplus: Rs. {_format_indian_amount(monthly_surplus)}" if monthly_surplus > 0 else "• Available Monthly Surplus: Assess", styles["BodyText"]))
-    story.append(Paragraph(f"• Current SIP: Rs. {total_monthly_sip:,.0f}/month" if total_monthly_sip > 0 else "• Current SIP: None", styles["BodyText"]))
+    story.append(Paragraph("<b>Reality Check: Affordability Summary</b>", styles["h2"]))
+    
+    summary_rows = [
+        ["Total Goals", f"{len(goals)}"],
+        ["Total Required SIP", f"Rs. {total_required_sip:,.0f}/month"],
+        ["Current SIP Commitment", f"Rs. {total_monthly_sip:,.0f}/month" if total_monthly_sip > 0 else "None"],
+        ["Available Monthly Surplus", f"Rs. {_format_indian_amount(monthly_surplus)}"],
+        ["Available for New Goals", f"Rs. {_format_indian_amount(available_for_goals)}"],
+        ["Funding Capacity", f"{min(funding_pct, 100):.0f}% of requirement"],
+    ]
+    
+    if shortfall > 0:
+        summary_rows.append(["Monthly Shortfall", f"Rs. {shortfall:,.0f}/month"])
+    
+    summary_table = Table(
+        summary_rows,
+        hAlign="LEFT",
+        colWidths=[200, 300]
+    )
+    
+    # Color based on funding status
+    if funding_pct >= 95:
+        header_color = colors.HexColor('#2D6A4F')  # Green
+    elif funding_pct >= 50:
+        header_color = colors.HexColor('#E9C46A')  # Yellow
+    else:
+        header_color = colors.HexColor('#9D4B45')  # Red
+    
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (0,-1), header_color),
+        ('TEXTCOLOR', (0,0), (0,-1), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    ]))
+    story.append(summary_table)
+    
+    # Bridge Options if shortfall exists
+    if shortfall > 0:
+        story.append(Spacer(1, 12))
+        story.append(Paragraph("<b>Options to Bridge the Gap:</b>", styles["BodyText"]))
+        story.append(Paragraph(f"1. <b>Reduce expenses</b>: Cut Rs. {shortfall:,.0f}/month from non-essential spending", styles["BodyText"]))
+        story.append(Paragraph(f"2. <b>Increase income</b>: Add Rs. {shortfall * 1.3:,.0f}/month gross (accounting for taxes)", styles["BodyText"]))
+        story.append(Paragraph("3. <b>Extend timelines</b>: Push goal deadlines by 3-5 years to reduce monthly requirement", styles["BodyText"]))
+        story.append(Paragraph("4. <b>Reduce targets</b>: Adjust goal amounts to match available capacity", styles["BodyText"]))
+        story.append(Paragraph(f"5. <b>Start partial SIPs</b>: Begin with Rs. {available_for_goals:,.0f}/month and increase annually", styles["BodyText"]))
+    
     story.append(PageBreak())
 
     # ==========================================================================
@@ -3845,7 +3958,7 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         story.append(tax_table)
         story.append(Spacer(1, 12))
         
-        # Parse claimed deductions into a lookup
+        # Parse claimed deductions into a lookup FIRST (needed for regime comparison)
         claimed = {}
         for d in deductions:
             section = str(d.get("section", "")).upper().strip()
@@ -3857,6 +3970,78 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
             elif "80D" in section:
                 claimed["80D"] = claimed.get("80D", 0) + amount
         
+        # =====================================================
+        # OLD vs NEW REGIME COMPARISON
+        # =====================================================
+        story.append(Paragraph("Old vs New Tax Regime Comparison", styles["h2"]))
+        
+        # Calculate regime comparison using potential max deductions
+        current_80c = claimed.get("80C", 0)
+        current_nps = claimed.get("80CCD_1B", 0)
+        current_80d = claimed.get("80D", 0)
+        
+        # Also consider potential deductions if user maximizes them
+        max_80c = TAX_LIMITS["80C"]
+        max_nps = TAX_LIMITS["80CCD_1B"]
+        max_80d = TAX_LIMITS["80D_self"] + TAX_LIMITS["80D_parents"]
+        
+        # Current scenario comparison
+        regime_current = compute_regime_comparison(
+            gross_income=gross_income,
+            deductions_80c=current_80c,
+            deductions_80d=current_80d,
+            deductions_nps=current_nps
+        )
+        
+        # Optimized scenario (if user max out deductions)
+        regime_optimal = compute_regime_comparison(
+            gross_income=gross_income,
+            deductions_80c=max_80c,
+            deductions_80d=max_80d,
+            deductions_nps=max_nps
+        )
+        
+        regime_rows = [
+            ["Scenario", "Old Regime Tax", "New Regime Tax", "Better Regime"],
+            [
+                "Current (Your ITR)",
+                f"Rs. {_format_indian_amount(regime_current['old_regime']['tax_liability'])}",
+                f"Rs. {_format_indian_amount(regime_current['new_regime']['tax_liability'])}",
+                regime_current['better_regime'].title()
+            ],
+            [
+                "If Max Deductions",
+                f"Rs. {_format_indian_amount(regime_optimal['old_regime']['tax_liability'])}",
+                f"Rs. {_format_indian_amount(regime_optimal['new_regime']['tax_liability'])}",
+                regime_optimal['better_regime'].title()
+            ],
+        ]
+        
+        regime_table = Table(
+            regime_rows,
+            hAlign="LEFT",
+            colWidths=[130, 110, 110, 110]
+        )
+        
+        # Highlight better regime
+        better_color = colors.HexColor('#2D6A4F')  # Green
+        regime_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1D3557')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0,0), (-1,0), 6),
+            ('ALIGN', (1,1), (-1,-1), 'CENTER'),
+        ]))
+        story.append(regime_table)
+        story.append(Spacer(1, 8))
+        
+        # Recommendation text
+        story.append(Paragraph(f"<b>Recommendation:</b> {regime_current['recommendation']}", styles["BodyText"]))
+        if regime_current['savings'] > 0:
+            story.append(Paragraph(f"<i>Potential savings by choosing {regime_current['better_regime'].title()} Regime: Rs. {_format_indian_amount(regime_current['savings'])}</i>", styles["BodyText"]))
+        story.append(Spacer(1, 12))
+        
         # Calculate marginal tax rate (simplified)
         if taxable_income > 1000000:
             marginal_rate = 0.30
@@ -3867,55 +4052,61 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         else:
             marginal_rate = 0.0
         
-        # Calculate gaps and recommendations
+        # Calculate gaps and recommendations (only show if Old regime is beneficial)
         recommendations = []
         total_potential_saving = 0
         
-        # 80C Gap
-        current_80c = claimed.get("80C", 0)
-        gap_80c = max(0, TAX_LIMITS["80C"] - current_80c)
-        if gap_80c > 0:
-            saving_80c = gap_80c * marginal_rate
-            total_potential_saving += saving_80c
-            recommendations.append({
-                "section": "Section 80C",
-                "current": current_80c,
-                "limit": TAX_LIMITS["80C"],
-                "gap": gap_80c,
-                "saving": saving_80c,
-                "action": f"Invest Rs. {_format_indian_amount(gap_80c)} in ELSS/PPF to save Rs. {_format_indian_amount(saving_80c)} in tax"
-            })
+        # Only show deduction recommendations if Old Regime is better or income is moderate
+        show_deduction_advice = regime_optimal['better_regime'] == 'old' or gross_income > 700000
         
-        # 80CCD(1B) Gap - NPS
-        current_nps = claimed.get("80CCD_1B", 0)
-        gap_nps = max(0, TAX_LIMITS["80CCD_1B"] - current_nps)
-        if gap_nps > 0:
-            saving_nps = gap_nps * marginal_rate
-            total_potential_saving += saving_nps
-            recommendations.append({
-                "section": "Section 80CCD(1B)",
-                "current": current_nps,
-                "limit": TAX_LIMITS["80CCD_1B"],
-                "gap": gap_nps,
-                "saving": saving_nps,
-                "action": f"Invest Rs. {_format_indian_amount(gap_nps)} in NPS (additional to 80C) to save Rs. {_format_indian_amount(saving_nps)}"
-            })
-        
-        # 80D Gap - Health Insurance
-        current_80d = claimed.get("80D", 0)
-        limit_80d = TAX_LIMITS["80D_self"] + TAX_LIMITS["80D_parents"]
-        gap_80d = max(0, limit_80d - current_80d)
-        if gap_80d > 0:
-            saving_80d = gap_80d * marginal_rate
-            total_potential_saving += saving_80d
-            recommendations.append({
-                "section": "Section 80D",
-                "current": current_80d,
-                "limit": limit_80d,
-                "gap": gap_80d,
-                "saving": saving_80d,
-                "action": f"Increase health insurance premium by Rs. {_format_indian_amount(gap_80d)} to save Rs. {_format_indian_amount(saving_80d)}"
-            })
+        if show_deduction_advice:
+            # 80C Gap
+            gap_80c = max(0, TAX_LIMITS["80C"] - current_80c)
+            if gap_80c > 0:
+                saving_80c = gap_80c * marginal_rate
+                total_potential_saving += saving_80c
+                recommendations.append({
+                    "section": "Section 80C",
+                    "current": current_80c,
+                    "limit": TAX_LIMITS["80C"],
+                    "gap": gap_80c,
+                    "saving": saving_80c,
+                    "action": f"Invest Rs. {_format_indian_amount(gap_80c)} in ELSS/PPF to save Rs. {_format_indian_amount(saving_80c)} in tax"
+                })
+            
+            # 80CCD(1B) Gap - NPS
+            gap_nps = max(0, TAX_LIMITS["80CCD_1B"] - current_nps)
+            if gap_nps > 0:
+                saving_nps = gap_nps * marginal_rate
+                total_potential_saving += saving_nps
+                recommendations.append({
+                    "section": "Section 80CCD(1B)",
+                    "current": current_nps,
+                    "limit": TAX_LIMITS["80CCD_1B"],
+                    "gap": gap_nps,
+                    "saving": saving_nps,
+                    "action": f"Invest Rs. {_format_indian_amount(gap_nps)} in NPS (additional to 80C) to save Rs. {_format_indian_amount(saving_nps)}"
+                })
+            
+            # 80D Gap - Health Insurance (context-aware message)
+            limit_80d = TAX_LIMITS["80D_self"] + TAX_LIMITS["80D_parents"]
+            gap_80d = max(0, limit_80d - current_80d)
+            if gap_80d > 0:
+                saving_80d = gap_80d * marginal_rate
+                total_potential_saving += saving_80d
+                # Show different message based on whether they have health insurance
+                if health_cover == 0 and current_80d == 0:
+                    action_text = f"Get health insurance (Rs. 10L cover) - also saves Rs. {_format_indian_amount(min(saving_80d, 25000 * marginal_rate))} in tax"
+                else:
+                    action_text = f"Increase health insurance premium by Rs. {_format_indian_amount(gap_80d)} to save Rs. {_format_indian_amount(saving_80d)}"
+                recommendations.append({
+                    "section": "Section 80D",
+                    "current": current_80d,
+                    "limit": limit_80d,
+                    "gap": gap_80d,
+                    "saving": saving_80d,
+                    "action": action_text
+                })
         
         # Show personalized recommendations
         if recommendations:

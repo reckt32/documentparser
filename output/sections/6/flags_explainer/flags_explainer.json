@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "questionnaire_id": 6,
+    "section": "flags_explainer",
+    "model": "gpt-4o",
+    "ts": 1768933659,
+    "facts_hash": "9f88b35e20664e8bfe6131f598cf1b1d2e101ca36245a04e1732d4681b06ea1b",
+    "prompt": {
+      "system": "You are a senior financial planner writing for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Be precise, neutral, and practical. No guarantees or forward-looking promises. Return valid JSON with keys: title (string), bullets (array of short points), paragraphs (2-3 short paragraphs), actions (checklist items).",
+      "user": "Section: Flags and Actions\nFactsDigest JSON (<=2KB):\n{\"client\": {\"age\": \"32\", \"dependents\": 1}, \"flags\": [\"Underinsured: Cover Rs. 5 vs Required Rs. 38.4 L\", \"Insufficient Liquidity: Emergency fund 5.1 months vs Benchmark 6+\", \"Score = 27.0 -> Poor: Saving 27.0% income, high equity concentration\"], \"kpis\": {\"debtStress\": \"Healthy\", \"emiPct\": 0.0, \"ihsBand\": \"Poor\", \"insuranceGap\": \"Underinsured\", \"liquidity\": \"Insufficient\", \"liquidityMonths\": 5.13, \"surplusBand\": \"Adequate\"}}\n\nConstraints:\n- Max 6 bullets, each <= 20 words.\n- 1-2 paragraphs, each <= 80 words.\n- Max 5 actions, each actionable and specific.\n"
+    },
+    "usage": {
+      "prompt_tokens": 293,
+      "completion_tokens": 245,
+      "total_tokens": 538
+    }
+  },
+  "content": {
+    "title": "Financial Health Assessment and Recommendations",
+    "bullets": [
+      "Underinsured by Rs. 33.4 lakh.",
+      "Emergency fund covers 5.1 months.",
+      "High equity concentration in portfolio.",
+      "Saving 27% of income.",
+      "Debt stress is healthy.",
+      "Surplus income is adequate."
+    ],
+    "paragraphs": [
+      "The client is underinsured with a coverage gap of Rs. 33.4 lakh, which poses a risk to financial security. Additionally, the emergency fund is slightly below the recommended benchmark, covering only 5.1 months of expenses.",
+      "While the savings rate is commendable at 27% of income, the portfolio shows high equity concentration, which may increase risk. Debt stress is currently healthy, and surplus income is adequate, providing some financial stability."
+    ],
+    "actions": [
+      "Increase insurance coverage by Rs. 33.4 lakh.",
+      "Boost emergency fund to cover at least 6 months.",
+      "Diversify investment portfolio to reduce risk.",
+      "Maintain or increase current savings rate.",
+      "Regularly review financial plan to adjust for changes."
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "_meta": {
+    "questionnaire_id": 6,
+    "section": "executive_summary",
+    "model": "gpt-4o",
+    "ts": 1768933728,
+    "facts_hash": "282c4b08dd8db2296a9867cdebda0bc866da68976444671cc8e1c1189d351788",
+    "prompt": {
+      "system": "You write a crisp executive summary for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Executive Summary\nYou are given short outlines from multiple sections. Create a concise summary.\nSectionOutlines:\n{\"cashflow\": {\"bullets\": [\"Net Cashflow: ₹454,665.3\", \"Total Inflows: ₹922,254.0\", \"Total Outflows: ₹467,588.7\", \"Surplus Band: Adequate\"], \"title\": \"Cashflow Overview and Savings Improvement\"}, \"debt_strategy\": {\"bullets\": [\"Current EMI is Rs.0, which is 0.0% of your annual income.\", \"Maintain EMI below 30-40% of your income for financial stability.\", \"Prioritize paying off high-interest debts first.\"], \"title\": \"Debt Optimization Strategy for a Healthy Financial Future\"}, \"flags_explainer\": {\"bullets\": [\"Underinsured by Rs. 33.4 lakh.\", \"Emergency fund covers 5.1 months.\", \"High equity concentration in portfolio.\", \"Saving 27% of income.\", \"Debt stress is healthy.\"], \"title\": \"Financial Health Assessment and Recommendations\"}, \"goals_strategy\": {\"bullets\": [\"With Rs.0/month: Rs.0 for insurance, Rs.0 remaining for goals (0% of requirement)\", \"Allocate Rs.0/month for Retirement Corpus\", \"Allocate Rs.0/month for Wealth Creation\", \"Allocate Rs.0/month for Lifestyle (Bike/Car/etc)\"], \"title\": \"Goal Strategy: Prioritized Action Plan\"}, \"liquidity_plan\": {\"bullets\": [\"Current Liquidity: Insufficient\", \"Current Liquidity Coverage: 5.13 months\", \"Recommended Liquidity Coverage: 6+ months\"], \"title\": \"Enhancing Your Liquidity Plan\"}, \"portfolio_rebalance\": {\"bullets\": [\"Current equity allocation is 100%, which exceeds the recommended range of 40-55%.\", \"Target equity allocation is 48% to align with a moderate risk profile.\", \"Introduce debt instruments to balance the portfolio and reduce risk exposure.\"], \"title\": \"Portfolio Rebalancing Strategy for Moderate Risk Profile\"}, \"protection_plan\": {\"bullets\": [\"Age: 32, Annual Income: Rs. 3,84,033\", \"Dependents: 1\", \"Current Life Insurance: Rs. 0\", \"Required Life Insurance: Rs. 38,40,330\", \"Current Health Insurance: Rs. 0\"], \"title\": \"Protection Plan for Comprehensive Coverage\"}, \"risk_rationale\": {\"bullets\": [\"Your risk appetite is categorized as Moderate.\", \"The recommended equity allocation for you is between 40% and 55%.\", \"A balanced approach suggests a mid-point equity allocation of 47.5%.\", \"Your investment tenure supports a Growth strategy.\"], \"title\": \"Understanding Your Risk Profile and Asset Allocation\"}, \"tax_optimization\": {\"bullets\": [\"Utilize Section 80C fully by investing ₹150,000 in ELSS, PPF, and NPS to save ₹7,500 in tax.\", \"Invest ₹50,000 in NPS Tier-1 under Section 80CCD(1B) for an additional ₹2,500 tax saving.\", \"Top-up health insurance by ₹75,000 under Section 80D to save ₹3,750 in tax.\", \"Capitalize on GAIN_HARVESTING by booking up to ₹125,000 in LTCG tax-free.\", \"Total potential tax saving: ₹13,750 by optimizing deductions and capital gains.\"], \"title\": \"Tax Optimization: Maximize Your Savings\"}}\n\nOutput JSON keys: title, bullets (<=6), paragraphs (<=2). No actions."
+    },
+    "usage": {
+      "prompt_tokens": 798,
+      "completion_tokens": 287,
+      "total_tokens": 1085
+    }
+  },
+  "content": {
+    "title": "Comprehensive Financial Strategy for Indian Retail Clients",
+    "bullets": [
+      "Net cashflow surplus of ₹454,665.3 with adequate savings.",
+      "Maintain EMI below 30-40% of income; prioritize high-interest debt repayment.",
+      "Underinsured by ₹33.4 lakh; emergency fund covers 5.1 months.",
+      "Current equity allocation at 100% exceeds recommended 40-55%; rebalance to 48%.",
+      "Potential tax savings of ₹13,750 through strategic investments."
+    ],
+    "paragraphs": [
+      "The financial assessment reveals a net cashflow surplus of ₹454,665.3, indicating a healthy financial position with adequate savings. However, liquidity is currently insufficient, covering only 5.13 months, and should be increased to over 6 months. The debt strategy is sound with no current EMIs, but it is crucial to maintain EMIs below 30-40% of income for stability and focus on paying off high-interest debts first.",
+      "The portfolio requires rebalancing as the current 100% equity allocation exceeds the recommended range for a moderate risk profile. A target equity allocation of 48% is advised to align with a balanced risk approach. Additionally, there is a significant insurance gap of ₹33.4 lakh, necessitating a comprehensive protection plan. Tax optimization strategies could yield savings of ₹13,750 by maximizing deductions and capital gains harvesting."
+    ]
+  }
+}
