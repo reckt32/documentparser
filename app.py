@@ -3575,6 +3575,85 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     ]
     for item in recalc_items:
         story.append(Paragraph(f"• {item}", styles["BodyText"]))
+    story.append(Spacer(1, 12))
+    
+    # =========================================================================
+    # ADVANCED RISK ASSESSMENT SECTION
+    # =========================================================================
+    story.append(Paragraph("Advanced Risk Assessment", styles["h2"]))
+    
+    # Extract risk assessment values
+    risk_score = advanced_risk.get("score", 0)
+    risk_appetite = advanced_risk.get("riskAppetite", "Moderate")
+    tenure_limit = advanced_risk.get("tenureLimit", "Moderate")
+    baseline_category = advanced_risk.get("baselineCategory", "Moderate")
+    final_category = advanced_risk.get("finalCategory", "Moderate")
+    rec_equity_min = rec_band.get("min", 40)
+    rec_equity_max = rec_band.get("max", 60)
+    rec_equity_mid = (rec_equity_min + rec_equity_max) / 2
+    
+    risk_assessment_rows = [
+        ["Calculated Score", f"{risk_score:.1f}" if isinstance(risk_score, (int, float)) else str(risk_score)],
+        ["Risk Appetite", risk_appetite],
+        ["Tenure Limit", tenure_limit],
+        ["Baseline Category", baseline_category],
+        ["Final Category", final_category],
+        ["Recommended Equity Band", f"{rec_equity_min}%-{rec_equity_max}% (mid {rec_equity_mid:.1f}%)"],
+    ]
+    
+    risk_table = Table(
+        [["Parameter", "Value"]] + risk_assessment_rows,
+        hAlign="LEFT",
+        colWidths=[180, 280]
+    )
+    risk_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#9D4B45')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+    ]))
+    story.append(risk_table)
+    story.append(Spacer(1, 6))
+    
+    # Reasoning line
+    reasoning = f"Reasoning: Score {risk_score:.2f} → Appetite {risk_appetite} | Tenure limit {tenure_limit} | Baseline after adjustments {baseline_category} | Final {final_category}"
+    story.append(Paragraph(f"<i>{reasoning}</i>", styles["BodyText"]))
+    story.append(Spacer(1, 12))
+    
+    # Assessment Summary
+    story.append(Paragraph("Assessment Summary", styles["h2"]))
+    
+    # Determine status labels
+    surplus_status = "Adequate" if monthly_surplus > 0 else ("Tight" if monthly_surplus >= -5000 else "Deficit")
+    insurance_status = "Adequate" if (life_cover >= required_term_cover * 0.8 and health_cover >= required_health_cover * 0.8) else "Underinsured"
+    debt_status = "Low" if monthly_emi <= monthly_income * 0.2 else ("Moderate" if monthly_emi <= monthly_income * 0.4 else "High")
+    liquidity_status = "Sufficient" if comp["liquidity"]["score"] >= 60 else "Insufficient"
+    ihs_band = health_score.get("overall_label", "Unknown")
+    
+    summary_assessment_rows = [
+        ["Risk Profile", final_category],
+        ["Surplus Level", surplus_status],
+        ["Insurance Status", insurance_status],
+        ["Debt Position", debt_status],
+        ["Liquidity", liquidity_status],
+        ["IHS Band", ihs_band],
+    ]
+    
+    summary_table2 = Table(
+        [["Assessment", "Result"]] + summary_assessment_rows,
+        hAlign="LEFT",
+        colWidths=[180, 280]
+    )
+    summary_table2.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+    ]))
+    story.append(summary_table2)
+    
     story.append(PageBreak())
 
     # ==========================================================================
@@ -3800,7 +3879,7 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         # Determine funding status
         available_for_goals = monthly_surplus - total_monthly_sip  # What's left after existing SIPs
         if available_for_goals < 0:
-            available_for_goals = monthly_surplus  # If already over-commited, use full surplus
+            available_for_goals = max(0, monthly_surplus)  # If over-committed or negative, floor at 0
         
         funding_pct = (available_for_goals / total_required_sip * 100) if total_required_sip > 0 else 100
         shortfall = max(0, total_required_sip - available_for_goals)
@@ -3814,7 +3893,10 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
             
             # Calculate per-goal funding status
             if total_required_sip > 0 and required_sip > 0:
+                # Proportionally allocate available funds to this goal
                 allocated_sip = (required_sip / total_required_sip) * available_for_goals
+                allocated_sip = max(0, allocated_sip)  # Never negative
+                
                 if allocated_sip >= required_sip * 0.95:
                     status = "Fully Funded"
                     status_color = colors.HexColor('#2D6A4F')  # Green
@@ -3824,7 +3906,9 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
                 else:
                     status = "Gap Exists"
                     status_color = colors.HexColor('#9D4B45')  # Red
-                gap = max(0, required_sip - allocated_sip)
+                
+                # Gap is difference, capped at required_sip (can never be more than 100% shortfall)
+                gap = min(required_sip, max(0, required_sip - allocated_sip))
             else:
                 status = "Not Calculable"
                 status_color = colors.HexColor('#457B9D')
@@ -3902,15 +3986,107 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     ]))
     story.append(summary_table)
     
-    # Bridge Options if shortfall exists
-    if shortfall > 0:
-        story.append(Spacer(1, 12))
-        story.append(Paragraph("<b>Options to Bridge the Gap:</b>", styles["BodyText"]))
-        story.append(Paragraph(f"1. <b>Reduce expenses</b>: Cut Rs. {shortfall:,.0f}/month from non-essential spending", styles["BodyText"]))
-        story.append(Paragraph(f"2. <b>Increase income</b>: Add Rs. {shortfall * 1.3:,.0f}/month gross (accounting for taxes)", styles["BodyText"]))
-        story.append(Paragraph("3. <b>Extend timelines</b>: Push goal deadlines by 3-5 years to reduce monthly requirement", styles["BodyText"]))
-        story.append(Paragraph("4. <b>Reduce targets</b>: Adjust goal amounts to match available capacity", styles["BodyText"]))
-        story.append(Paragraph(f"5. <b>Start partial SIPs</b>: Begin with Rs. {available_for_goals:,.0f}/month and increase annually", styles["BodyText"]))
+    # =========================================================================
+    # REALISTIC ACTION PLAN - What you CAN do with what you HAVE
+    # =========================================================================
+    story.append(Spacer(1, 12))
+    story.append(Paragraph("<b>Your Realistic Action Plan</b>", styles["h2"]))
+    
+    # Calculate insurance premium estimates
+    term_gap = max(0, required_term_cover - life_cover)
+    health_gap = max(0, required_health_cover - health_cover)
+    
+    # Estimate monthly premiums (rough estimates)
+    term_premium_yearly = (term_gap / 100000) * 700 if term_gap > 0 else 0  # ~Rs.700/lakh/year
+    health_premium_yearly = (health_gap / 100000) * 3000 if health_gap > 0 else 0  # ~Rs.3000/lakh/year
+    total_insurance_yearly = term_premium_yearly + health_premium_yearly
+    monthly_insurance_equivalent = total_insurance_yearly / 12
+    
+    # Available for goals after insurance provision
+    surplus_after_insurance = max(0, monthly_surplus - monthly_insurance_equivalent)
+    
+    # Phase 1: Insurance (if needed)
+    if term_gap > 0 or health_gap > 0:
+        story.append(Paragraph("<b>Phase 1: Protection First (Months 1-6)</b>", styles["BodyText"]))
+        story.append(Paragraph("Before investing in goals, secure your family's protection:", styles["BodyText"]))
+        
+        if term_gap > 0:
+            story.append(Paragraph(f"• Get Term Insurance: Rs. {_format_indian_amount(term_gap)} cover → ~Rs. {term_premium_yearly:,.0f}/year premium", styles["BodyText"]))
+        if health_gap > 0:
+            story.append(Paragraph(f"• Get Health Insurance: Rs. {_format_indian_amount(health_gap)} cover → ~Rs. {health_premium_yearly:,.0f}/year premium", styles["BodyText"]))
+        
+        story.append(Paragraph(f"<i>Total insurance cost: ~Rs. {total_insurance_yearly:,.0f}/year (Rs. {monthly_insurance_equivalent:,.0f}/month equivalent)</i>", styles["BodyText"]))
+        story.append(Spacer(1, 8))
+    
+    # Phase 2: Goal SIPs with realistic allocation
+    story.append(Paragraph("<b>Phase 2: Goal-Based SIPs (After Insurance)</b>", styles["BodyText"]))
+    
+    if len(goal_analysis) > 0 and surplus_after_insurance > 0:
+        story.append(Paragraph(f"Available for goals after insurance: <b>Rs. {surplus_after_insurance:,.0f}/month</b>", styles["BodyText"]))
+        story.append(Paragraph(f"Split across {len(goal_analysis)} goals proportionally:", styles["BodyText"]))
+        story.append(Spacer(1, 8))
+        
+        # Build allocation table with projected outcomes
+        allocation_rows = [["Goal", "Allocated SIP", "Required SIP", "What You'll Achieve", "Gap"]]
+        
+        for ga in goal_analysis:
+            g_name = ga["name"][:20]  # Truncate long names
+            g_target = ga["target"]
+            g_horizon = ga["horizon"]
+            required_sip = ga["required_sip"]
+            
+            # Proportional allocation
+            if total_required_sip > 0 and required_sip > 0:
+                allocated = (required_sip / total_required_sip) * surplus_after_insurance
+            else:
+                allocated = surplus_after_insurance / max(1, len(goal_analysis))
+            
+            allocated = max(0, allocated)
+            
+            # Calculate what this SIP will actually achieve
+            if g_horizon and allocated > 0:
+                # Future Value formula: FV = P * [((1+r)^n - 1) / r]
+                # Using ~9% annual return (0.75% monthly)
+                r = 0.0075
+                n = int(g_horizon) * 12
+                if n > 0:
+                    projected_value = allocated * (((1 + r) ** n - 1) / r)
+                else:
+                    projected_value = 0
+            else:
+                projected_value = 0
+            
+            # Calculate achievement percentage
+            achievement_pct = (projected_value / g_target * 100) if g_target > 0 else 0
+            gap_amount = max(0, g_target - projected_value)
+            
+            allocation_rows.append([
+                sanitize_pdf_text(g_name),
+                f"Rs. {allocated:,.0f}",
+                f"Rs. {required_sip:,.0f}",
+                f"Rs. {_format_indian_amount(projected_value)} ({achievement_pct:.0f}%)",
+                f"Rs. {_format_indian_amount(gap_amount)}"
+            ])
+        
+        allocation_table = Table(allocation_rows, hAlign="LEFT", colWidths=[100, 80, 80, 120, 80])
+        allocation_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1D3557')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,0), 6),
+        ]))
+        story.append(allocation_table)
+        story.append(Spacer(1, 8))
+        
+        story.append(Paragraph("<b>Key Insight:</b> Starting with available surplus is better than waiting. Increase SIPs annually as income grows.", styles["BodyText"]))
+    
+    elif surplus_after_insurance <= 0:
+        story.append(Paragraph("<i>After insurance provision, no surplus remains for goal SIPs. Focus on increasing income or reducing expenses first.</i>", styles["BodyText"]))
+    
+    else:
+        story.append(Paragraph("<i>No goals defined. Add financial goals to see allocation recommendations.</i>", styles["BodyText"]))
     
     story.append(PageBreak())
 
@@ -4052,12 +4228,13 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         else:
             marginal_rate = 0.0
         
-        # Calculate gaps and recommendations (only show if Old regime is beneficial)
+        # Calculate gaps and recommendations
         recommendations = []
         total_potential_saving = 0
         
-        # Only show deduction recommendations if Old Regime is better or income is moderate
-        show_deduction_advice = regime_optimal['better_regime'] == 'old' or gross_income > 700000
+        # Only show deduction recommendations if Old Regime is ACTUALLY recommended
+        # If New Regime is recommended, these deductions are IRRELEVANT
+        show_deduction_advice = regime_current['better_regime'] == 'old'
         
         if show_deduction_advice:
             # 80C Gap
@@ -4110,8 +4287,8 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         
         # Show personalized recommendations
         if recommendations:
-            story.append(Paragraph("Your Tax Saving Opportunities", styles["h2"]))
-            story.append(Paragraph(f"<b>Based on your ITR, you can save up to Rs. {_format_indian_amount(total_potential_saving)} in tax next year!</b>", styles["BodyText"]))
+            story.append(Paragraph("Your Tax Saving Opportunities (Old Regime)", styles["h2"]))
+            story.append(Paragraph(f"<b>If you stay in Old Regime, you can save up to Rs. {_format_indian_amount(total_potential_saving)} by maximizing deductions.</b>", styles["BodyText"]))
             story.append(Spacer(1, 8))
             
             rec_rows = []
@@ -4144,6 +4321,16 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
             story.append(Spacer(1, 8))
             
             story.append(Paragraph(f"<b>Total Potential Tax Saving: Rs. {_format_indian_amount(total_potential_saving)}</b>", styles["BodyText"]))
+        elif regime_current['better_regime'] == 'new':
+            # New Regime recommended - explain that deductions don't apply
+            story.append(Paragraph("Tax Optimization under New Regime", styles["h2"]))
+            story.append(Paragraph("<b>Since New Regime is recommended for you, Section 80C, 80D, and 80CCD deductions do NOT apply.</b>", styles["BodyText"]))
+            story.append(Spacer(1, 8))
+            story.append(Paragraph("Under New Regime, focus on:", styles["BodyText"]))
+            story.append(Paragraph("• <b>Employer NPS contribution</b> (Section 80CCD-2) - still allowed up to 14% of basic", styles["BodyText"]))
+            story.append(Paragraph("• <b>Standard deduction</b> of Rs. 75,000 - automatically applied", styles["BodyText"]))
+            story.append(Paragraph("• <b>Tax-efficient investments</b> - equity funds (held >1 year for LTCG exemption)", styles["BodyText"]))
+            story.append(Paragraph("• <b>Health insurance</b> - still important for protection, even without tax benefit", styles["BodyText"]))
         else:
             story.append(Paragraph("Great! You have maximized all major tax deductions.", styles["BodyText"]))
     else:
