@@ -793,7 +793,7 @@ def extract_insurance_hybrid(text):
     data = {}
     
     is_life_insurance = bool(re.search(r"(?i)(life\s+insurance|term\s+plan|endowment|ULIP|whole\s+life)", text))
-    is_health_insurance = bool(re.search(r"(?i)(health\s+insurance|mediclaim|medical\s+insurance|hospitali[sz]ation)", text))
+    is_health_insurance = bool(re.search(r"(?i)(health\s+insurance|mediclaim|medical\s+insurance|hospitali[sz]ation|health\s*cover|in-?patient\s+treatment|annual\s+sum\s+insured|sum\s+insured|health\s+advantedge|health\s+plan|health\s+policy)", text))
     is_general_insurance = bool(re.search(r"(?i)(motor\s+insurance|vehicle\s+insurance|property\s+insurance|home\s+insurance|fire\s+insurance)", text))
     
     if is_life_insurance:
