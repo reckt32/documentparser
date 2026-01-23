@@ -1,0 +1,33 @@
+{
+  "_meta": {
+    "questionnaire_id": 7,
+    "section": "executive_summary",
+    "model": "gpt-4o",
+    "ts": 1769166748,
+    "facts_hash": "d067aff453cdceed4a4561297f37ab99fb757e8dc293263e8e36e1d040cf7d6b",
+    "prompt": {
+      "system": "You write a crisp executive summary for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Executive Summary\nYou are given short outlines from multiple sections. Create a concise summary.\nSectionOutlines:\n{\"cashflow\": {\"bullets\": [\"Net Cashflow: ₹454,665.30\", \"Total Inflows: ₹922,254.00\", \"Total Outflows: ₹467,588.70\", \"Surplus Band: Strong\"], \"title\": \"Cashflow Overview and Savings Improvement\"}, \"debt_strategy\": {\"bullets\": [\"Current EMI is Rs.0/month, which is 0.0% of your annual income.\", \"Maintain EMI below 30-40% of your income to ensure financial stability.\", \"Prioritize paying off high-interest debts first to minimize interest costs.\"], \"title\": \"Debt Optimization Strategy for a Healthy Financial Future\"}, \"flags_explainer\": {\"bullets\": [\"Age: 32, no dependents.\", \"Underinsured by Rs. 38.4 L.\", \"No emergency fund; benchmark is 6+ months.\", \"Saving 49.3% of income.\", \"High equity concentration.\"], \"title\": \"Financial Health Overview and Recommendations\"}, \"goals_strategy\": {\"bullets\": [\"With Rs.0/month: Rs.2083 for insurance, Rs.0 remaining for goals (0% of requirement)\", \"Allocate Rs.0/month for Wealth Creation\", \"Allocate Rs.0/month for Lifestyle (Bike/Car/etc)\"], \"title\": \"Goal Strategy: Prioritized Action Plan\"}, \"liquidity_plan\": {\"bullets\": [\"Current Liquidity Status: Insufficient\", \"Current Liquidity Coverage: 0 months\", \"Recommended Liquidity Coverage: 6+ months\"], \"title\": \"Emergency Fund Liquidity Plan\"}, \"portfolio_rebalance\": {\"bullets\": [\"Current equity allocation is at 100%, significantly higher than the recommended range of 40-55%.\", \"Target equity allocation is approximately 48% to align with a moderate risk profile.\", \"Introduce debt instruments to balance the portfolio and reduce risk.\"], \"title\": \"Portfolio Rebalancing Strategy for Moderate Risk Profile\"}, \"protection_plan\": {\"bullets\": [\"Current life insurance coverage is Rs.0; a significant gap of Rs.3,840,330 exists.\", \"Recommended life insurance coverage: Rs.3,840,330 through a term insurance plan.\", \"Estimated annual premium for life insurance: approximately Rs.19,202.\", \"Current health insurance coverage is critically low at Rs.5 lakh.\", \"Recommended health insurance coverage: Rs.10-15 lakh family floater.\"], \"title\": \"Protection Plan for Comprehensive Coverage\"}, \"risk_rationale\": {\"bullets\": [\"Your risk appetite is categorized as Moderate.\", \"The recommended equity allocation for you is between 40% and 55%.\", \"A balanced approach suggests a midpoint equity allocation of 47.5%.\", \"Your investment tenure supports a Growth strategy.\"], \"title\": \"Understanding Your Risk Profile and Asset Allocation\"}, \"tax_optimization\": {\"bullets\": [\"Utilize Section 80C fully by investing ₹150,000 in ELSS, PPF, and NPS to save ₹7,500 in tax.\", \"Invest ₹50,000 in NPS Tier-1 under Section 80CCD(1B) for an additional ₹2,500 tax saving.\", \"Enhance health insurance coverage under Section 80D by ₹75,000 to save ₹3,750 in tax.\", \"Capitalize on LTCG exemption by booking ₹125,000 in gains tax-free this year.\", \"Total potential tax savings amount to ₹13,750 by optimizing deductions and capital gains.\"], \"title\": \"Tax Optimization: Maximize Your Savings\"}}\n\nOutput JSON keys: title, bullets (<=6), paragraphs (<=2). No actions."
+    },
+    "usage": {
+      "prompt_tokens": 824,
+      "completion_tokens": 319,
+      "total_tokens": 1143
+    }
+  },
+  "content": {
+    "title": "Comprehensive Financial Strategy for Indian Retail Clients",
+    "bullets": [
+      "Net cashflow is strong with a surplus of ₹454,665.30, driven by inflows of ₹922,254.00.",
+      "Maintain EMI below 30-40% of income; prioritize high-interest debt repayment.",
+      "Current liquidity is insufficient; aim for 6+ months of emergency coverage.",
+      "Portfolio heavily skewed towards equity at 100%; rebalance to 48% equity for moderate risk.",
+      "Significant insurance gap of ₹3,840,330; recommend term insurance and enhanced health coverage.",
+      "Potential tax savings of ₹13,750 through strategic investments and deductions."
+    ],
+    "paragraphs": [
+      "The financial health overview indicates a strong cashflow position with a net surplus of ₹454,665.30. However, the client is underinsured by ₹38.4 lakh and lacks an emergency fund, highlighting the need for improved liquidity and protection strategies. Current debt levels are manageable with no EMIs, but maintaining EMIs below 30-40% of income is advised for future stability.",
+      "Investment strategies should focus on rebalancing the portfolio from a high equity concentration of 100% to a more balanced 48% to align with a moderate risk profile. Tax optimization can yield savings of ₹13,750 by utilizing deductions under Sections 80C, 80CCD(1B), and 80D. Addressing these areas will enhance financial resilience and growth potential."
+    ]
+  }
+}

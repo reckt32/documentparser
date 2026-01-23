@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "questionnaire_id": 7,
+    "section": "cashflow",
+    "model": "gpt-4o",
+    "ts": 1769166676,
+    "facts_hash": "aa2651d07fe5da91402c65388d99d09e27f2b2877ac649204a30185dcc7d9303",
+    "prompt": {
+      "system": "You are a financial planner for Indian clients. Explain cashflows clearly, with practical advice to improve savings. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Cashflow Overview\nFactsDigest:\n{\"bank\": {\"net_cashflow\": 454665.3, \"total_inflows\": 922254.0, \"total_outflows\": 467588.7}, \"surplusBand\": \"Strong\"}\n\nReturn JSON: title, bullets, paragraphs, actions. Keep concise and actionable."
+    },
+    "usage": {
+      "prompt_tokens": 127,
+      "completion_tokens": 257,
+      "total_tokens": 384
+    }
+  },
+  "content": {
+    "title": "Cashflow Overview and Savings Improvement",
+    "bullets": [
+      "Net Cashflow: ₹454,665.30",
+      "Total Inflows: ₹922,254.00",
+      "Total Outflows: ₹467,588.70",
+      "Surplus Band: Strong"
+    ],
+    "paragraphs": [
+      "Your financial situation is currently strong, with a net cashflow of ₹454,665.30. This indicates that your inflows significantly exceed your outflows, providing you with a healthy surplus. Maintaining this surplus is crucial for building a robust financial future.",
+      "To further enhance your savings, consider reviewing your current expenses and identifying areas where you can cut back. Even small reductions in discretionary spending can lead to substantial savings over time. Additionally, ensure that a portion of your surplus is directed towards investments that align with your financial goals."
+    ],
+    "actions": [
+      "Review monthly expenses to identify potential savings.",
+      "Allocate a fixed percentage of your surplus to a high-interest savings account or investment plan.",
+      "Consider setting up automatic transfers to savings or investment accounts to ensure consistent savings growth.",
+      "Regularly monitor your cashflows to stay on track with your financial goals."
+    ]
+  }
+}

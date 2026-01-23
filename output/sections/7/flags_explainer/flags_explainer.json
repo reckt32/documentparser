@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "questionnaire_id": 7,
+    "section": "flags_explainer",
+    "model": "gpt-4o",
+    "ts": 1769166659,
+    "facts_hash": "da2b5855a6751b0ab0d288715b5587771d983fd8743268c60b92aea7c9310fef",
+    "prompt": {
+      "system": "You are a senior financial planner writing for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Be precise, neutral, and practical. No guarantees or forward-looking promises. Return valid JSON with keys: title (string), bullets (array of short points), paragraphs (2-3 short paragraphs), actions (checklist items).",
+      "user": "Section: Flags and Actions\nFactsDigest JSON (<=2KB):\n{\"client\": {\"age\": \"32\", \"dependents\": 0}, \"flags\": [\"Underinsured: Cover Rs. 0 vs Required Rs. 38.4 L\", \"Insufficient Liquidity: Emergency fund 0.0 months vs Benchmark 6+\", \"Score = 40.0 -> Average: Saving 49.3% income, high equity concentration\"], \"kpis\": {\"debtStress\": \"Healthy\", \"emiPct\": 0.0, \"ihsBand\": \"Average\", \"insuranceGap\": \"Underinsured\", \"liquidity\": \"Insufficient\", \"liquidityMonths\": 0.0, \"surplusBand\": \"Strong\"}}\n\nConstraints:\n- Max 6 bullets, each <= 20 words.\n- 1-2 paragraphs, each <= 80 words.\n- Max 5 actions, each actionable and specific.\n"
+    },
+    "usage": {
+      "prompt_tokens": 291,
+      "completion_tokens": 238,
+      "total_tokens": 529
+    }
+  },
+  "content": {
+    "title": "Financial Health Overview and Recommendations",
+    "bullets": [
+      "Age: 32, no dependents.",
+      "Underinsured by Rs. 38.4 L.",
+      "No emergency fund; benchmark is 6+ months.",
+      "Saving 49.3% of income.",
+      "High equity concentration.",
+      "Debt stress is healthy."
+    ],
+    "paragraphs": [
+      "At 32, with no dependents, you have a strong savings rate of 49.3% of your income. However, your financial health is impacted by being underinsured by Rs. 38.4 L and lacking an emergency fund.",
+      "Your investment portfolio shows a high concentration in equities, which may increase risk. Addressing these gaps can enhance your financial stability and resilience."
+    ],
+    "actions": [
+      "Increase insurance coverage by Rs. 38.4 L.",
+      "Establish an emergency fund for at least 6 months of expenses.",
+      "Diversify investment portfolio to reduce equity concentration.",
+      "Review and adjust savings strategy regularly.",
+      "Consult a financial advisor for personalized planning."
+    ]
+  }
+}

@@ -852,24 +852,59 @@ def extract_insurance_hybrid(text):
         if key not in data:
             data[key] = "N/A"
 
+    # Helper to convert Lakhs/Crores to actual numbers
+    def _parse_indian_amount(num_str, suffix_str=""):
+        """Convert amount with optional Lakhs/Crore suffix to actual number."""
+        try:
+            base_val = clean_and_convert_to_float(num_str)
+            if base_val is None:
+                return None
+            suffix_lower = suffix_str.lower().strip() if suffix_str else ""
+            if suffix_lower in ("lakh", "lakhs", "lac", "lacs"):
+                return base_val * 100000
+            elif suffix_lower in ("crore", "crores", "cr"):
+                return base_val * 10000000
+            return base_val
+        except Exception:
+            return None
+
+    # Patterns that capture amount AND optional Lakhs/Crore suffix
+    # Priority order: Annual Sum Insured (most specific for health) > Sum Insured/Assured > Cover Amount
     sum_patterns = (
         [
-            r"(?i)Sum\s*(?:Assured|Insured)[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+)",
-            r"(?i)Life\s*Cover[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+)",
-            r"(?i)Death\s*Benefit[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+)"
+            r"(?i)Sum\s*(?:Assured|Insured)[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?",
+            r"(?i)Life\s*Cover[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?",
+            r"(?i)Death\s*Benefit[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?"
         ] if is_life_insurance else [
-            r"(?i)Sum\s*(?:Insured|Assured)[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+)",
-            r"(?i)Cover(?:age)?\s*Amount[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+)",
-            r"(?i)Policy\s*Coverage[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+)"
+            # Highest priority: "Annual Sum Insured" - this is the actual policy value
+            r"(?i)Annual\s+Sum\s+Insured[\s:\-\|]*(?:Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?",
+            # Next: general Sum Insured/Assured patterns
+            r"(?i)Sum\s*(?:Insured|Assured)[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?",
+            r"(?i)Cover(?:age)?\s*Amount[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?",
+            r"(?i)Policy\s*Coverage[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?"
         ]
     )
     
+    # Try patterns in priority order; for general patterns, find all matches and pick the largest
+    sum_value = None
     for pattern in sum_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            data["sum_assured_or_insured"] = clean_and_convert_to_float(match.group(1))
-            break
-    if "sum_assured_or_insured" not in data:
+        matches = list(re.finditer(pattern, text, re.IGNORECASE))
+        if matches:
+            # Parse all matches and pick the largest value (to avoid partial matches like "₹5 Lakhs" from descriptions)
+            best_val = None
+            for m in matches:
+                num_part = m.group(1) if m.lastindex >= 1 else None
+                suffix_part = m.group(2) if m.lastindex >= 2 else ""
+                parsed = _parse_indian_amount(num_part, suffix_part)
+                if parsed is not None and (best_val is None or parsed > best_val):
+                    best_val = parsed
+            if best_val is not None:
+                sum_value = best_val
+                break
+    
+    if sum_value is not None:
+        data["sum_assured_or_insured"] = sum_value
+    else:
         data["sum_assured_or_insured"] = "N/A"
 
     premium_patterns = [
@@ -3996,9 +4031,15 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     term_gap = max(0, required_term_cover - life_cover)
     health_gap = max(0, required_health_cover - health_cover)
     
-    # Estimate monthly premiums (rough estimates)
-    term_premium_yearly = (term_gap / 100000) * 700 if term_gap > 0 else 0  # ~Rs.700/lakh/year
-    health_premium_yearly = (health_gap / 100000) * 3000 if health_gap > 0 else 0  # ~Rs.3000/lakh/year
+    # Use age-adjusted premium rates (matching llm_sections.py PriorityAllocationEngine)
+    # Term insurance: Rs. 500/lakh (age < 35), Rs. 700/lakh (age < 45), Rs. 1200/lakh (age >= 45)
+    # Health insurance: Rs. 2500/lakh (age < 35), Rs. 3500/lakh (age < 45), Rs. 5000/lakh (age >= 45)
+    client_age = _safe_float(age, 35)  # Default to 35 if age not available
+    term_rate_per_lakh = 500 if client_age < 35 else (700 if client_age < 45 else 1200)
+    health_rate_per_lakh = 2500 if client_age < 35 else (3500 if client_age < 45 else 5000)
+    
+    term_premium_yearly = (term_gap / 100000) * term_rate_per_lakh if term_gap > 0 else 0
+    health_premium_yearly = (health_gap / 100000) * health_rate_per_lakh if health_gap > 0 else 0
     total_insurance_yearly = term_premium_yearly + health_premium_yearly
     monthly_insurance_equivalent = total_insurance_yearly / 12
     

@@ -495,10 +495,15 @@ class PriorityAllocationEngine:
     
     Priority 1: Term Insurance Premium (if gap exists & has dependents)
     Priority 2: Health Insurance Premium (if gap exists)
-    Priority 3+: Goals (remaining surplus distributed by priority rank)
+    Priority 3+: Emergency Fund + Goals (remaining surplus distributed EQUALLY)
     
-    This implements the framework:
-    "First term insurance → then health → then goals → if shortfall, show % achievable"
+    NEW Features (Manager feedback):
+    - Use available savings for insurance purchase first (lump sum from savings)
+    - If user confirms having insurance (tickmark), skip that allocation
+    - Treat Emergency Fund as a goal with low-risk allocation
+    - Divide remaining surplus EQUALLY among Emergency Fund + Goals
+    - Generate per-goal SIP table with corpus created and shortfall columns
+    - Allocate existing investments equally among goals, rebalance per goal risk
     """
     
     @staticmethod
@@ -526,110 +531,281 @@ class PriorityAllocationEngine:
         health_insurance_gap: float,
         goals: List[Dict],
         age: int = 35,
-        has_dependents: bool = True
+        has_dependents: bool = True,
+        # NEW Parameters (Manager feedback)
+        available_savings: float = 0.0,
+        has_term_insurance_confirmed: bool = False,
+        has_health_insurance_confirmed: bool = False,
+        emergency_fund_target: float = 0.0,
+        emergency_fund_current: float = 0.0,
+        existing_investments: float = 0.0,
     ) -> Dict[str, Any]:
         """
-        Compute priority-based allocation of monthly surplus.
+        Compute priority-based allocation of monthly surplus with enhanced logic.
+        
+        NEW Logic:
+        1. If user confirmed having insurance (tickmark), set that gap to zero
+        2. Use available savings for insurance purchase first (lump sum)
+        3. Only create insurance SIP for next year's premium if savings don't cover it
+        4. Divide remaining surplus EQUALLY among Emergency Fund + Goals
+        5. Generate per-goal table with corpus created vs required SIP
+        6. Existing investments divided equally among goals and rebalanced per goal risk
         
         Args:
             monthly_surplus: Available monthly savings after expenses/EMI
             term_insurance_gap: Gap in term cover (Rs.)
             health_insurance_gap: Gap in health cover (Rs.)
-            goals: List of goal dicts with 'ideal_sip', 'name', 'priority_rank'
+            goals: List of goal dicts with 'ideal_sip', 'name', 'priority_rank', 'risk_category', 'horizon_years'
             age: Client age for premium estimation
             has_dependents: Whether client has financial dependents
+            available_savings: One-time savings that can be used for insurance purchase (NEW)
+            has_term_insurance_confirmed: Frontend checkbox - user confirms having term insurance (NEW)
+            has_health_insurance_confirmed: Frontend checkbox - user confirms having health insurance (NEW)
+            emergency_fund_target: Target emergency fund amount (6 months expenses) (NEW)
+            emergency_fund_current: Current emergency fund amount (NEW)
+            existing_investments: Total current investment value that can be allocated to goals (NEW)
         
         Returns:
-            Dict with priority breakdown, achievement %, and bridge recommendations
+            Dict with priority breakdown, per-goal table, achievement %, and bridge recommendations
         """
         priority_items = []
-        allocated_so_far = 0.0
         
-        # Priority 1: Term Insurance (if has dependents and gap exists)
-        term_premium_yearly = PriorityAllocationEngine.estimate_term_premium(term_insurance_gap, age)
-        term_premium_monthly = term_premium_yearly / 12 if has_dependents and term_insurance_gap > 0 else 0
+        # --- Step 1: Handle insurance with tickmark logic ---
+        # If user confirmed having insurance, set gap to zero
+        effective_term_gap = 0 if has_term_insurance_confirmed else term_insurance_gap
+        effective_health_gap = 0 if has_health_insurance_confirmed else health_insurance_gap
         
-        term_status = "Adequate"
-        if term_premium_monthly > 0:
-            if monthly_surplus >= term_premium_monthly:
-                term_status = "Fundable"
-                allocated_so_far += term_premium_monthly
-            else:
-                term_status = "Critical Gap"
-        elif not has_dependents:
-            term_status = "Not Required"
-            
+        # Calculate yearly premiums
+        term_premium_yearly = PriorityAllocationEngine.estimate_term_premium(effective_term_gap, age) if has_dependents else 0
+        health_premium_yearly = PriorityAllocationEngine.estimate_health_premium(effective_health_gap, age)
+        total_insurance_yearly = term_premium_yearly + health_premium_yearly
+        
+        # --- Step 2: Use savings for insurance purchase ---
+        insurance_from_savings = min(available_savings, total_insurance_yearly)
+        remaining_savings_after_insurance = available_savings - insurance_from_savings
+        insurance_shortfall_yearly = max(0, total_insurance_yearly - insurance_from_savings)
+        monthly_insurance_sip = insurance_shortfall_yearly / 12  # SIP for next year's premium
+        
+        # Build priority items for insurance
+        if has_term_insurance_confirmed:
+            term_status = "Already Covered"
+            term_note = "Term insurance confirmed - no additional coverage needed"
+            term_monthly = 0
+            term_from_savings = 0
+        elif term_premium_yearly > 0:
+            term_from_savings = min(insurance_from_savings, term_premium_yearly)
+            term_status = "Use Savings" if term_from_savings >= term_premium_yearly else "Partial from Savings"
+            term_note = f"Use Rs. {term_from_savings:,.0f} from savings for this year. Cover gap: Rs. {effective_term_gap:,.0f}"
+            term_monthly = max(0, (term_premium_yearly - term_from_savings) / 12)
+        else:
+            term_status = "Not Required" if not has_dependents else "Adequate"
+            term_note = "Adequate coverage" if not has_dependents else "No gap exists"
+            term_monthly = 0
+            term_from_savings = 0
+        
         priority_items.append({
             "priority": 1,
             "name": "Term Insurance",
-            "monthly_amount": round(term_premium_monthly, 0),
+            "monthly_amount": round(term_monthly, 0),
             "yearly_amount": round(term_premium_yearly, 0),
+            "from_savings": round(term_from_savings, 0),
             "status": term_status,
-            "note": f"Cover gap: Rs. {term_insurance_gap:,.0f}" if term_insurance_gap > 0 else "Adequate coverage"
+            "note": term_note
         })
         
-        # Priority 2: Health Insurance
-        health_premium_yearly = PriorityAllocationEngine.estimate_health_premium(health_insurance_gap, age)
-        health_premium_monthly = health_premium_yearly / 12 if health_insurance_gap > 0 else 0
+        if has_health_insurance_confirmed:
+            health_status = "Already Covered"
+            health_note = "Health insurance confirmed - no additional coverage needed"
+            health_monthly = 0
+            health_from_savings = 0
+        elif health_premium_yearly > 0:
+            savings_left_for_health = max(0, insurance_from_savings - term_from_savings)
+            health_from_savings = min(savings_left_for_health, health_premium_yearly)
+            health_status = "Use Savings" if health_from_savings >= health_premium_yearly else "Partial from Savings"
+            health_note = f"Use Rs. {health_from_savings:,.0f} from savings for this year. Cover gap: Rs. {effective_health_gap:,.0f}"
+            health_monthly = max(0, (health_premium_yearly - health_from_savings) / 12)
+        else:
+            health_status = "Adequate"
+            health_note = "Adequate coverage"
+            health_monthly = 0
+            health_from_savings = 0
         
-        remaining_after_term = max(0, monthly_surplus - allocated_so_far)
-        health_status = "Adequate"
-        if health_premium_monthly > 0:
-            if remaining_after_term >= health_premium_monthly:
-                health_status = "Fundable"
-                allocated_so_far += health_premium_monthly
-            else:
-                health_status = "Gap Exists"
-                
         priority_items.append({
             "priority": 2,
             "name": "Health Insurance",
-            "monthly_amount": round(health_premium_monthly, 0),
+            "monthly_amount": round(health_monthly, 0),
             "yearly_amount": round(health_premium_yearly, 0),
+            "from_savings": round(health_from_savings, 0),
             "status": health_status,
-            "note": f"Cover gap: Rs. {health_insurance_gap:,.0f}" if health_insurance_gap > 0 else "Adequate coverage"
+            "note": health_note
         })
         
-        # Remaining for goals
-        remaining_for_goals = max(0, monthly_surplus - allocated_so_far)
+        # Total insurance SIP needed monthly (for next year's premiums)
+        total_insurance_sip_monthly = term_monthly + health_monthly
         
-        # Calculate total ideal SIP needed for all goals
-        total_ideal_sip = sum(_coerce_float(g.get("ideal_sip"), 0.0) for g in goals)
+        # --- Step 3: Remaining surplus for emergency fund + goals ---
+        remaining_for_goals_and_emergency = max(0, monthly_surplus - total_insurance_sip_monthly)
         
-        # Goal achievement percentage
-        if total_ideal_sip > 0:
-            achievement_pct = min(100.0, (remaining_for_goals / total_ideal_sip) * 100)
-        else:
-            achievement_pct = 100.0  # No goals = 100% achieved
+        # --- Step 4: Emergency Fund as a goal ---
+        emergency_fund_gap = max(0, emergency_fund_target - emergency_fund_current)
+        has_emergency_gap = emergency_fund_gap > 0
         
-        # Shortfall amount
-        shortfall = max(0, total_ideal_sip - remaining_for_goals)
+        # Count total items to divide equally: emergency fund (if gap) + goals
+        num_allocation_buckets = len(goals) + (1 if has_emergency_gap else 0)
+        per_bucket_sip = remaining_for_goals_and_emergency / num_allocation_buckets if num_allocation_buckets > 0 else 0
         
-        # Add goals as priority 3
-        goal_status = "Full" if achievement_pct >= 100 else ("Partial" if achievement_pct > 0 else "Cannot Fund")
+        # --- Step 5: Generate per-goal SIP table ---
+        goal_sip_table = []
+        total_ideal_sip = 0.0
+        total_allocated_sip = 0.0
+        
+        # Emergency Fund Entry (if gap exists)
+        if has_emergency_gap:
+            emergency_sip = per_bucket_sip
+            emergency_risk = "Low"
+            # Corpus created in 1 year with this SIP (conservative return)
+            corpus_1_year = compute_realistic_target(emergency_sip, 1, "Conservative") or 0
+            # Calculate months to reach target
+            if emergency_sip > 0:
+                months_to_target = emergency_fund_gap / (emergency_sip * 1.005)  # ~6% annual
+                years_to_target = round(months_to_target / 12, 1)
+            else:
+                years_to_target = None
+            
+            goal_sip_table.append({
+                "name": "Emergency Fund",
+                "is_emergency": True,
+                "allocated_sip": round(emergency_sip, 0),
+                "risk_category": emergency_risk,
+                "corpus_created_1yr": round(corpus_1_year, 0),
+                "ideal_sip": round(emergency_sip, 0),
+                "shortfall": 0,
+                "target_amount": round(emergency_fund_gap, 0),
+                "years_to_target": years_to_target,
+                "fund_type": "Liquid Fund / Savings Account",
+            })
+            total_allocated_sip += emergency_sip
+        
+        # Regular Goals with equal SIP allocation
+        for g in goals:
+            goal_name = g.get("name") or "Goal"
+            ideal_sip = _coerce_float(g.get("ideal_sip"), 0.0)
+            risk_cat = g.get("risk_category") or "Moderate"
+            horizon = g.get("horizon_years")
+            target_amount = _coerce_float(g.get("target_amount"), 0.0)
+            
+            allocated_sip = per_bucket_sip
+            shortfall = max(0, ideal_sip - allocated_sip)
+            
+            # Calculate corpus created with allocated SIP
+            corpus_created = compute_realistic_target(allocated_sip, horizon, risk_cat) if horizon else None
+            
+            # Fund type recommendation based on risk
+            fund_type = _get_fund_type_recommendation(risk_cat)
+            
+            goal_sip_table.append({
+                "name": goal_name,
+                "is_emergency": False,
+                "allocated_sip": round(allocated_sip, 0),
+                "risk_category": risk_cat,
+                "corpus_created": round(corpus_created, 0) if corpus_created else None,
+                "ideal_sip": round(ideal_sip, 0),
+                "shortfall": round(shortfall, 0),
+                "target_amount": round(target_amount, 0),
+                "horizon_years": horizon,
+                "fund_type": fund_type,
+            })
+            
+            total_ideal_sip += ideal_sip
+            total_allocated_sip += allocated_sip
+        
+        # Add goals summary as priority 3
+        goal_achievement_pct = min(100.0, (total_allocated_sip / total_ideal_sip) * 100) if total_ideal_sip > 0 else 100.0
+        total_shortfall = max(0, total_ideal_sip - total_allocated_sip)
+        
+        goal_status = "Full" if goal_achievement_pct >= 100 else ("Partial" if goal_achievement_pct > 0 else "Cannot Fund")
         priority_items.append({
             "priority": 3,
-            "name": "Goal SIPs",
-            "monthly_amount": round(remaining_for_goals, 0),
+            "name": "Emergency Fund + Goal SIPs",
+            "monthly_amount": round(remaining_for_goals_and_emergency, 0),
             "ideal_amount": round(total_ideal_sip, 0),
             "status": goal_status,
-            "note": f"Can fund {achievement_pct:.0f}% of goal requirements"
+            "note": f"Divided equally: Rs. {per_bucket_sip:,.0f}/month each for {num_allocation_buckets} items"
         })
         
+        # --- Step 6: Existing Investments Allocation ---
+        investments_per_goal = []
+        if existing_investments > 0 and len(goals) > 0:
+            investment_per_goal = existing_investments / len(goals)
+            for g in goals:
+                risk_cat = g.get("risk_category") or "Moderate"
+                equity_alloc = _get_equity_allocation_for_risk(risk_cat)
+                investments_per_goal.append({
+                    "goal_name": g.get("name"),
+                    "allocated_amount": round(investment_per_goal, 0),
+                    "target_equity_pct": equity_alloc["equity"],
+                    "target_debt_pct": equity_alloc["debt"],
+                    "rebalance_note": f"Rebalance to {equity_alloc['equity']}% equity, {equity_alloc['debt']}% debt for {risk_cat} risk"
+                })
+        
         # Generate bridge recommendations if shortfall exists
-        bridge_recs = generate_bridge_recommendations(shortfall, remaining_for_goals) if shortfall > 0 else []
+        bridge_recs = generate_bridge_recommendations(total_shortfall, remaining_for_goals_and_emergency) if total_shortfall > 0 else []
         
         return {
             "priority_breakdown": priority_items,
             "monthly_surplus": round(monthly_surplus, 0),
-            "allocated_to_insurance": round(term_premium_monthly + health_premium_monthly, 0),
-            "remaining_for_goals": round(remaining_for_goals, 0),
+            "available_savings": round(available_savings, 0),
+            "insurance_from_savings": round(insurance_from_savings, 0),
+            "insurance_sip_monthly": round(total_insurance_sip_monthly, 0),
+            "remaining_for_goals": round(remaining_for_goals_and_emergency, 0),
+            "per_goal_sip": round(per_bucket_sip, 0),
+            "num_allocation_buckets": num_allocation_buckets,
+            "goal_sip_table": goal_sip_table,
             "total_ideal_sip_needed": round(total_ideal_sip, 0),
-            "goal_achievement_percent": round(achievement_pct, 1),
-            "savings_shortfall": round(shortfall, 0) if shortfall > 0 else 0,
+            "total_allocated_sip": round(total_allocated_sip, 0),
+            "goal_achievement_percent": round(goal_achievement_pct, 1),
+            "savings_shortfall": round(total_shortfall, 0) if total_shortfall > 0 else 0,
             "bridge_recommendations": bridge_recs,
-            "summary": f"With Rs. {monthly_surplus:,.0f}/month surplus: Insurance needs Rs. {allocated_so_far:,.0f}, leaving Rs. {remaining_for_goals:,.0f} for goals ({achievement_pct:.0f}% of requirement)."
+            "existing_investments_allocation": investments_per_goal,
+            "summary": f"With Rs. {monthly_surplus:,.0f}/month surplus: Rs. {total_insurance_sip_monthly:,.0f} for insurance SIP, Rs. {remaining_for_goals_and_emergency:,.0f} divided equally among {num_allocation_buckets} items ({goal_achievement_pct:.0f}% of goal requirement).",
+            "insurance_recommendation": {
+                "use_savings": insurance_from_savings > 0,
+                "savings_used": round(insurance_from_savings, 0),
+                "savings_remaining": round(remaining_savings_after_insurance, 0),
+                "monthly_sip_for_next_year": round(total_insurance_sip_monthly, 0),
+                "note": f"Use Rs. {insurance_from_savings:,.0f} from savings for this year's insurance. Set up Rs. {total_insurance_sip_monthly:,.0f}/month SIP for next year's premium." if insurance_from_savings > 0 else None
+            },
+            # Keep backward compatibility
+            "allocated_to_insurance": round(total_insurance_sip_monthly, 0),
         }
+
+
+def _get_fund_type_recommendation(risk_category: str) -> str:
+    """Get recommended fund type based on risk category."""
+    cat = (risk_category or "").lower()
+    if cat in ["conservative", "low"]:
+        return "Debt Funds / Liquid Funds"
+    elif cat == "moderate":
+        return "Balanced / Hybrid Funds"
+    elif cat == "growth":
+        return "Equity Funds / Flexi-cap"
+    elif cat in ["aggressive", "very aggressive"]:
+        return "Small/Mid-cap Equity Funds"
+    return "Balanced Funds"
+
+
+def _get_equity_allocation_for_risk(risk_category: str) -> Dict[str, int]:
+    """Get target equity/debt allocation based on risk category for rebalancing."""
+    cat = (risk_category or "").lower()
+    if cat in ["conservative", "low"]:
+        return {"equity": 30, "debt": 70}
+    elif cat == "moderate":
+        return {"equity": 50, "debt": 50}
+    elif cat == "growth":
+        return {"equity": 70, "debt": 30}
+    elif cat in ["aggressive", "very aggressive"]:
+        return {"equity": 85, "debt": 15}
+    return {"equity": 50, "debt": 50}
 
 
 # ------------------------ Concrete Section Runners ------------------------ #
@@ -1015,14 +1191,42 @@ class GoalsStrategyRunner(SectionRunner):
             recommended_health = 1500000  # Rs. 15 lakh for family
         health_gap = max(0, recommended_health - current_health_cover)
         
-        # Compute priority-based allocation
+        # --- NEW: Extract additional data for enhanced allocation ---
+        lifestyle = facts.get("lifestyle") or {}
+        
+        # Available one-time savings that can be used for insurance
+        available_savings = _coerce_float(lifestyle.get("available_savings") or 
+                                          lifestyle.get("emergency_fund") or 0.0, 0.0)
+        
+        # Check if user confirmed having insurance (frontend tickmark)
+        has_term_insurance_confirmed = insurance.get("has_term_insurance_confirmed", False) or \
+                                       insurance.get("term_insurance_confirmed", False)
+        has_health_insurance_confirmed = insurance.get("has_health_insurance_confirmed", False) or \
+                                         insurance.get("health_insurance_confirmed", False)
+        
+        # Emergency fund calculations
+        emergency_fund_target = _coerce_float(monthly_expenses * 6, 0.0)  # 6 months expenses
+        emergency_fund_current = _coerce_float(lifestyle.get("emergency_fund"), 0.0)
+        
+        # Existing investments from portfolio
+        existing_investments = _coerce_float(portfolio_info.get("total_value") or 
+                                             portfolio_info.get("current_value"), 0.0)
+        
+        # Compute priority-based allocation with enhanced parameters
         priority_allocation = PriorityAllocationEngine.compute_allocation(
             monthly_surplus=available_surplus,
             term_insurance_gap=term_gap,
             health_insurance_gap=health_gap,
             goals=items,
             age=int(age),
-            has_dependents=has_dependents
+            has_dependents=has_dependents,
+            # NEW parameters
+            available_savings=available_savings,
+            has_term_insurance_confirmed=has_term_insurance_confirmed,
+            has_health_insurance_confirmed=has_health_insurance_confirmed,
+            emergency_fund_target=emergency_fund_target,
+            emergency_fund_current=emergency_fund_current,
+            existing_investments=existing_investments,
         )
         
         # --- Affordability Summary ---

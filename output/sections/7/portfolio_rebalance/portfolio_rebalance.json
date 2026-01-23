@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "questionnaire_id": 7,
+    "section": "portfolio_rebalance",
+    "model": "gpt-4o",
+    "ts": 1769166723,
+    "facts_hash": "1e0e2f47e25ff671baa6edf003747f84cdc9eac98891a1ce80cbf6217ffa6dda",
+    "prompt": {
+      "system": "You suggest high-level rebalancing directions for Indian clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹). NEVER use dollars ($). Provide CATEGORY-level guidance (e.g., 'large-cap index funds', 'debt mutual funds') but do NOT name specific AMCs or fund names. Be consistent with the client's risk profile.",
+      "user": "Section: Portfolio Rebalancing\nFactsDigest:\n{\"ihsBand\": \"Average\", \"portfolio\": {\"debt\": 0.0, \"equity\": 100.0, \"sip_count\": 1, \"total_monthly_sip\": 1499.93}, \"recommendedEquityBand\": {\"max\": 55, \"min\": 40}, \"recommendedEquityMid\": 47.5, \"riskProfile\": \"Moderate\"}\n\nINSTRUCTIONS:\n1. CURRENT vs RECOMMENDED:\n   - Current Equity: 100.0%\n   - Recommended Range: 40-55% (target: 48%)\n   - Action: REDUCE EQUITY by ~52.5% of portfolio\n\n2. CATEGORY-LEVEL GUIDANCE (use these terms, not product names):\n   TO REDUCE EQUITY:\n   - Move to short-duration debt funds or corporate bond funds\n   - Consider liquid funds for near-term needs\n   - Book profits in small/mid-cap and shift to debt\n   TO INCREASE EQUITY:\n   - Add to large-cap index funds or flexi-cap funds\n   - Use SIP route for gradual deployment\n   - Consider hybrid equity-debt funds for moderate risk\n\n3. DIVERSIFICATION SUGGESTIONS:\n   - International equity: 5-10% via US/global index funds\n   - Gold: 5-10% via sovereign gold bonds or gold ETFs\n\nReturn JSON: title, bullets, paragraphs, actions. Actions should include specific percentage shifts."
+    },
+    "usage": {
+      "prompt_tokens": 394,
+      "completion_tokens": 426,
+      "total_tokens": 820
+    }
+  },
+  "content": {
+    "title": "Portfolio Rebalancing Strategy for Moderate Risk Profile",
+    "bullets": [
+      "Current equity allocation is at 100%, significantly higher than the recommended range of 40-55%.",
+      "Target equity allocation is approximately 48% to align with a moderate risk profile.",
+      "Introduce debt instruments to balance the portfolio and reduce risk."
+    ],
+    "paragraphs": [
+      "Your current portfolio is heavily skewed towards equity, which is not aligned with your moderate risk profile. To achieve a balanced portfolio, it is essential to reduce your equity exposure and introduce debt instruments. This will help in mitigating risk and ensuring more stable returns.",
+      "To reduce equity exposure, consider booking profits in small and mid-cap equities and reallocating those funds into short-duration debt funds or corporate bond funds. These options provide relatively stable returns and lower risk compared to equities.",
+      "For liquidity and near-term financial needs, liquid funds are a suitable choice. They offer quick access to funds while providing better returns than traditional savings accounts.",
+      "To maintain some equity exposure, focus on large-cap index funds or flexi-cap funds, which offer diversification and potential for growth. Implementing a systematic investment plan (SIP) can help in gradually building this exposure while managing market volatility.",
+      "For additional diversification, consider allocating 5-10% of your portfolio to international equities through US or global index funds. This can provide exposure to global markets and reduce reliance on domestic market performance.",
+      "Additionally, incorporating 5-10% of your portfolio in gold through sovereign gold bonds or gold ETFs can act as a hedge against inflation and currency fluctuations."
+    ],
+    "actions": [
+      "Reduce equity exposure by approximately 52.5% of your portfolio.",
+      "Reallocate 40-55% of your portfolio to short-duration debt funds and corporate bond funds.",
+      "Allocate 5-10% of your portfolio to international equity via US/global index funds.",
+      "Allocate 5-10% of your portfolio to gold through sovereign gold bonds or gold ETFs."
+    ]
+  }
+}
