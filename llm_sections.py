@@ -539,6 +539,7 @@ class PriorityAllocationEngine:
         emergency_fund_target: float = 0.0,
         emergency_fund_current: float = 0.0,
         existing_investments: float = 0.0,
+        existing_sip_commitments: float = 0.0,  # Already running SIP (counts towards total investing)
     ) -> Dict[str, Any]:
         """
         Compute priority-based allocation of monthly surplus with enhanced logic.
@@ -564,6 +565,7 @@ class PriorityAllocationEngine:
             emergency_fund_target: Target emergency fund amount (6 months expenses) (NEW)
             emergency_fund_current: Current emergency fund amount (NEW)
             existing_investments: Total current investment value that can be allocated to goals (NEW)
+            existing_sip_commitments: Already running SIPs that count towards total investing (NEW)
         
         Returns:
             Dict with priority breakdown, per-goal table, achievement %, and bridge recommendations
@@ -751,6 +753,13 @@ class PriorityAllocationEngine:
         # Generate bridge recommendations if shortfall exists
         bridge_recs = generate_bridge_recommendations(total_shortfall, remaining_for_goals_and_emergency) if total_shortfall > 0 else []
         
+        # Calculate total investing (existing SIP + new allocations after insurance)
+        new_allocations_after_insurance = remaining_for_goals_and_emergency
+        total_investing = existing_sip_commitments + new_allocations_after_insurance
+        
+        # Calculate what % of goal requirement is being funded
+        goal_funding_pct = (total_investing / total_ideal_sip * 100) if total_ideal_sip > 0 else 100.0
+        
         return {
             "priority_breakdown": priority_items,
             "monthly_surplus": round(monthly_surplus, 0),
@@ -767,7 +776,18 @@ class PriorityAllocationEngine:
             "savings_shortfall": round(total_shortfall, 0) if total_shortfall > 0 else 0,
             "bridge_recommendations": bridge_recs,
             "existing_investments_allocation": investments_per_goal,
-            "summary": f"With Rs. {monthly_surplus:,.0f}/month surplus: Rs. {total_insurance_sip_monthly:,.0f} for insurance SIP, Rs. {remaining_for_goals_and_emergency:,.0f} divided equally among {num_allocation_buckets} items ({goal_achievement_pct:.0f}% of goal requirement).",
+            # NEW: Existing SIP tracking for proper report messages
+            "existing_sip_running": round(existing_sip_commitments, 0),
+            "new_allocations_available": round(new_allocations_after_insurance, 0),
+            "total_investing": round(total_investing, 0),
+            "goal_funding_percent": round(goal_funding_pct, 1),
+            "summary": (
+                f"With Rs. {monthly_surplus:,.0f}/month surplus: "
+                f"Rs. {total_insurance_sip_monthly:,.0f} for insurance, "
+                f"Rs. {remaining_for_goals_and_emergency:,.0f} remaining for goals. "
+                + (f"Already investing Rs. {existing_sip_commitments:,.0f}/month. " if existing_sip_commitments > 0 else "")
+                + f"Total investing: Rs. {total_investing:,.0f}/month ({goal_funding_pct:.1f}% of goal requirement)."
+            ),
             "insurance_recommendation": {
                 "use_savings": insurance_from_savings > 0,
                 "savings_used": round(insurance_from_savings, 0),
@@ -1179,7 +1199,7 @@ class GoalsStrategyRunner(SectionRunner):
             # Fallback: compute from required vs current
             required_cover = _coerce_float(
                 (analysis.get("_diagnostics") or {}).get("requiredLifeCover"), 
-                monthly_income * 12 * 10  # Default: 10x annual income
+                monthly_income * 12 * 15 * 1.3  # Default: 15x annual income with 1.3x inflation buffer
             )
             current_life_cover = _coerce_float(insurance.get("lifeCover"), 0.0)
             term_gap = max(0, required_cover - current_life_cover)
@@ -1227,6 +1247,7 @@ class GoalsStrategyRunner(SectionRunner):
             emergency_fund_target=emergency_fund_target,
             emergency_fund_current=emergency_fund_current,
             existing_investments=existing_investments,
+            existing_sip_commitments=existing_sip,  # Pass existing SIP for proper tracking
         )
         
         # --- Affordability Summary ---
@@ -1284,6 +1305,13 @@ class GoalsStrategyRunner(SectionRunner):
         achievement_pct = priority_data.get("goal_achievement_percent", 100)
         bridge_recs = priority_data.get("bridge_recommendations") or []
         
+        # Extract existing SIP tracking (NEW)
+        existing_sip_running = priority_data.get("existing_sip_running", 0)
+        new_allocations_available = priority_data.get("new_allocations_available", 0)
+        total_investing = priority_data.get("total_investing", 0)
+        goal_funding_pct = priority_data.get("goal_funding_percent", 0)
+        insurance_sip = priority_data.get("insurance_sip_monthly", 0)
+        
         # Extract affordability summary for budget enforcement
         affordability = digest.get("affordability_summary") or {}
         remaining_budget = affordability.get("remaining_budget_for_goals", 0)
@@ -1312,13 +1340,27 @@ class GoalsStrategyRunner(SectionRunner):
         if constraint_violated:
             user += (
                 "⚠️ **CRITICAL BUDGET CONSTRAINT - READ CAREFULLY:**\n"
-                f"   - Available monthly budget for goals: Rs. {remaining_budget:,.0f}\n"
-                f"   - Total IDEAL SIP needed (if unlimited funds): Rs. {total_ideal:,.0f}\n"
-                f"   - Recommended SIP allocation (within budget): Rs. {total_affordable:,.0f}\n"
-                f"   - Funding gap: Rs. {funding_gap:,.0f}/month\n"
-                f"   - Goals can be {fundable_pct:.0f}% funded with current savings\n\n"
-                f"**YOU MUST RECOMMEND TOTAL SIPs OF Rs. {total_affordable:,.0f}/month OR LESS.**\n"
-                "**USE THE 'affordable_sip' VALUE FOR EACH GOAL, NOT 'ideal_sip'.**\n\n"
+            )
+            # Add existing SIP context if client is already investing
+            if existing_sip_running > 0:
+                user += (
+                    f"   ✓ Already investing (current SIP running): Rs. {existing_sip_running:,.0f}/month\n"
+                    f"   - Insurance provision needed: Rs. {insurance_sip:,.0f}/month\n"
+                    f"   + Available for NEW additions: Rs. {new_allocations_available:,.0f}/month\n"
+                    f"   = TOTAL investing after changes: Rs. {total_investing:,.0f}/month ({goal_funding_pct:.1f}% of goal needs)\n\n"
+                )
+            else:
+                user += (
+                    f"   - Available monthly budget for goals: Rs. {remaining_budget:,.0f}\n"
+                    f"   - Total IDEAL SIP needed (if unlimited funds): Rs. {total_ideal:,.0f}\n"
+                    f"   - Insurance provision needed: Rs. {insurance_sip:,.0f}/month\n"
+                    f"   - Available after insurance: Rs. {new_allocations_available:,.0f}/month\n"
+                )
+            user += (
+                f"   - REQUIRED for all goals: Rs. {total_ideal:,.0f}/month\n"
+                f"   - SHORTFALL: Rs. {funding_gap:,.0f}/month\n\n"
+                f"**DO NOT say 'no surplus remains' or 'Available: Rs. 0' unless truly zero.**\n"
+                f"**Acknowledge existing investments and remaining capacity accurately.**\n\n"
             )
         
         user += (

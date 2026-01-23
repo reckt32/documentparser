@@ -1305,16 +1305,18 @@ def compute_retirement_corpus(age, monthly_income, desired_monthly_pension=None,
 
 def compute_term_insurance_need(age, monthly_income, retirement_age=60):
     """
-    Calculate term insurance requirement using Human Life Value method.
-    Formula: (retirement_age - age) * monthly_income * 12
+    Calculate term insurance requirement.
+    Formula: 15x annual income × 1.3 (inflation buffer) = 19.5x annual income
+    
+    For example: ₹30,000/month = ₹3.6 lakh/year → Required cover = ₹70.2 lakh
     
     Returns the required term cover amount.
     """
-    age_val = _safe_float(age, 30)
     mi = _safe_float(monthly_income, 0.0)
-    years_to_retirement = max(0, retirement_age - age_val)
+    annual_income = mi * 12
     
-    required_cover = years_to_retirement * mi * 12
+    # 15x annual income with 1.3x inflation buffer = 19.5x
+    required_cover = annual_income * 15 * 1.3
     return round(required_cover, 0)
 
 def compute_ihs(savings_percent, current_products, allocation):
@@ -3724,7 +3726,7 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         ["Current Status", life_status],
         ["Current Coverage", f"Rs. {_format_indian_amount(life_cover)}" if life_cover > 0 else "Rs. 0"],
         ["Recommended Coverage", f"Rs. {_format_indian_amount(required_term_cover)} minimum"],
-        ["Basis", "10x annual income"],
+        ["Basis", "15x annual income (with 1.3x inflation buffer)"],
         ["Gap", f"Rs. {_format_indian_amount(max(0, required_term_cover - life_cover))}"],
     ]
     life_table = Table(
@@ -4003,21 +4005,48 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         funding_pct = 100
         available_for_goals = monthly_surplus
     
-    # Reality Check Summary Box
+    # Reality Check Summary Box - Enhanced with Existing SIP Context
     story.append(Spacer(1, 12))
-    story.append(Paragraph("<b>Reality Check: Affordability Summary</b>", styles["h2"]))
+    story.append(Paragraph("<b>Reality Check: Your Actual Financial Situation</b>", styles["h2"]))
+    
+    # Calculate insurance provision for proper context
+    term_gap = max(0, required_term_cover - life_cover)
+    health_gap = max(0, required_health_cover - health_cover)
+    client_age = _safe_float(age, 35)
+    term_rate_per_lakh = 500 if client_age < 35 else (700 if client_age < 45 else 1200)
+    health_rate_per_lakh = 2500 if client_age < 35 else (3500 if client_age < 45 else 5000)
+    term_premium_yearly = (term_gap / 100000) * term_rate_per_lakh if term_gap > 0 else 0
+    health_premium_yearly = (health_gap / 100000) * health_rate_per_lakh if health_gap > 0 else 0
+    monthly_insurance_provision = (term_premium_yearly + health_premium_yearly) / 12
+    
+    # Calculate remaining after insurance
+    remaining_after_insurance = max(0, monthly_surplus - monthly_insurance_provision)
+    
+    # Total investing = existing SIP + new allocations
+    total_investing = total_monthly_sip + remaining_after_insurance
+    total_investing_pct = (total_investing / total_required_sip * 100) if total_required_sip > 0 else 100
     
     summary_rows = [
-        ["Total Goals", f"{len(goals)}"],
-        ["Total Required SIP", f"Rs. {total_required_sip:,.0f}/month"],
-        ["Current SIP Commitment", f"Rs. {total_monthly_sip:,.0f}/month" if total_monthly_sip > 0 else "None"],
-        ["Available Monthly Surplus", f"Rs. {_format_indian_amount(monthly_surplus)}"],
-        ["Available for New Goals", f"Rs. {_format_indian_amount(available_for_goals)}"],
-        ["Funding Capacity", f"{min(funding_pct, 100):.0f}% of requirement"],
+        ["Monthly Income", f"Rs. {_format_indian_amount(monthly_income)}"],
+        ["Monthly Expenses", f"Rs. {_format_indian_amount(monthly_expenses)}"],
+        ["Monthly Surplus", f"Rs. {_format_indian_amount(monthly_surplus)}"],
+        ["", ""],  # Separator row
+        ["Current SIP (Already Investing)", f"Rs. {total_monthly_sip:,.0f}/month" if total_monthly_sip > 0 else "None"],
     ]
     
-    if shortfall > 0:
-        summary_rows.append(["Monthly Shortfall", f"Rs. {shortfall:,.0f}/month"])
+    if monthly_insurance_provision > 0:
+        summary_rows.append(["Insurance Provision Needed", f"Rs. {monthly_insurance_provision:,.0f}/month"])
+        summary_rows.append(["Available for NEW Additions", f"Rs. {remaining_after_insurance:,.0f}/month"])
+    
+    summary_rows.extend([
+        ["", ""],  # Separator row
+        ["TOTAL Investing", f"Rs. {total_investing:,.0f}/month"],
+        ["Goal Requirement", f"Rs. {total_required_sip:,.0f}/month"],
+        ["Coverage", f"{min(total_investing_pct, 100):.1f}% of requirement"],
+    ])
+    
+    if total_required_sip > total_investing:
+        summary_rows.append(["Shortfall", f"Rs. {total_required_sip - total_investing:,.0f}/month"])
     
     summary_table = Table(
         summary_rows,
@@ -4026,9 +4055,9 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     )
     
     # Color based on funding status
-    if funding_pct >= 95:
+    if total_investing_pct >= 95:
         header_color = colors.HexColor('#2D6A4F')  # Green
-    elif funding_pct >= 50:
+    elif total_investing_pct >= 50:
         header_color = colors.HexColor('#E9C46A')  # Yellow
     else:
         header_color = colors.HexColor('#9D4B45')  # Red
@@ -4041,6 +4070,75 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         ('BOTTOMPADDING', (0,0), (-1,-1), 6),
     ]))
     story.append(summary_table)
+    story.append(Spacer(1, 12))
+    
+    # =========================================================================
+    # GOAL-WISE SIP ALLOCATION TABLE
+    # =========================================================================
+    if len(goal_analysis) > 0:
+        story.append(Paragraph("<b>Goal-wise SIP Allocation</b>", styles["h2"]))
+        
+        # Calculate per-goal allocations
+        goal_sip_rows = [["Goal", "Required SIP", "Allocated SIP", "Gap", "Status"]]
+        
+        for ga in goal_analysis:
+            g_name = ga["name"][:25]  # Truncate long names
+            required_sip = ga["required_sip"]
+            
+            # Proportional allocation from available surplus
+            if total_required_sip > 0 and required_sip > 0:
+                allocated_sip = (required_sip / total_required_sip) * remaining_after_insurance
+            else:
+                allocated_sip = remaining_after_insurance / max(1, len(goal_analysis))
+            
+            # Add share of existing SIP (proportionally)
+            if total_monthly_sip > 0 and total_required_sip > 0:
+                existing_sip_share = (required_sip / total_required_sip) * total_monthly_sip
+                allocated_sip += existing_sip_share
+            
+            gap = max(0, required_sip - allocated_sip)
+            
+            if gap <= 0 or (allocated_sip >= required_sip * 0.95):
+                status = "✓ Funded"
+            elif allocated_sip >= required_sip * 0.5:
+                status = "Partial"
+            else:
+                status = "Gap"
+            
+            goal_sip_rows.append([
+                sanitize_pdf_text(g_name),
+                f"Rs. {required_sip:,.0f}",
+                f"Rs. {allocated_sip:,.0f}",
+                f"Rs. {gap:,.0f}" if gap > 0 else "-",
+                status
+            ])
+        
+        goal_sip_table = Table(goal_sip_rows, hAlign="LEFT", colWidths=[120, 80, 80, 80, 60])
+        goal_sip_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,0), 6),
+        ]))
+        story.append(goal_sip_table)
+        story.append(Spacer(1, 8))
+        
+        # Context message
+        if total_monthly_sip > 0:
+            story.append(Paragraph(
+                f"<i>Note: You are already investing Rs. {total_monthly_sip:,.0f}/month through existing SIPs. "
+                f"After insurance provision, Rs. {remaining_after_insurance:,.0f}/month can be added. "
+                f"Total: Rs. {total_investing:,.0f}/month ({total_investing_pct:.1f}% of goal needs).</i>",
+                styles["BodyText"]
+            ))
+        else:
+            story.append(Paragraph(
+                f"<i>Note: After insurance provision of Rs. {monthly_insurance_provision:,.0f}/month, "
+                f"Rs. {remaining_after_insurance:,.0f}/month is available for goal SIPs.</i>",
+                styles["BodyText"]
+            ))
     
     # =========================================================================
     # REALISTIC ACTION PLAN - What you CAN do with what you HAVE
