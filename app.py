@@ -796,6 +796,10 @@ def extract_insurance_hybrid(text):
     is_health_insurance = bool(re.search(r"(?i)(health\s+insurance|mediclaim|medical\s+insurance|hospitali[sz]ation|health\s*cover|in-?patient\s+treatment|annual\s+sum\s+insured|sum\s+insured|health\s+advantedge|health\s+plan|health\s+policy)", text))
     is_general_insurance = bool(re.search(r"(?i)(motor\s+insurance|vehicle\s+insurance|property\s+insurance|home\s+insurance|fire\s+insurance)", text))
     
+    # Debug logging
+    print(f"[Insurance Extract] is_life_insurance: {is_life_insurance}, is_health_insurance: {is_health_insurance}, is_general_insurance: {is_general_insurance}")
+    print(f"[Insurance Extract] Text snippet (first 500 chars): {text[:500] if text else 'None'}")
+    
     if is_life_insurance:
         data["insurance_type"] = "Life Insurance"
     elif is_health_insurance:
@@ -804,6 +808,8 @@ def extract_insurance_hybrid(text):
         data["insurance_type"] = "General Insurance"
     else:
         data["insurance_type"] = "Unknown"
+    
+    print(f"[Insurance Extract] Final insurance_type: {data['insurance_type']}")
 
     patterns = {
         "policy_number": [
@@ -857,7 +863,8 @@ def extract_insurance_hybrid(text):
         """Convert amount with optional Lakhs/Crore suffix to actual number."""
         try:
             base_val = clean_and_convert_to_float(num_str)
-            if base_val is None:
+            # clean_and_convert_to_float returns "N/A" string on failure, not None
+            if base_val is None or base_val == "N/A" or not isinstance(base_val, (int, float)):
                 return None
             suffix_lower = suffix_str.lower().strip() if suffix_str else ""
             if suffix_lower in ("lakh", "lakhs", "lac", "lacs"):
@@ -865,7 +872,8 @@ def extract_insurance_hybrid(text):
             elif suffix_lower in ("crore", "crores", "cr"):
                 return base_val * 10000000
             return base_val
-        except Exception:
+        except Exception as e:
+            print(f"[Insurance Extract] Error in _parse_indian_amount: {e}")
             return None
 
     # Patterns that capture amount AND optional Lakhs/Crore suffix
@@ -900,12 +908,15 @@ def extract_insurance_hybrid(text):
                     best_val = parsed
             if best_val is not None:
                 sum_value = best_val
+                print(f"[Insurance Extract] Pattern matched: {pattern}, best_val: {best_val}")
                 break
     
     if sum_value is not None:
         data["sum_assured_or_insured"] = sum_value
     else:
         data["sum_assured_or_insured"] = "N/A"
+    
+    print(f"[Insurance Extract] Final sum_assured_or_insured: {data['sum_assured_or_insured']}")
 
     premium_patterns = [
         r"(?i)(?:Annual\s*)?Premium(?:\s*Amount)?[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+)",
@@ -2119,27 +2130,34 @@ def build_prefill_from_insights(qid: int) -> dict:
             doc_type = (upload["doc_type"] or "").lower()
             if "insurance" in doc_type:
                 metadata_json = upload["metadata_json"]
+                print(f"[Prefill] Found insurance upload, metadata_json: {metadata_json[:500] if metadata_json else 'None'}")
                 if metadata_json:
                     try:
                         metadata = json.loads(metadata_json)
                         ins_type = str(metadata.get("insurance_type") or "").lower()
                         sum_val = metadata.get("sum_assured_or_insured")
                         
+                        print(f"[Prefill] Parsed insurance_type: '{ins_type}', sum_assured_or_insured: {sum_val}")
+                        
                         # Also check aggregated insights if not in metadata
                         if sum_val is None or sum_val == "N/A":
                             sum_val = ins.get("sum_assured_or_insured")
+                            print(f"[Prefill] Fallback to aggregated insights: {sum_val}")
                         
                         if isinstance(sum_val, (int, float)) and sum_val > 0:
                             if "health" in ins_type or "mediclaim" in ins_type:
                                 # Add to health cover (may have multiple health policies)
                                 existing_health = insurance_prefill.get("health_cover", 0.0)
                                 insurance_prefill["health_cover"] = existing_health + float(sum_val)
+                                print(f"[Prefill] Added to health_cover: {sum_val}")
                             elif "life" in ins_type or "term" in ins_type or "ulip" in ins_type:
                                 # Add to life cover
                                 existing_life = insurance_prefill.get("life_cover", 0.0)
                                 insurance_prefill["life_cover"] = existing_life + float(sum_val)
+                                print(f"[Prefill] Added to life_cover: {sum_val}")
                             else:
                                 # Unknown type: default to life_cover
+                                print(f"[Prefill] Unknown insurance type '{ins_type}', defaulting to life_cover")
                                 existing_life = insurance_prefill.get("life_cover", 0.0)
                                 insurance_prefill["life_cover"] = existing_life + float(sum_val)
                     except Exception:
@@ -2415,6 +2433,7 @@ def upload_document():
                             other_data["provenance"] = summaries["provenance"]
 
                     # Update document metadata if linked to questionnaire
+                    print(f"[Upload] doc_type={doc_type}, idx={idx}, upload_link_ids={upload_link_ids}, idx in upload_link_ids: {idx in upload_link_ids}")
                     if idx in upload_link_ids:
                         try:
                             metadata_update = {"size_bytes": len(file_bytes)}
@@ -2442,8 +2461,10 @@ def upload_document():
                                 metadata_update["insurance_type"] = other_data.get("insurance_type")
                                 metadata_update["sum_assured_or_insured"] = other_data.get("sum_assured_or_insured")
                                 metadata_update["date_of_birth"] = other_data.get("date_of_birth")
+                                print(f"[Upload] Insurance metadata to save: insurance_type={metadata_update.get('insurance_type')}, sum={metadata_update.get('sum_assured_or_insured')}")
                             
                             update_questionnaire_upload_metadata(upload_link_ids[idx], metadata_update)
+                            print(f"[Upload] Metadata updated for doc_type={doc_type}, upload_id={upload_link_ids[idx]}")
                         except Exception as e:
                             print(f"Error updating {doc_type} metadata: {e}")
 
