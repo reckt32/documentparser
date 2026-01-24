@@ -72,15 +72,18 @@ def _format_indian_amount(amount: float) -> str:
     """Format amount in Indian currency style (lakhs/crores) for compact display in PDFs."""
     if amount is None or amount == 0:
         return "0"
+    # Preserve negative sign for deficit/negative values
+    is_negative = amount < 0
     amount = abs(amount)
+    prefix = "-" if is_negative else ""
     if amount >= 1_00_00_000:  # 1 crore
-        return f"{amount / 1_00_00_000:.1f} Cr"
+        return f"{prefix}{amount / 1_00_00_000:.1f} Cr"
     elif amount >= 1_00_000:  # 1 lakh
-        return f"{amount / 1_00_000:.1f} L"
+        return f"{prefix}{amount / 1_00_000:.1f} L"
     elif amount >= 1000:
-        return f"{amount / 1000:.1f} K"
+        return f"{prefix}{amount / 1000:.1f} K"
     else:
-        return str(int(round(amount)))
+        return f"{prefix}{int(round(amount))}"
 
 def _register_temp_download(data: bytes, filename: str, mimetype: str = "application/pdf") -> str:
     token = os.urandom(16).hex()
@@ -893,23 +896,36 @@ def extract_insurance_hybrid(text):
         ]
     )
     
-    # Try patterns in priority order; for general patterns, find all matches and pick the largest
+    # Try patterns in priority order
+    # For "Annual Sum Insured" (first pattern) - take the FIRST match as that's the declared policy value
+    # For fallback patterns - pick the largest to avoid catching small descriptive values
     sum_value = None
-    for pattern in sum_patterns:
+    for idx, pattern in enumerate(sum_patterns):
         matches = list(re.finditer(pattern, text, re.IGNORECASE))
         if matches:
-            # Parse all matches and pick the largest value (to avoid partial matches like "₹5 Lakhs" from descriptions)
-            best_val = None
-            for m in matches:
+            if idx == 0:
+                # First pattern is "Annual Sum Insured" - take the first match (the declared policy value)
+                m = matches[0]
                 num_part = m.group(1) if m.lastindex >= 1 else None
                 suffix_part = m.group(2) if m.lastindex >= 2 else ""
                 parsed = _parse_indian_amount(num_part, suffix_part)
-                if parsed is not None and (best_val is None or parsed > best_val):
-                    best_val = parsed
-            if best_val is not None:
-                sum_value = best_val
-                print(f"[Insurance Extract] Pattern matched: {pattern}, best_val: {best_val}")
-                break
+                if parsed is not None:
+                    sum_value = parsed
+                    print(f"[Insurance Extract] Pattern matched (first): {pattern[:50]}..., value: {sum_value}")
+                    break
+            else:
+                # Fallback patterns - pick the largest value to avoid partial matches like "₹5 Lakhs" from descriptions
+                best_val = None
+                for m in matches:
+                    num_part = m.group(1) if m.lastindex >= 1 else None
+                    suffix_part = m.group(2) if m.lastindex >= 2 else ""
+                    parsed = _parse_indian_amount(num_part, suffix_part)
+                    if parsed is not None and (best_val is None or parsed > best_val):
+                        best_val = parsed
+                if best_val is not None:
+                    sum_value = best_val
+                    print(f"[Insurance Extract] Pattern matched (largest): {pattern[:50]}..., best_val: {best_val}")
+                    break
     
     if sum_value is not None:
         data["sum_assured_or_insured"] = sum_value
@@ -3935,12 +3951,17 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
                 total_required_sip += required_sip
         
         # Determine funding status
-        available_for_goals = monthly_surplus - total_monthly_sip  # What's left after existing SIPs
-        if available_for_goals < 0:
-            available_for_goals = max(0, monthly_surplus)  # If over-committed or negative, floor at 0
+        # Note: existing SIP is already invested FROM surplus - it represents current investing capacity
+        # Total investing power = existing SIP (already committed) + surplus (available for new investments)
+        # For goal allocation, we consider how much of total goal requirement can be met
+        total_investing_capacity = total_monthly_sip + max(0, monthly_surplus)
         
-        funding_pct = (available_for_goals / total_required_sip * 100) if total_required_sip > 0 else 100
-        shortfall = max(0, total_required_sip - available_for_goals)
+        # For proportional allocation to individual goals, we use the surplus (new money available)
+        # But existing SIP should be considered as already contributing to goals
+        available_for_goals = max(0, monthly_surplus)  # New money available for goal allocation
+        
+        funding_pct = (total_investing_capacity / total_required_sip * 100) if total_required_sip > 0 else 100
+        shortfall = max(0, total_required_sip - total_investing_capacity)
         
         # Render each goal with SIP analysis
         for i, ga in enumerate(goal_analysis, 1):
@@ -4019,11 +4040,13 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     health_premium_yearly = (health_gap / 100000) * health_rate_per_lakh if health_gap > 0 else 0
     monthly_insurance_provision = (term_premium_yearly + health_premium_yearly) / 12
     
-    # Calculate remaining after insurance
-    remaining_after_insurance = max(0, monthly_surplus - monthly_insurance_provision)
+    # Calculate remaining after insurance (can be negative if in deficit)
+    # This shows what's theoretically available for NEW SIP additions after insurance needs
+    surplus_after_insurance = monthly_surplus - monthly_insurance_provision
+    available_for_new_sips = max(0, surplus_after_insurance)  # Can't invest negative
     
-    # Total investing = existing SIP + new allocations
-    total_investing = total_monthly_sip + remaining_after_insurance
+    # Total investing = existing SIP + new allocations (if any available)
+    total_investing = total_monthly_sip + available_for_new_sips
     total_investing_pct = (total_investing / total_required_sip * 100) if total_required_sip > 0 else 100
     
     summary_rows = [
@@ -4036,7 +4059,11 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     
     if monthly_insurance_provision > 0:
         summary_rows.append(["Insurance Provision Needed", f"Rs. {monthly_insurance_provision:,.0f}/month"])
-        summary_rows.append(["Available for NEW Additions", f"Rs. {remaining_after_insurance:,.0f}/month"])
+        # Show clear deficit indicator if surplus is negative
+        if surplus_after_insurance < 0:
+            summary_rows.append(["Available for NEW Additions", f"Rs. 0/month (Deficit: Rs. {abs(surplus_after_insurance):,.0f})"])
+        else:
+            summary_rows.append(["Available for NEW Additions", f"Rs. {available_for_new_sips:,.0f}/month"])
     
     summary_rows.extend([
         ["", ""],  # Separator row
@@ -4078,18 +4105,21 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     if len(goal_analysis) > 0:
         story.append(Paragraph("<b>Goal-wise SIP Allocation</b>", styles["h2"]))
         
-        # Calculate per-goal allocations
-        goal_sip_rows = [["Goal", "Required SIP", "Allocated SIP", "Gap", "Status"]]
+        # Calculate per-goal existing portfolio allocation
+        portfolio_per_goal = current_portfolio / len(goal_analysis) if len(goal_analysis) > 0 and current_portfolio > 0 else 0
+        
+        # Calculate per-goal allocations - include existing portfolio column
+        goal_sip_rows = [["Goal", "Required SIP", "Allocated SIP", "Existing Corpus", "Gap", "Status"]]
         
         for ga in goal_analysis:
-            g_name = ga["name"][:25]  # Truncate long names
+            g_name = ga["name"][:20]  # Truncate long names
             required_sip = ga["required_sip"]
             
             # Proportional allocation from available surplus
             if total_required_sip > 0 and required_sip > 0:
-                allocated_sip = (required_sip / total_required_sip) * remaining_after_insurance
+                allocated_sip = (required_sip / total_required_sip) * available_for_new_sips
             else:
-                allocated_sip = remaining_after_insurance / max(1, len(goal_analysis))
+                allocated_sip = available_for_new_sips / max(1, len(goal_analysis))
             
             # Add share of existing SIP (proportionally)
             if total_monthly_sip > 0 and total_required_sip > 0:
@@ -4109,11 +4139,12 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
                 sanitize_pdf_text(g_name),
                 f"Rs. {required_sip:,.0f}",
                 f"Rs. {allocated_sip:,.0f}",
+                f"Rs. {_format_indian_amount(portfolio_per_goal)}" if portfolio_per_goal > 0 else "-",
                 f"Rs. {gap:,.0f}" if gap > 0 else "-",
                 status
             ])
         
-        goal_sip_table = Table(goal_sip_rows, hAlign="LEFT", colWidths=[120, 80, 80, 80, 60])
+        goal_sip_table = Table(goal_sip_rows, hAlign="LEFT", colWidths=[100, 70, 70, 70, 60, 50])
         goal_sip_table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#457B9D')),
             ('TEXTCOLOR', (0,0), (-1,0), colors.white),
@@ -4129,14 +4160,29 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
         if total_monthly_sip > 0:
             story.append(Paragraph(
                 f"<i>Note: You are already investing Rs. {total_monthly_sip:,.0f}/month through existing SIPs. "
-                f"After insurance provision, Rs. {remaining_after_insurance:,.0f}/month can be added. "
+                f"After insurance provision, Rs. {available_for_new_sips:,.0f}/month can be added. "
                 f"Total: Rs. {total_investing:,.0f}/month ({total_investing_pct:.1f}% of goal needs).</i>",
                 styles["BodyText"]
             ))
         else:
+            if monthly_surplus < 0:
+                story.append(Paragraph(
+                    f"<i>Note: Your expenses exceed income by Rs. {abs(monthly_surplus):,.0f}/month. "
+                    f"Focus on reducing expenses or increasing income before new SIPs.</i>",
+                    styles["BodyText"]
+                ))
+            else:
+                story.append(Paragraph(
+                    f"<i>Note: After insurance provision of Rs. {monthly_insurance_provision:,.0f}/month, "
+                    f"Rs. {available_for_new_sips:,.0f}/month is available for goal SIPs.</i>",
+                    styles["BodyText"]
+                ))
+        
+        # Existing portfolio note
+        if current_portfolio > 0:
             story.append(Paragraph(
-                f"<i>Note: After insurance provision of Rs. {monthly_insurance_provision:,.0f}/month, "
-                f"Rs. {remaining_after_insurance:,.0f}/month is available for goal SIPs.</i>",
+                f"<i>Your existing portfolio of Rs. {_format_indian_amount(current_portfolio)} has been allocated "
+                f"Rs. {_format_indian_amount(portfolio_per_goal)} per goal to offset target amounts.</i>",
                 styles["BodyText"]
             ))
     

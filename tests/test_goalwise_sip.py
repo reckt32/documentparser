@@ -28,7 +28,8 @@ else:
 # Test 2: Generate a PDF and check content
 print("\n--- Test 2: PDF Content Verification ---")
 
-# Sample questionnaire data
+# Sample questionnaire data - using values from sample_docs bank statement
+# Bank statement shows: Credits=922254, Debits=467588.70
 sample_q = {
     "id": 9999,
     "personal_info": {"name": "Test User", "age": 32},
@@ -41,8 +42,10 @@ sample_q = {
         ]
     },
     "lifestyle": {
-        "annual_income": 380000,
-        "monthly_expenses": 39000,
+        # From sample_docs bank statement: Credits=922254 (annual income)
+        "annual_income": 922254,
+        # From sample_docs bank statement: Debits=467588.70 / 12 = 38965.72
+        "monthly_expenses": 38966,
         "monthly_emi": 0,
     },
     "insurance": {
