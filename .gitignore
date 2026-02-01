@@ -18,3 +18,8 @@ LogFiles/
 deployments/
 
 sample_docs/
+
+# Firebase credentials (NEVER commit these!)
+serviceAccountKey.json
+*-firebase-adminsdk-*.json
+firebase-*.json

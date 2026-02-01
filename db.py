@@ -195,6 +195,26 @@ def init_db():
     )
     _exec("CREATE INDEX IF NOT EXISTS idx_q_uploads_qid ON questionnaire_uploads(questionnaire_id)")
 
+    # Users table for Firebase authentication and payment tracking
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+          id INTEGER PRIMARY KEY,
+          firebase_uid TEXT UNIQUE NOT NULL,
+          email TEXT,
+          display_name TEXT,
+          has_paid INTEGER DEFAULT 0,
+          payment_id TEXT,
+          payment_order_id TEXT,
+          payment_amount_paise INTEGER,
+          payment_date TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    _exec("CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid)")
+
 
 def upsert_document(sha256: str, filename: str, page_count: int) -> int:
     rows = _query("SELECT id FROM documents WHERE sha256=?", (sha256,))
@@ -405,5 +425,72 @@ def update_questionnaire_upload_metadata(upload_id: int, metadata: Dict[str, Any
         (json.dumps(metadata), upload_id)
     )
 
+
+# User helpers for Firebase authentication
+def get_user_by_firebase_uid(firebase_uid: str) -> Optional[Dict[str, Any]]:
+    """Get user by Firebase UID."""
+    rows = _query("SELECT * FROM users WHERE firebase_uid = ?", (firebase_uid,))
+    if not rows:
+        return None
+    row = rows[0]
+    return {
+        "id": row["id"],
+        "firebase_uid": row["firebase_uid"],
+        "email": row["email"],
+        "display_name": row["display_name"],
+        "has_paid": bool(row["has_paid"]),
+        "payment_id": row["payment_id"],
+        "payment_order_id": row["payment_order_id"],
+        "payment_amount_paise": row["payment_amount_paise"],
+        "payment_date": row["payment_date"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def create_or_update_user(firebase_uid: str, email: str = None, display_name: str = None) -> int:
+    """Create a new user or update existing user info. Returns user id."""
+    existing = get_user_by_firebase_uid(firebase_uid)
+    if existing:
+        # Update existing user
+        _exec(
+            """
+            UPDATE users SET email = COALESCE(?, email), display_name = COALESCE(?, display_name),
+            updated_at = CURRENT_TIMESTAMP WHERE firebase_uid = ?
+            """,
+            (email, display_name, firebase_uid)
+        )
+        return existing["id"]
+    else:
+        # Create new user
+        cur = _exec(
+            "INSERT INTO users (firebase_uid, email, display_name) VALUES (?, ?, ?)",
+            (firebase_uid, email, display_name)
+        )
+        return cur.lastrowid
+
+
+def mark_user_as_paid(firebase_uid: str, payment_id: str, order_id: str = None, amount_paise: int = None) -> bool:
+    """Mark a user as paid after successful payment. Returns True if updated."""
+    result = _exec(
+        """
+        UPDATE users SET has_paid = 1, payment_id = ?, payment_order_id = ?,
+        payment_amount_paise = ?, payment_date = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP WHERE firebase_uid = ?
+        """,
+        (payment_id, order_id, amount_paise, firebase_uid)
+    )
+    return result.rowcount > 0
+
+
+def check_user_payment_status(firebase_uid: str) -> bool:
+    """Check if user has paid. Returns False if user doesn't exist."""
+    rows = _query("SELECT has_paid FROM users WHERE firebase_uid = ?", (firebase_uid,))
+    if not rows:
+        return False
+    return bool(rows[0]["has_paid"])
+
+
 # Initialize schema on import
 init_db()
+

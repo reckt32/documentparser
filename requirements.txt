@@ -8,3 +8,5 @@ Flask-Cors
 reportlab
 Flask-Login
 PyMuPDF
+firebase-admin
+razorpay

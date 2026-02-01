@@ -39,6 +39,19 @@ from db import (
     insert_metric,
     delete_metrics_for_doc_keys,
     update_questionnaire_upload_metadata,
+    get_user_by_firebase_uid,
+    create_or_update_user,
+)
+
+# Auth and Payment modules
+from auth import require_auth, require_payment, verify_firebase_token, optional_auth
+from payment import (
+    create_razorpay_order,
+    verify_razorpay_signature,
+    verify_webhook_signature,
+    process_payment_captured,
+    get_payment_status,
+    get_report_price_paise,
 )
 # --- Initialization ---
 load_dotenv()
@@ -5278,6 +5291,8 @@ def _default_strategy_for_goal(g):
     return "Diversified approach."
 
 @app.route("/report/generate", methods=["POST"])
+@require_auth
+@require_payment
 def report_generate():
     data = request.get_json(force=True) or {}
     questionnaire_id = data.get("questionnaire_id")
@@ -5537,6 +5552,222 @@ def generate_pdf_summary(summary_data, output_path):
     doc.build(story, onFirstPage=header, onLaterPages=header, canvasmaker=CustomCanvas)
 
 # --- Main Execution ---
+
+# =============================================================================
+# AUTH AND PAYMENT ROUTES
+# =============================================================================
+
+@app.route("/auth/verify", methods=["POST"])
+def auth_verify():
+    """
+    Verify Firebase ID token and create/update user in database.
+    Called after client-side Firebase login.
+    
+    Request body:
+        - id_token: Firebase ID token
+    
+    Returns:
+        - User info and payment status
+    """
+    data = request.get_json(force=True) or {}
+    id_token = data.get("id_token")
+    
+    if not id_token:
+        return jsonify({"error": "id_token required"}), 400
+    
+    decoded = verify_firebase_token(id_token)
+    if not decoded:
+        return jsonify({"error": "Invalid or expired token"}), 401
+    
+    # Create or update user in database
+    firebase_uid = decoded["uid"]
+    user_id = create_or_update_user(
+        firebase_uid=firebase_uid,
+        email=decoded.get("email"),
+        display_name=decoded.get("name")
+    )
+    
+    # Get full user info
+    user = get_user_by_firebase_uid(firebase_uid)
+    
+    return jsonify({
+        "success": True,
+        "user": {
+            "firebase_uid": user["firebase_uid"],
+            "email": user["email"],
+            "display_name": user["display_name"],
+            "has_paid": user["has_paid"],
+            "payment_date": user["payment_date"],
+        }
+    }), 200
+
+
+@app.route("/auth/status", methods=["GET"])
+@require_auth
+def auth_status():
+    """
+    Get current user's authentication and payment status.
+    Requires valid Firebase ID token in Authorization header.
+    """
+    from flask import g
+    user = g.current_user
+    
+    return jsonify({
+        "authenticated": True,
+        "user": {
+            "firebase_uid": user["firebase_uid"],
+            "email": user["email"],
+            "display_name": user["display_name"],
+            "has_paid": user["has_paid"],
+            "payment_date": user["payment_date"],
+        },
+        "report_price_paise": get_report_price_paise(),
+    }), 200
+
+
+@app.route("/payment/create-order", methods=["POST"])
+@require_auth
+def payment_create_order():
+    """
+    Create a Razorpay order for payment.
+    Requires valid Firebase ID token in Authorization header.
+    
+    Returns:
+        - Razorpay order details for client-side payment
+    """
+    from flask import g
+    user = g.current_user
+    
+    # Check if already paid
+    if user.get("has_paid"):
+        return jsonify({
+            "error": "Already paid",
+            "message": "You have already completed payment"
+        }), 400
+    
+    try:
+        order = create_razorpay_order(firebase_uid=user["firebase_uid"])
+        return jsonify({
+            "success": True,
+            "order": order,
+            "user_email": user.get("email"),
+        }), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        print(f"Error creating Razorpay order: {e}")
+        return jsonify({"error": "Failed to create payment order"}), 500
+
+
+@app.route("/payment/verify", methods=["POST"])
+@require_auth
+def payment_verify():
+    """
+    Verify payment after successful Razorpay checkout.
+    Requires valid Firebase ID token in Authorization header.
+    
+    Request body:
+        - order_id: Razorpay order ID
+        - payment_id: Razorpay payment ID
+        - signature: Razorpay signature
+    
+    Returns:
+        - Payment verification status
+    """
+    from flask import g
+    from db import mark_user_as_paid
+    
+    user = g.current_user
+    data = request.get_json(force=True) or {}
+    
+    order_id = data.get("order_id")
+    payment_id = data.get("payment_id")
+    signature = data.get("signature")
+    
+    if not all([order_id, payment_id, signature]):
+        return jsonify({"error": "Missing payment verification data"}), 400
+    
+    # Verify signature
+    if not verify_razorpay_signature(order_id, payment_id, signature):
+        return jsonify({"error": "Invalid payment signature"}), 400
+    
+    # Mark user as paid
+    success = mark_user_as_paid(
+        firebase_uid=user["firebase_uid"],
+        payment_id=payment_id,
+        order_id=order_id,
+        amount_paise=get_report_price_paise()
+    )
+    
+    if success:
+        return jsonify({
+            "success": True,
+            "message": "Payment verified successfully",
+            "has_paid": True
+        }), 200
+    else:
+        return jsonify({
+            "error": "Failed to update payment status",
+            "message": "Please contact support"
+        }), 500
+
+
+@app.route("/payment/webhook", methods=["POST"])
+def payment_webhook():
+    """
+    Razorpay webhook handler for payment events.
+    Verifies webhook signature and processes payment.captured events.
+    """
+    # Get raw payload for signature verification
+    payload = request.get_data()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    
+    if not signature:
+        print("Webhook received without signature")
+        return jsonify({"status": "ignored"}), 200
+    
+    # Verify webhook signature
+    if not verify_webhook_signature(payload, signature):
+        print("Webhook signature verification failed")
+        return jsonify({"error": "Invalid signature"}), 400
+    
+    # Parse payload
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return jsonify({"error": "Invalid JSON"}), 400
+    
+    event = data.get("event")
+    
+    if event == "payment.captured":
+        payment_entity = data.get("payload", {}).get("payment", {}).get("entity", {})
+        if payment_entity:
+            process_payment_captured(payment_entity)
+        return jsonify({"status": "processed"}), 200
+    
+    # Log other events but don't process
+    print(f"Received Razorpay webhook event: {event}")
+    return jsonify({"status": "acknowledged"}), 200
+
+
+@app.route("/payment/status", methods=["GET"])
+@require_auth
+def payment_status():
+    """
+    Get current user's payment status.
+    """
+    from flask import g
+    user = g.current_user
+    
+    return jsonify({
+        "has_paid": user.get("has_paid", False),
+        "payment_id": user.get("payment_id"),
+        "payment_date": user.get("payment_date"),
+        "report_price_paise": get_report_price_paise(),
+    }), 200
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
