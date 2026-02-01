@@ -5,6 +5,7 @@ import re
 import json
 from openai import OpenAI
 from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from .env file
 import os
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
