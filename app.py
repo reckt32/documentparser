@@ -53,6 +53,102 @@ from payment import (
     get_payment_status,
     get_report_price_paise,
 )
+# --- Logging Configuration ---
+import logging
+import uuid
+
+# Configure basic logging (simplified for compatibility)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
+def _redact_pii(text: str) -> str:
+    """Redact PII like PAN, account numbers, names from log output."""
+    if not text or not isinstance(text, str):
+        return str(text) if text else ""
+    redacted = text
+    # Redact PAN (format: ABCDE1234F)
+    redacted = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]\b', 'PAN-XXXX', redacted)
+    # Redact account numbers (8-20 digits, possibly with X or *)
+    redacted = re.sub(r'\b[Xx\*\d]{8,20}\b', 'ACCT-XXXX', redacted)
+    # Redact Aadhaar (12 digits)
+    redacted = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', 'AADHAAR-XXXX', redacted)
+    # Redact email addresses
+    redacted = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', 'EMAIL-REDACTED', redacted)
+    # Redact phone numbers (10 digits, possibly with country code)
+    redacted = re.sub(r'(\+91[-\s]?)?\b\d{10}\b', 'PHONE-XXXX', redacted)
+    return redacted
+
+def _log_extraction(doc_type: str, field: str, value, confidence: float = None, extra: dict = None):
+    """Structured logging for extraction events with optional confidence."""
+    log_data = {
+        "doc_type": doc_type,
+        "field": field,
+        "value_preview": _redact_pii(str(value)[:100]) if value else None,
+        "confidence": confidence
+    }
+    if extra:
+        log_data.update(extra)
+    logger.info(f"Extracted {field}: {log_data}")
+
+# --- Extraction Confidence Scoring ---
+def _create_extraction_meta(field: str, value, source: str, pattern_idx: int = 0, 
+                            total_patterns: int = 1) -> dict:
+    """
+    Create confidence metadata for an extracted field.
+    
+    Args:
+        field: Field name being extracted
+        value: Extracted value
+        source: Source of extraction ('regex', 'llm', 'fallback')
+        pattern_idx: Index of matching pattern (0 = primary pattern, higher = fallback)
+        total_patterns: Total number of patterns tried
+    
+    Returns:
+        Dict with confidence score (0.0-1.0) and needs_review flag
+    """
+    if value is None or value == "N/A" or value == "":
+        return {
+            "confidence": 0.0,
+            "source": source,
+            "needs_review": True,
+            "reason": "No value extracted"
+        }
+    
+    # Base confidence based on source
+    if source == "regex":
+        # Primary patterns = high confidence, fallback patterns = decreasing confidence  
+        base_confidence = 0.95 - (pattern_idx * 0.1)
+    elif source == "llm":
+        base_confidence = 0.80  # LLM extractions are less certain
+    else:
+        base_confidence = 0.60  # Fallback/derived values
+    
+    # Clamp to valid range
+    confidence = max(0.1, min(0.99, base_confidence))
+    
+    return {
+        "confidence": round(confidence, 2),
+        "source": source,
+        "needs_review": confidence < 0.70,
+        "pattern_position": f"{pattern_idx + 1}/{total_patterns}" if source == "regex" else None
+    }
+
+def _add_extraction_metadata(data: dict, field_meta: dict) -> None:
+    """
+    Add extraction metadata to a data dict, creating _extraction_meta if needed.
+    
+    Args:
+        data: The extraction result dict to modify
+        field_meta: Dict mapping field names to their confidence metadata
+    """
+    if "_extraction_meta" not in data:
+        data["_extraction_meta"] = {}
+    data["_extraction_meta"].update(field_meta)
+
 # --- Initialization ---
 load_dotenv()
 
@@ -77,6 +173,69 @@ STORE_REPORTS = os.getenv("STORE_REPORTS", "disk").lower()
 SAVE_TX_JSON = os.getenv("SAVE_TX_JSON", "false").lower() == "true"
 # Simple in-memory store for ephemeral downloads
 TEMP_REPORTS = {}
+
+# --- Security: PDF Validation ---
+MAX_PDF_SIZE_BYTES = 10 * 1024 * 1024  # 10MB limit
+
+def _validate_pdf_file(file_bytes: bytes, filename: str = "upload.pdf") -> tuple:
+    """
+    Validate a PDF file for security concerns.
+    
+    Args:
+        file_bytes: Raw file content
+        filename: Original filename for logging
+    
+    Returns:
+        (is_valid, error_message) tuple
+    """
+    # Check file size
+    if len(file_bytes) > MAX_PDF_SIZE_BYTES:
+        return False, f"File too large ({len(file_bytes) / 1024 / 1024:.1f}MB). Maximum size is 10MB."
+    
+    if len(file_bytes) < 4:
+        return False, "File is too small to be a valid PDF."
+    
+    # Check PDF magic bytes (%PDF)
+    if not file_bytes[:4] == b'%PDF':
+        return False, "Invalid PDF format. File does not start with PDF header."
+    
+    # Basic check for PDF end marker (%%EOF)
+    # Note: Some PDFs have trailing content after %%EOF, so we check the last 1024 bytes
+    if b'%%EOF' not in file_bytes[-1024:]:
+        logger.warning(f"PDF {_redact_pii(filename)} may be incomplete (no %%EOF marker found)")
+        # Don't fail validation, just log warning - some PDFs are valid without this
+    
+    return True, None
+
+def _sanitize_text_for_llm(text: str, max_length: int = 20000) -> str:
+    """
+    Sanitize text before sending to LLM to prevent prompt injection.
+    
+    Args:
+        text: Raw extracted text
+        max_length: Maximum text length to send to LLM
+    
+    Returns:
+        Sanitized text string
+    """
+    if not text:
+        return ""
+    
+    # Truncate to max length
+    sanitized = text[:max_length]
+    
+    # Remove potential prompt injection patterns (basic heuristic)
+    injection_patterns = [
+        r'(?i)ignore\s+(?:all\s+)?(?:previous|above)\s+instructions?',
+        r'(?i)you\s+are\s+now\s+(?:a|in)\s+(?:new|different)',
+        r'(?i)system\s*:\s*you\s+(?:are|will)',
+        r'(?i)<\s*/?system\s*>',
+    ]
+    
+    for pattern in injection_patterns:
+        sanitized = re.sub(pattern, '[FILTERED]', sanitized)
+    
+    return sanitized
 
 # Logo path - uses app directory for production compatibility
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
@@ -496,7 +655,7 @@ def extract_bank_statement_transactions(file_like):
                         transactions.append(txn)
                         last_txn = txn
     except Exception as e:
-        print(f"Error extracting bank transactions: {e}")
+        logger.error(f"Error extracting bank transactions: {e}")
 
     # post-process: clean None-only rows
     clean_txns = []
@@ -621,13 +780,21 @@ def extract_bank_statement_hybrid(text, transactions_payload=None, save_json_pat
                 {"role": "user", "content": llm_prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.1
+            temperature=0.05
         )
         llm_data = json.loads(response.choices[0].message.content)
+        # Add confidence metadata for LLM-extracted fields
+        for llm_field in llm_data.keys():
+            _add_extraction_metadata(data, {
+                llm_field: _create_extraction_meta(llm_field, llm_data[llm_field], "llm")
+            })
         data.update(llm_data)
     except Exception as e:
-        print(f"LLM Error: {str(e)}")
+        logger.error(f"LLM extraction error for bank statement: {str(e)}")
         data['extraction_error'] = str(e)
+        _add_extraction_metadata(data, {
+            "_llm_extraction": {"confidence": 0.0, "source": "llm", "needs_review": True, "reason": str(e)}
+        })
     # Merge in any precomputed totals from structured parsing when LLM omitted
     if transactions_payload and isinstance(transactions_payload, dict):
         totals = transactions_payload.get("totals", {})
@@ -782,7 +949,7 @@ def extract_itr_hybrid(text):
                 {"role": "user", "content": llm_prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.1
+            temperature=0.05
         )
         llm_data = json.loads(response.choices[0].message.content)
         
@@ -798,10 +965,20 @@ def extract_itr_hybrid(text):
                 if d.get("section") not in existing_sections:
                     existing_deductions.append(d)
             data["deductions_claimed"] = existing_deductions
+        
+        # Add confidence metadata for LLM-extracted fields  
+        for key in ["income_sources", "carry_forward_losses", "assets_and_liabilities", "tax_computation", "deductions_claimed"]:
+            if key in data:
+                _add_extraction_metadata(data, {
+                    key: _create_extraction_meta(key, data[key], "llm")
+                })
             
     except Exception as e:
-        print(f"LLM Error: {str(e)}")
+        logger.error(f"LLM extraction error for ITR: {str(e)}")
         data['extraction_error'] = str(e)
+        _add_extraction_metadata(data, {
+            "_llm_extraction": {"confidence": 0.0, "source": "llm", "needs_review": True, "reason": str(e)}
+        })
         
     return data
 
@@ -813,8 +990,7 @@ def extract_insurance_hybrid(text):
     is_general_insurance = bool(re.search(r"(?i)(motor\s+insurance|vehicle\s+insurance|property\s+insurance|home\s+insurance|fire\s+insurance)", text))
     
     # Debug logging
-    print(f"[Insurance Extract] is_life_insurance: {is_life_insurance}, is_health_insurance: {is_health_insurance}, is_general_insurance: {is_general_insurance}")
-    print(f"[Insurance Extract] Text snippet (first 500 chars): {text[:500] if text else 'None'}")
+    logger.debug(f"Insurance type detection - life: {is_life_insurance}, health: {is_health_insurance}, general: {is_general_insurance}")
     
     if is_life_insurance:
         data["insurance_type"] = "Life Insurance"
@@ -825,7 +1001,7 @@ def extract_insurance_hybrid(text):
     else:
         data["insurance_type"] = "Unknown"
     
-    print(f"[Insurance Extract] Final insurance_type: {data['insurance_type']}")
+    logger.info(f"Detected insurance_type: {data['insurance_type']}")
 
     patterns = {
         "policy_number": [
@@ -866,13 +1042,21 @@ def extract_insurance_hybrid(text):
     }
 
     for key, pattern_list in patterns.items():
-        for pattern in pattern_list:
+        matched_idx = None
+        for idx, pattern in enumerate(pattern_list):
             match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
             if match:
                 data[key] = match.group(1).strip() if match.group(1) else "N/A"
+                matched_idx = idx
                 break
         if key not in data:
             data[key] = "N/A"
+        # Add confidence metadata for this field
+        _add_extraction_metadata(data, {
+            key: _create_extraction_meta(key, data[key], "regex", 
+                                        pattern_idx=matched_idx if matched_idx is not None else len(pattern_list),
+                                        total_patterns=len(pattern_list))
+        })
 
     # Helper to convert Lakhs/Crores to actual numbers
     def _parse_indian_amount(num_str, suffix_str=""):
@@ -889,7 +1073,7 @@ def extract_insurance_hybrid(text):
                 return base_val * 10000000
             return base_val
         except Exception as e:
-            print(f"[Insurance Extract] Error in _parse_indian_amount: {e}")
+            logger.warning(f"Error parsing Indian amount: {e}")
             return None
 
     # Patterns that capture amount AND optional Lakhs/Crore suffix
@@ -924,7 +1108,7 @@ def extract_insurance_hybrid(text):
                 parsed = _parse_indian_amount(num_part, suffix_part)
                 if parsed is not None:
                     sum_value = parsed
-                    print(f"[Insurance Extract] Pattern matched (first): {pattern[:50]}..., value: {sum_value}")
+                    logger.debug(f"Sum pattern matched (primary): value={sum_value}")
                     break
             else:
                 # Fallback patterns - pick the largest value to avoid partial matches like "₹5 Lakhs" from descriptions
@@ -937,15 +1121,26 @@ def extract_insurance_hybrid(text):
                         best_val = parsed
                 if best_val is not None:
                     sum_value = best_val
-                    print(f"[Insurance Extract] Pattern matched (largest): {pattern[:50]}..., best_val: {best_val}")
+                    logger.debug(f"Sum pattern matched (fallback): value={best_val}")
+                    sum_pattern_idx = idx  # Track which pattern matched
                     break
     
     if sum_value is not None:
         data["sum_assured_or_insured"] = sum_value
+        # High confidence for primary "Annual Sum Insured" pattern (idx=0), lower for fallbacks
+        _add_extraction_metadata(data, {
+            "sum_assured_or_insured": _create_extraction_meta(
+                "sum_assured_or_insured", sum_value, "regex",
+                pattern_idx=sum_pattern_idx if 'sum_pattern_idx' in dir() else 0,
+                total_patterns=len(sum_patterns))
+        })
     else:
         data["sum_assured_or_insured"] = "N/A"
+        _add_extraction_metadata(data, {
+            "sum_assured_or_insured": {"confidence": 0.0, "source": "regex", "needs_review": True, "reason": "No value extracted"}
+        })
     
-    print(f"[Insurance Extract] Final sum_assured_or_insured: {data['sum_assured_or_insured']}")
+    _log_extraction("insurance", "sum_assured_or_insured", data['sum_assured_or_insured'])
 
     premium_patterns = [
         r"(?i)(?:Annual\s*)?Premium(?:\s*Amount)?[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+)",
@@ -1032,13 +1227,22 @@ def extract_insurance_hybrid(text):
                 {"role": "user", "content": llm_prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.1
+            temperature=0.05
         )
         llm_data = json.loads(response.choices[0].message.content)
+        # Add confidence metadata for LLM-extracted fields
+        for llm_field in llm_data.keys():
+            if llm_field not in data.get("_extraction_meta", {}):  # Don't override regex confidence
+                _add_extraction_metadata(data, {
+                    llm_field: _create_extraction_meta(llm_field, llm_data[llm_field], "llm")
+                })
         data.update(llm_data)
     except Exception as e:
-        print(f"LLM Error: {str(e)}")
+        logger.error(f"LLM extraction error for insurance: {str(e)}")
         data['extraction_error'] = str(e)
+        _add_extraction_metadata(data, {
+            "_llm_extraction": {"confidence": 0.0, "source": "llm", "needs_review": True, "reason": str(e)}
+        })
         
     return data
 
@@ -1125,13 +1329,21 @@ def extract_mutual_fund_cas_hybrid(text):
                 {"role": "user", "content": llm_prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.1
+            temperature=0.05
         )
         llm_data = json.loads(response.choices[0].message.content)
+        # Add confidence metadata for LLM-extracted fields
+        for llm_field in llm_data.keys():
+            _add_extraction_metadata(data, {
+                llm_field: _create_extraction_meta(llm_field, llm_data[llm_field], "llm")
+            })
         data.update(llm_data)
     except Exception as e:
-        print(f"LLM Error: {str(e)}")
+        logger.error(f"LLM extraction error for CAS: {str(e)}")
         data['extraction_error'] = str(e)
+        _add_extraction_metadata(data, {
+            "_llm_extraction": {"confidence": 0.0, "source": "llm", "needs_review": True, "reason": str(e)}
+        })
     
     # Also extract explicit 'Investment Snapshot' style summary (prefer last occurrence in doc)
     try:
@@ -1148,14 +1360,13 @@ def extract_structured_text_with_tables(file_stream):
     Extracts structured text and tables from a PDF file stream using pdfplumber.
     Tables are converted to a markdown-like format.
     """
-    print("Starting structured text extraction...")
+    logger.debug("Starting structured text extraction...")
     text_content = []
     try:
         # Use the file stream directly with pdfplumber
         with pdfplumber.open(file_stream) as pdf:
-            print(f"PDF has {len(pdf.pages)} pages.")
+            logger.debug(f"PDF has {len(pdf.pages)} pages.")
             for page_num, page in enumerate(pdf.pages):
-                print(f"Processing page {page_num + 1}...")
                 text_content.append(f"\n--- Page {page_num + 1} ---\n")
                 
                 # Extract text first, which is the default behavior of page.extract_text()
@@ -1183,10 +1394,10 @@ def extract_structured_text_with_tables(file_stream):
                         text_content.append("\n")
     
     
-        print("Finished structured text extraction.")
+        logger.debug("Finished structured text extraction.")
         return "".join(text_content)
     except Exception as e:
-        print(f"Error in extract_structured_text_with_tables: {e}")
+        logger.error(f"Error in extract_structured_text_with_tables: {e}")
         raise
 
 # --- Financial Health Analysis Helpers ---
@@ -1967,7 +2178,7 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
                         except (ValueError, TypeError):
                             pass
                 except Exception as e:
-                    print(f"Error parsing ITR metadata: {e}")
+                    logger.warning(f"Error parsing ITR metadata: {e}")
                     continue
 
     for did in doc_ids:
@@ -2060,7 +2271,7 @@ def _get_cas_data_for_questionnaire(qid: int) -> dict:
                     if cas_data:
                         return cas_data
                 except Exception as e:
-                    print(f"Error parsing CAS metadata: {e}")
+                    logger.warning(f"Error parsing CAS metadata: {e}")
                     continue
 
     return {}
@@ -2140,9 +2351,9 @@ def build_prefill_from_insights(qid: int) -> dict:
                         continue
         if total_monthly_emi > 0:
             lifestyle["monthly_emi"] = round(total_monthly_emi, 2)
-            print(f"[Prefill] Extracted monthly_emi: {lifestyle['monthly_emi']}")
+            logger.debug(f"Prefill extracted monthly_emi: {lifestyle['monthly_emi']}")
     except Exception as e:
-        print(f"[Prefill] Error extracting monthly_emi: {e}")
+        logger.warning(f"Prefill error extracting monthly_emi: {e}")
 
     allocation = {}
     try:
@@ -2360,12 +2571,12 @@ def upload_document():
     upload_link_ids = {}  # Track upload link IDs for metadata updates
     for idx, (file, doc_type) in enumerate(zip(files, types)):
         try:
-            print(f"Processing file {idx + 1}: {file.filename}")
+            logger.info(f"Processing file {idx + 1}: {file.filename}")
             # Read file bytes once so we can reuse for multiple parsers
             file_bytes = file.read()
             file_stream_for_text = io.BytesIO(file_bytes)
             text = extract_structured_text_with_tables(file_stream_for_text)
-            print(f"Extracted text for file {idx + 1} successfully.")
+            logger.debug(f"Extracted text for file {idx + 1} successfully.")
 
             # Index and extract deterministic summaries (snapshot/statement) with provenance
             sha, doc_id, summaries = index_and_extract(file_bytes, filename=file.filename or "upload.pdf")
@@ -2384,7 +2595,7 @@ def upload_document():
                     # Store link_id for updating CAS metadata later
                     upload_link_ids[idx] = link_id
                 except Exception as e:
-                    print(f"Failed linking upload to questionnaire {questionnaire_id}: {e}")
+                    logger.error(f"Failed linking upload to questionnaire {questionnaire_id}: {e}")
             
             if not text.strip():
                 extracted_data[f"Document {idx+1} ({doc_type})"] = {"error": "No text could be extracted from this PDF."}
@@ -2447,9 +2658,9 @@ def upload_document():
                             }
                             update_questionnaire_upload_metadata(upload_link_ids[idx], bank_metadata)
                             recurring_debits_count = len(bank_data.get("recurring_debits", []))
-                            print(f"[Upload] Bank statement metadata saved: {recurring_debits_count} recurring debits")
+                            logger.info(f"Bank statement metadata saved: {recurring_debits_count} recurring debits")
                         except Exception as e:
-                            print(f"Error updating Bank statement metadata: {e}")
+                            logger.error(f"Error updating Bank statement metadata: {e}")
                 else:
                     other_data = func(text)
                     # Merge DB-backed summaries if present (useful for CAS/Portfolio PDFs)
@@ -2464,7 +2675,7 @@ def upload_document():
                             other_data["provenance"] = summaries["provenance"]
 
                     # Update document metadata if linked to questionnaire
-                    print(f"[Upload] doc_type={doc_type}, idx={idx}, upload_link_ids={upload_link_ids}, idx in upload_link_ids: {idx in upload_link_ids}")
+                    logger.debug(f"Checking upload link: doc_type={doc_type}, idx={idx}")
                     if idx in upload_link_ids:
                         try:
                             metadata_update = {"size_bytes": len(file_bytes)}
@@ -2492,18 +2703,18 @@ def upload_document():
                                 metadata_update["insurance_type"] = other_data.get("insurance_type")
                                 metadata_update["sum_assured_or_insured"] = other_data.get("sum_assured_or_insured")
                                 metadata_update["date_of_birth"] = other_data.get("date_of_birth")
-                                print(f"[Upload] Insurance metadata to save: insurance_type={metadata_update.get('insurance_type')}, sum={metadata_update.get('sum_assured_or_insured')}")
+                                logger.debug(f"Insurance metadata: type={metadata_update.get('insurance_type')}, sum={metadata_update.get('sum_assured_or_insured')}")
                             
                             update_questionnaire_upload_metadata(upload_link_ids[idx], metadata_update)
-                            print(f"[Upload] Metadata updated for doc_type={doc_type}, upload_id={upload_link_ids[idx]}")
+                            logger.info(f"Metadata updated: doc_type={doc_type}, upload_id={upload_link_ids[idx]}")
                         except Exception as e:
-                            print(f"Error updating {doc_type} metadata: {e}")
+                            logger.error(f"Error updating {doc_type} metadata: {e}")
 
                     extracted_data[f"{name} {idx+1}"] = other_data
                     try:
                         _persist_metrics_for_doc(doc_id, other_data)
                     except Exception as e:
-                        print(f"Persist metrics ({doc_type}) failed: {e}")
+                        logger.error(f"Persist metrics ({doc_type}) failed: {e}")
             else:
                 # Generic fallback: still return deterministic DB-backed summaries even if doc type is unknown
                 generic = {}
@@ -5655,7 +5866,7 @@ def payment_create_order():
     except ValueError as e:
         return jsonify({"error": str(e)}), 500
     except Exception as e:
-        print(f"Error creating Razorpay order: {e}")
+        logger.error(f"Error creating Razorpay order: {e}")
         return jsonify({"error": "Failed to create payment order"}), 500
 
 
@@ -5723,12 +5934,12 @@ def payment_webhook():
     signature = request.headers.get("X-Razorpay-Signature", "")
     
     if not signature:
-        print("Webhook received without signature")
+        logger.warning("Webhook received without signature")
         return jsonify({"status": "ignored"}), 200
     
     # Verify webhook signature
     if not verify_webhook_signature(payload, signature):
-        print("Webhook signature verification failed")
+        logger.warning("Webhook signature verification failed")
         return jsonify({"error": "Invalid signature"}), 400
     
     # Parse payload
@@ -5746,7 +5957,7 @@ def payment_webhook():
         return jsonify({"status": "processed"}), 200
     
     # Log other events but don't process
-    print(f"Received Razorpay webhook event: {event}")
+    logger.info(f"Received Razorpay webhook event: {event}")
     return jsonify({"status": "acknowledged"}), 200
 
 
