@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, url_for, send_from_directory, send_file
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 import pdfplumber
 import re
 import json
