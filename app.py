@@ -4311,10 +4311,11 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     health_premium_yearly = (health_gap / 100000) * health_rate_per_lakh if health_gap > 0 else 0
     monthly_insurance_provision = (term_premium_yearly + health_premium_yearly) / 12
     
-    # Calculate remaining after insurance (can be negative if in deficit)
-    # This shows what's theoretically available for NEW SIP additions after insurance needs
-    surplus_after_insurance = monthly_surplus - monthly_insurance_provision
-    available_for_new_sips = max(0, surplus_after_insurance)  # Can't invest negative
+    # Calculate remaining after existing SIP and insurance (can be negative if in deficit)
+    # Existing SIPs are already consuming part of the surplus, so subtract them first
+    # Formula: available_for_new = surplus - existing_sip - insurance
+    surplus_after_sip_and_insurance = monthly_surplus - total_monthly_sip - monthly_insurance_provision
+    available_for_new_sips = max(0, surplus_after_sip_and_insurance)  # Can't invest negative
     
     # Total investing = existing SIP + new allocations (if any available)
     total_investing = total_monthly_sip + available_for_new_sips
@@ -4331,8 +4332,8 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     if monthly_insurance_provision > 0:
         summary_rows.append(["Insurance Provision Needed", f"Rs. {monthly_insurance_provision:,.0f}/month"])
         # Show clear deficit indicator if surplus is negative
-        if surplus_after_insurance < 0:
-            summary_rows.append(["Available for NEW Additions", f"Rs. 0/month (Deficit: Rs. {abs(surplus_after_insurance):,.0f})"])
+        if surplus_after_sip_and_insurance < 0:
+            summary_rows.append(["Available for NEW Additions", f"Rs. 0/month (Deficit: Rs. {abs(surplus_after_sip_and_insurance):,.0f})"])
         else:
             summary_rows.append(["Available for NEW Additions", f"Rs. {available_for_new_sips:,.0f}/month"])
     
@@ -4479,8 +4480,9 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     total_insurance_yearly = term_premium_yearly + health_premium_yearly
     monthly_insurance_equivalent = total_insurance_yearly / 12
     
-    # Available for goals after insurance provision
-    surplus_after_insurance = max(0, monthly_surplus - monthly_insurance_equivalent)
+    # Available for goals after existing SIP and insurance provision
+    # Existing SIPs are already consuming part of the surplus
+    surplus_after_insurance = max(0, monthly_surplus - total_monthly_sip - monthly_insurance_equivalent)
     
     # Phase 1: Insurance (if needed)
     if term_gap > 0 or health_gap > 0:

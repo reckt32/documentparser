@@ -646,7 +646,9 @@ class PriorityAllocationEngine:
         total_insurance_sip_monthly = term_monthly + health_monthly
         
         # --- Step 3: Remaining surplus for emergency fund + goals ---
-        remaining_for_goals_and_emergency = max(0, monthly_surplus - total_insurance_sip_monthly)
+        # Subtract existing SIP (already committed) before calculating what's available for NEW goals
+        # Formula: remaining = surplus - existing_sip - insurance
+        remaining_for_goals_and_emergency = max(0, monthly_surplus - existing_sip_commitments - total_insurance_sip_monthly)
         
         # --- Step 4: Emergency Fund as a goal ---
         emergency_fund_gap = max(0, emergency_fund_target - emergency_fund_current)
