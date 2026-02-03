@@ -756,7 +756,31 @@ def extract_bank_statement_hybrid(text, transactions_payload=None, save_json_pat
         - average_monthly_balance
 
     2. recurring_credits: Array of objects with description, amount, frequency, dates
-    3. recurring_debits: Array of objects with description, amount, frequency, dates
+    
+    3. recurring_debits: Array of objects with:
+        - description: Transaction description
+        - amount: Numeric amount (no currency symbols)
+        - frequency: Monthly/Quarterly/Yearly/Ad-hoc
+        - dates: Array of dates when this recurring debit occurred
+        - is_emi: Boolean - true if this is an EMI/loan payment, false otherwise
+        
+        **EMI IDENTIFICATION RULES (IMPORTANT):**
+        Mark is_emi=true for transactions that match ANY of these patterns:
+        - Contains "EMI", "LOAN", "LN", "MORTGAGE", "INSTALMENT", "INSTALLMENT", "REPAYMENT"
+        - Contains bank-specific loan codes: "ELM" (ICICI EMI), "HDFC LN", "SBI LN", "AXIS LN"
+        - Contains "NACH" (National Automated Clearing House - often used for auto-debit EMIs/loans)
+        - Contains "SI/" or "STANDING INSTRUCTION" for loan payments
+        - Contains "ECS" (Electronic Clearing Service) for recurring loan debits
+        - Contains "AUTO DEBIT" or "AUTODEBIT" for loan/EMI payments
+        - Contains "HOME LOAN", "CAR LOAN", "PERSONAL LOAN", "VEHICLE LOAN", "HOUSING LOAN", "EDUCATION LOAN"
+        - Same amount debited on or around the same date each month (±3 days) - likely an EMI
+        
+        Common EMI transaction patterns in Indian banks:
+        - ICICI: "BIL/INFT/ELM...", "NACH/..."
+        - HDFC: "HDFC LN...", "NACH/HDFC..."
+        - SBI: "EMI DED/...", "NACH/SBI..."
+        - Axis: "AXIS LN...", "NACH/AXIS..."
+        
     4. high_value_transactions: Array with date, description, type, amount (threshold: 100000)
     5. bounce_penalty_charges: Array with date, description, amount
 
@@ -764,6 +788,7 @@ def extract_bank_statement_hybrid(text, transactions_payload=None, save_json_pat
     - Use the structured JSON transactions as the source of truth when present.
     - Use exact numeric values; do not include currency symbols.
     - Frequency can be Monthly/Quarterly/Yearly/Ad-hoc.
+    - For recurring_debits, ALWAYS include the is_emi boolean field.
 
     Structured Transactions JSON (optional):
     {tx_json_str if tx_json_str else "<none>"}
@@ -986,7 +1011,7 @@ def extract_insurance_hybrid(text):
     data = {}
     
     is_life_insurance = bool(re.search(r"(?i)(life\s+insurance|term\s+plan|endowment|ULIP|whole\s+life)", text))
-    is_health_insurance = bool(re.search(r"(?i)(health\s+insurance|mediclaim|medical\s+insurance|hospitali[sz]ation|health\s*cover|in-?patient\s+treatment|annual\s+sum\s+insured|sum\s+insured|health\s+advantedge|health\s+plan|health\s+policy)", text))
+    is_health_insurance = bool(re.search(r"(?i)(health\s+insurance|mediclaim|medical\s+insurance|hospitali[sz]ation|health\s*cover|in-?patient\s+treatment|annual\s+sum\s+insured|sum\s+insured|health\s+advantedge|health\s+plan|health\s+policy|medicare\s*premier|tata\s*aig\s*medicare)", text))
     is_general_insurance = bool(re.search(r"(?i)(motor\s+insurance|vehicle\s+insurance|property\s+insurance|home\s+insurance|fire\s+insurance)", text))
     
     # Debug logging
@@ -1006,7 +1031,8 @@ def extract_insurance_hybrid(text):
     patterns = {
         "policy_number": [
             r"(?i)Policy\s*(?:No\.?|Number)[\s:\-]*([A-Z0-9\-/]{6,25})",
-            r"(?i)Policy[\s:\-]*([A-Z0-9\-/]{6,25})"
+            r"(?i)Policy[\s:\-]*([A-Z0-9\-/]{6,25})",
+            r"(?i)Member\s*(?:ID|No\.?)[\s:\-]*([A-Z0-9]{10,25})"  # TATA AIG uses Member ID
         ],
         "insurer_name": [
             r"(?i)(?:Insurer|Company|Insurance\s+Company)[\s:\-]*([A-Za-z\s&]+?)(?:\n|Ltd|Limited|Insurance)",
@@ -1086,6 +1112,8 @@ def extract_insurance_hybrid(text):
         ] if is_life_insurance else [
             # Highest priority: "Annual Sum Insured" - this is the actual policy value
             r"(?i)Annual\s+Sum\s+Insured[\s:\-\|]*(?:Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?",
+            # TATA AIG format: "Sum Insured (₹)#" with value in same or next cell
+            r"(?i)Sum\s+Insured\s*\(?₹?\)?[#*]*[\s:\-\|]*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?",
             # Next: general Sum Insured/Assured patterns
             r"(?i)Sum\s*(?:Insured|Assured)[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?",
             r"(?i)Cover(?:age)?\s*Amount[\s:\-]*(?:Rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr)?",
@@ -2321,7 +2349,21 @@ def build_prefill_from_insights(qid: int) -> dict:
     try:
         uploads = list_questionnaire_uploads(qid) or []
         total_monthly_emi = 0.0
-        emi_keywords = ["emi", "loan", "mortgage", "instalment", "installment", "repayment", "home loan", "car loan", "personal loan", "vehicle loan", "housing loan"]
+        # Expanded EMI keywords including bank-specific codes
+        emi_keywords = [
+            "emi", "loan", "ln", "mortgage", "instalment", "installment", "repayment",
+            "home loan", "car loan", "personal loan", "vehicle loan", "housing loan", "education loan",
+            # Bank-specific codes
+            "elm",  # ICICI EMI/Loan
+            "nach",  # National Automated Clearing House (auto-debit EMIs)
+            "hdfc ln", "sbi ln", "icici ln", "axis ln", "kotak ln",  # Bank loan prefixes
+            "si/",  # Standing Instruction
+            "standing instruction",
+            "ecs",  # Electronic Clearing Service
+            "auto debit", "autodebit",
+            "emi ded",  # SBI pattern
+            "bil/inft/elm",  # ICICI pattern
+        ]
         for upload in uploads:
             if (upload["doc_type"] or "").lower() == "bank statement":
                 metadata_json = upload["metadata_json"]
@@ -2334,8 +2376,14 @@ def build_prefill_from_insights(qid: int) -> dict:
                             desc = (debit.get("description") or "").lower()
                             amount = debit.get("amount")
                             freq = (debit.get("frequency") or "").lower()
-                            # Check if this is an EMI payment
-                            if any(kw in desc for kw in emi_keywords):
+                            is_emi = debit.get("is_emi", False)
+                            
+                            # Check if this is an EMI payment:
+                            # 1. LLM marked it as EMI (is_emi=True)
+                            # 2. OR description matches EMI keywords
+                            is_emi_payment = is_emi or any(kw in desc for kw in emi_keywords)
+                            
+                            if is_emi_payment:
                                 if isinstance(amount, (int, float)) and amount > 0:
                                     # Convert to monthly if not already monthly
                                     if freq in ("monthly", "month"):
@@ -2351,9 +2399,8 @@ def build_prefill_from_insights(qid: int) -> dict:
                         continue
         if total_monthly_emi > 0:
             lifestyle["monthly_emi"] = round(total_monthly_emi, 2)
-            logger.debug(f"Prefill extracted monthly_emi: {lifestyle['monthly_emi']}")
     except Exception as e:
-        logger.warning(f"Prefill error extracting monthly_emi: {e}")
+        pass  # Silently handle errors to avoid breaking prefill
 
     allocation = {}
     try:
