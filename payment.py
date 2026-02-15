@@ -48,10 +48,22 @@ def _get_razorpay_client() -> razorpay.Client:
 
     _razorpay_client = razorpay.Client(auth=(key_id, key_secret))
     
-    # Configure timeout on the underlying requests session
-    # This prevents hanging requests when Razorpay API is slow
-    # (connect timeout: 5s, read timeout: 15s)
-    _razorpay_client.session.timeout = (5, 15)
+    # requests.Session doesn't have a built-in timeout attribute.
+    # We must use a custom HTTPAdapter to enforce timeouts on all requests.
+    from requests.adapters import HTTPAdapter
+    
+    class TimeoutAdapter(HTTPAdapter):
+        def __init__(self, timeout=(5, 15), **kwargs):
+            self.timeout = timeout
+            super().__init__(**kwargs)
+        
+        def send(self, request, **kwargs):
+            kwargs.setdefault('timeout', self.timeout)
+            return super().send(request, **kwargs)
+    
+    adapter = TimeoutAdapter(timeout=(5, 15))  # connect: 5s, read: 15s
+    _razorpay_client.session.mount('https://', adapter)
+    _razorpay_client.session.mount('http://', adapter)
     
     return _razorpay_client
 
@@ -104,7 +116,9 @@ def create_razorpay_order(
     }
 
     # Retry logic for transient network issues
-    max_retries = 2
+    # With (5s connect + 15s read) timeout and 1 retry, worst case = ~21s + 1s + ~21s = ~43s
+    # But in practice, timeouts fire much sooner. Keeps us under gunicorn's 30s for most cases.
+    max_retries = 1
     last_error = None
     
     for attempt in range(max_retries + 1):
