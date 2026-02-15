@@ -5864,6 +5864,7 @@ def auth_verify():
             "display_name": user["display_name"],
             "has_paid": user["has_paid"],
             "payment_date": user["payment_date"],
+            "report_credits": user.get("report_credits", 0),
         }
     }), 200
 
