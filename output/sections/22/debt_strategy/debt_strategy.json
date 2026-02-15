@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "questionnaire_id": 22,
+    "section": "debt_strategy",
+    "model": "gpt-4o",
+    "ts": 1771151559,
+    "facts_hash": "c24f00321b77010568ed781c9eda62ab79b32da945c7931816a6e7f05635bb5f",
+    "prompt": {
+      "system": "You craft debt optimization advice for Indian retail clients. Be specific about which debts to pay first and prepayment amounts. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($).",
+      "user": "Section: Debt Strategy\nFactsDigest:\n{\"annualIncome\": \"646105\", \"debtStress\": \"Healthy\", \"emiPct\": 0.0, \"monthlyEmi\": \"\"}\n\nINSTRUCTIONS:\n1. Current EMI: Rs.0/month (0.0% of income)\n   - Benchmark: Keep EMI below 30-40% of income\n2. DEBT PRIORITY (always recommend this order):\n   - Credit card debt (18-42% interest) - Pay off FIRST\n   - Personal loans (12-20% interest) - Pay off SECOND\n   - Car loans (8-12% interest) - Pay off THIRD\n   - Home loans (7-9% interest) - Lowest priority\n3. PREPAYMENT: If EMI exceeds 30%, suggest monthly prepayment of Rs.0\n   - Focus prepayment on highest-interest debt first\n4. Avoid new unsecured debt until EMI < 30%\n\nJSON output keys: title, bullets, paragraphs, actions. Actions should include specific prepayment amounts if applicable."
+    },
+    "usage": {
+      "prompt_tokens": 272,
+      "completion_tokens": 357,
+      "total_tokens": 629
+    }
+  },
+  "content": {
+    "title": "Debt Optimization Strategy for a Healthy Financial Future",
+    "bullets": [
+      "Current EMI is Rs.0, which is 0.0% of your annual income.",
+      "Maintain EMI below 30-40% of your income for financial stability.",
+      "Prioritize paying off high-interest debts first."
+    ],
+    "paragraphs": [
+      "Your current financial situation is healthy, with no existing EMIs. This provides you with a great opportunity to manage any future debts effectively. The key to maintaining this healthy status is to prioritize paying off high-interest debts first, should they arise.",
+      "If you acquire any debts, focus on clearing credit card debt first, as it typically carries the highest interest rates ranging from 18-42%. Next, tackle personal loans with interest rates between 12-20%. Car loans, with interest rates of 8-12%, should be your third priority. Lastly, home loans, which usually have the lowest interest rates of 7-9%, should be the lowest priority.",
+      "Since your current EMI is 0%, there is no need for prepayment at this time. However, if you take on new debt and your EMI exceeds 30% of your income, consider making prepayments to reduce the burden, focusing on the highest-interest debt first."
+    ],
+    "actions": [
+      "Monitor your financial situation regularly to ensure that any new debt does not push your EMI above 30% of your income.",
+      "If you acquire new debt, prioritize paying off credit card debt first, followed by personal loans, car loans, and finally home loans.",
+      "Avoid taking on new unsecured debt until your EMI remains below 30% of your income."
+    ]
+  }
+}

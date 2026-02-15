@@ -1,0 +1,33 @@
+{
+  "_meta": {
+    "questionnaire_id": 19,
+    "section": "executive_summary",
+    "model": "gpt-4o",
+    "ts": 1771091705,
+    "facts_hash": "18467958ef7adbab8027b100b5433c897348d0af9611be788c4fe18bf53be1f8",
+    "prompt": {
+      "system": "You write a crisp executive summary for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Executive Summary\nYou are given short outlines from multiple sections. Create a concise summary.\nSectionOutlines:\n{\"cashflow\": {\"bullets\": [\"Current net cashflow is not available.\", \"Total inflows and outflows are not specified.\", \"Surplus band is categorized as 'Low'.\"], \"title\": \"Cashflow Overview and Improvement Strategies\"}, \"debt_strategy\": {\"bullets\": [\"Current EMI is Rs.0, which is 0.0% of your annual income.\", \"Maintain EMI payments below 30-40% of your income for financial stability.\", \"Prioritize paying off high-interest debts first, starting with credit card debt.\"], \"title\": \"Debt Optimization Strategy for a Healthy Financial Future\"}, \"flags_explainer\": {\"bullets\": [\"Low savings rate at 0.0% of income\", \"No insurance coverage; required Rs. 64.6 L\", \"Emergency fund covers 0.0 months\", \"Debt stress level is healthy\", \"EMI percentage is 0.0%\"], \"title\": \"Financial Health Assessment and Recommendations\"}, \"goals_strategy\": {\"bullets\": [\"With Rs.53,842/month: Rs.2,917 for insurance, Rs.50,925 remaining for goals (100% of requirement)\"], \"title\": \"Goal Strategy: Prioritized Action Plan\"}, \"liquidity_plan\": {\"bullets\": [\"Current Liquidity Status: Insufficient\", \"Current Liquidity Coverage: 0 months\"], \"title\": \"Enhancing Your Liquidity Plan\"}, \"portfolio_rebalance\": {\"bullets\": [\"Current equity allocation is at 50%, which exceeds the recommended range of 25-40%.\", \"Target equity allocation is 32%, requiring a reduction of approximately 17.5% in equity holdings.\", \"Focus on reducing exposure to small and mid-cap equities and reallocating to safer debt instruments.\", \"Consider diversification into international equities and gold for additional stability.\"], \"title\": \"Portfolio Rebalancing Strategy for Conservative Risk Profile\"}, \"protection_plan\": {\"bullets\": [\"Current life insurance coverage is Rs.0; required coverage is Rs.6,461,050.\", \"Estimated annual premium for term insurance: Rs.45,227.\", \"No current health insurance; recommended coverage is Rs.10-15 lakh.\", \"Critical health insurance gap if current coverage is less than Rs.5 lakh.\", \"Priority: Address life insurance gap first, then health insurance.\"], \"title\": \"Protection Plan\"}, \"risk_rationale\": {\"bullets\": [\"Your risk appetite is categorized as Conservative.\", \"The recommended equity allocation for you is between 25% and 40%.\", \"A balanced approach suggests a mid-point equity allocation of 32.5%.\", \"Your investment tenure allows for some growth potential.\"], \"title\": \"Understanding Your Conservative Risk Profile and Asset Allocation\"}, \"tax_optimization\": {\"bullets\": [\"Gross Income: ₹646,105; Taxable Income: ₹646,110\", \"Detected Regime: New Regime Likely; Effective Tax Rate: 0.02%\", \"80C: Consider investing in ELSS for tax savings and potential returns\", \"80CCD(1B): Invest an additional ₹50,000 in NPS Tier-1 for extra deduction\", \"80D: Opt for a health insurance top-up to cover medical expenses\"], \"title\": \"Tax Optimization: Maximize Your Savings\"}}\n\nOutput JSON keys: title, bullets (<=6), paragraphs (<=2). No actions."
+    },
+    "usage": {
+      "prompt_tokens": 772,
+      "completion_tokens": 286,
+      "total_tokens": 1058
+    }
+  },
+  "content": {
+    "title": "Comprehensive Financial Strategy for Indian Retail Clients",
+    "bullets": [
+      "Current net cashflow is unavailable; surplus is low.",
+      "Maintain EMI below 30-40% of income; prioritize high-interest debt repayment.",
+      "Low savings rate and no insurance coverage; emergency fund is inadequate.",
+      "Equity allocation exceeds recommended range; reduce to 32% for stability.",
+      "Life insurance gap of Rs.6,461,050; prioritize addressing this gap.",
+      "Consider tax-saving investments under sections 80C, 80CCD(1B), and 80D."
+    ],
+    "paragraphs": [
+      "The financial health assessment indicates a low savings rate and insufficient insurance coverage, with an emergency fund that covers 0.0 months. To enhance financial stability, it is crucial to maintain EMIs below 30-40% of income and prioritize paying off high-interest debts, particularly credit card debt. Addressing the life insurance gap of Rs.6,461,050 should be a priority, followed by securing adequate health insurance coverage.",
+      "The current equity allocation of 50% exceeds the recommended range for a conservative risk profile. A reduction to 32% is advised, focusing on reallocating from small and mid-cap equities to safer debt instruments. Additionally, tax optimization strategies such as investing in ELSS, NPS Tier-1, and health insurance top-ups can maximize savings and provide potential returns."
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "questionnaire_id": 20,
+    "section": "portfolio_rebalance",
+    "model": "gpt-4o",
+    "ts": 1771151034,
+    "facts_hash": "12b3eb55e7a44ddb83dc04aeb11394d2aa857286e175f6e6b82b64209c09d7ed",
+    "prompt": {
+      "system": "You suggest high-level rebalancing directions for Indian clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹). NEVER use dollars ($). Provide CATEGORY-level guidance (e.g., 'large-cap index funds', 'debt mutual funds') but do NOT name specific AMCs or fund names. Be consistent with the client's risk profile.",
+      "user": "Section: Portfolio Rebalancing\nFactsDigest:\n{\"ihsBand\": \"Poor\", \"portfolio\": {\"sip_count\": 0, \"total_monthly_sip\": 0.0}, \"recommendedEquityBand\": {\"max\": 40, \"min\": 25}, \"recommendedEquityMid\": 32.5, \"riskProfile\": \"Conservative\"}\n\nINSTRUCTIONS:\n1. CURRENT vs RECOMMENDED:\n   - Current Equity: 50.0%\n   - Recommended Range: 25-40% (target: 32%)\n   - Action: REDUCE EQUITY by ~17.5% of portfolio\n\n2. CATEGORY-LEVEL GUIDANCE (use these terms, not product names):\n   TO REDUCE EQUITY:\n   - Move to short-duration debt funds or corporate bond funds\n   - Consider liquid funds for near-term needs\n   - Book profits in small/mid-cap and shift to debt\n   TO INCREASE EQUITY:\n   - Add to large-cap index funds or flexi-cap funds\n   - Use SIP route for gradual deployment\n   - Consider hybrid equity-debt funds for moderate risk\n\n3. DIVERSIFICATION SUGGESTIONS:\n   - International equity: 5-10% via US/global index funds\n   - Gold: 5-10% via sovereign gold bonds or gold ETFs\n\nReturn JSON: title, bullets, paragraphs, actions. Actions should include specific percentage shifts."
+    },
+    "usage": {
+      "prompt_tokens": 375,
+      "completion_tokens": 376,
+      "total_tokens": 751
+    }
+  },
+  "content": {
+    "title": "Portfolio Rebalancing Recommendations for Conservative Investor",
+    "bullets": [
+      "Current equity allocation is at 50%, which exceeds the recommended range of 25-40% for a conservative risk profile.",
+      "Target equity allocation is 32%, requiring a reduction of approximately 17.5% in equity holdings.",
+      "Focus on reducing exposure to small and mid-cap equities and reallocating to safer debt instruments."
+    ],
+    "paragraphs": [
+      "As a conservative investor, it's crucial to align your portfolio with your risk tolerance. Currently, your equity exposure is significantly higher than the recommended range. To mitigate risk and stabilize returns, a reduction in equity holdings is advised. This can be achieved by booking profits in small and mid-cap equities and reallocating those funds into more stable debt instruments.",
+      "Consider reallocating the excess equity into short-duration debt funds or corporate bond funds, which offer lower risk and more predictable returns. For any near-term liquidity needs, liquid funds can be a suitable option. These adjustments will help in maintaining a balanced portfolio that aligns with your conservative risk profile.",
+      "To ensure diversification and hedge against market volatility, consider allocating 5-10% of your portfolio to international equities through US or global index funds. Additionally, a 5-10% allocation to gold via sovereign gold bonds or gold ETFs can provide a safety net against inflation and currency fluctuations."
+    ],
+    "actions": [
+      "Reduce equity exposure by 17.5% of the total portfolio.",
+      "Reallocate 17.5% of the portfolio to short-duration debt funds or corporate bond funds.",
+      "Consider a 5-10% allocation to international equity via US/global index funds.",
+      "Allocate 5-10% of the portfolio to gold through sovereign gold bonds or gold ETFs."
+    ]
+  }
+}

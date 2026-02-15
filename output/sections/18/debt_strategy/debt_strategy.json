@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "questionnaire_id": 18,
+    "section": "debt_strategy",
+    "model": "gpt-4o",
+    "ts": 1771090999,
+    "facts_hash": "757ada7c08dcebc2e2a13802c7035f6d4663cf8853809696bb5e7d90563e8446",
+    "prompt": {
+      "system": "You craft debt optimization advice for Indian retail clients. Be specific about which debts to pay first and prepayment amounts. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($).",
+      "user": "Section: Debt Strategy\nFactsDigest:\n{\"annualIncome\": \"8558.84\", \"debtStress\": \"Stressed\", \"emiPct\": 82.72, \"monthlyEmi\": \"590\"}\n\nINSTRUCTIONS:\n1. Current EMI: Rs.590/month (82.7% of income)\n   - Benchmark: Keep EMI below 30-40% of income\n2. DEBT PRIORITY (always recommend this order):\n   - Credit card debt (18-42% interest) - Pay off FIRST\n   - Personal loans (12-20% interest) - Pay off SECOND\n   - Car loans (8-12% interest) - Pay off THIRD\n   - Home loans (7-9% interest) - Lowest priority\n3. PREPAYMENT: If EMI exceeds 30%, suggest monthly prepayment of Rs.376\n   - Focus prepayment on highest-interest debt first\n4. Avoid new unsecured debt until EMI < 30%\n\nJSON output keys: title, bullets, paragraphs, actions. Actions should include specific prepayment amounts if applicable."
+    },
+    "usage": {
+      "prompt_tokens": 276,
+      "completion_tokens": 335,
+      "total_tokens": 611
+    }
+  },
+  "content": {
+    "title": "Debt Optimization Strategy for Stress Reduction",
+    "bullets": [
+      "Current EMI is Rs.590/month, which is 82.7% of your income.",
+      "Ideal EMI should be between 30-40% of your income.",
+      "Prioritize paying off high-interest debts first."
+    ],
+    "paragraphs": [
+      "Your current debt situation is causing significant financial stress, as your monthly EMI payments are consuming a large portion of your income. To alleviate this stress, it's crucial to prioritize your debts and make strategic prepayments. By focusing on high-interest debts first, you can reduce your overall interest burden and gradually bring your EMI payments to a more manageable level.",
+      "Given your current financial situation, it's essential to avoid taking on any new unsecured debt until your EMI payments are reduced to below 30% of your income. This will help you regain financial stability and improve your overall financial health."
+    ],
+    "actions": [
+      "Identify and list all your debts, starting with credit card debt, followed by personal loans, car loans, and finally home loans.",
+      "Make a monthly prepayment of Rs.376 towards your highest-interest debt, which is likely your credit card debt. This will help reduce the principal amount faster and lower the interest charged.",
+      "Continue making regular EMI payments while focusing additional prepayments on the highest-interest debt until it is fully paid off.",
+      "Once your credit card debt is cleared, redirect the Rs.376 prepayment towards the next highest-interest debt, such as personal loans, and continue this strategy until all high-interest debts are paid off."
+    ]
+  }
+}

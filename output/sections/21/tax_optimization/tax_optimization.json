@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "questionnaire_id": 21,
+    "section": "tax_optimization",
+    "model": "gpt-4o",
+    "ts": 1771151111,
+    "facts_hash": "c2e7d62fb91215a01ccf333b20215e6a99280bcffbd6123fb1056d33fc13c8c2",
+    "prompt": {
+      "system": "You are a tax planning expert for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($). Provide SPECIFIC and ACTIONABLE tax optimization advice. Reference actual sections (80C, 80CCD, 80D) and their limits. Be precise about amounts and tax savings. Do not give generic advice.",
+      "user": "Section: Tax Optimization Strategy\n\nClient Tax Profile:\n{\"carry_forward_losses\": null, \"deduction_gaps\": {}, \"deductions_summary\": {\"deductions_list\": [], \"total_claimed\": -5.0}, \"income_sources\": {}, \"loss_harvesting_strategy\": null, \"ltcg_optimization\": {\"action\": \"Redeem equity mutual funds showing gains, then reinvest to reset cost base\", \"current_ltcg\": 0.0, \"exemption_limit\": 125000, \"harvestable_room\": 125000.0, \"recommendation\": \"You can book up to ₹125,000 in additional LTCG tax-free this year\", \"type\": \"GAIN_HARVESTING\"}, \"next_year_roadmap\": {\"action_items\": [], \"total_potential_saving\": 0.0}, \"regime_advice\": {\"new_regime\": \"No deductions allowed; focus on post-tax optimization via tax-efficient products\", \"old_regime\": \"Maximize deductions (80C, 80D, 80CCD, HRA) to reduce taxable income\"}, \"tax_profile\": {\"detected_regime\": \"new_regime_likely\", \"effective_tax_rate\": 0.02, \"gross_income\": 646105.0, \"marginal_tax_rate\": 20.0, \"taxable_income\": 646110.0, \"total_tax_paid\": 128.0}}\n\nINSTRUCTIONS - Create a comprehensive tax optimization report:\n\n1. CURRENT TAX SUMMARY (use these exact numbers):\n   - Gross Income: ₹646,105\n   - Taxable Income: ₹646,110\n   - Effective Tax Rate: 0.02%\n   - Marginal Tax Rate: 20.0%\n   - Detected Regime: New Regime Likely\n\n2. DEDUCTION GAPS IDENTIFIED:\n\n3. RECOMMENDATIONS BY PRIORITY:\n   For each gap, recommend SPECIFIC instruments:\n   - 80C: ELSS (for equity + tax), PPF (for safe returns), NPS (for retirement)\n   - 80CCD(1B): NPS Tier-1 (additional ₹50K over 80C)\n   - 80D: Health insurance top-up, super top-up policies\n\n4. CAPITAL GAINS OPTIMIZATION:\n   - Strategy: GAIN_HARVESTING\n   - You can book up to ₹125,000 in additional LTCG tax-free this year\n   - Action: Redeem equity mutual funds showing gains, then reinvest to reset cost base\n\n5. TOTAL POTENTIAL TAX SAVING: ₹0\n\n6. REGIME-SPECIFIC ADVICE:\n   - If OLD REGIME: Maximize deductions (80C, 80D, 80CCD, HRA) to reduce taxable income\n   - If NEW REGIME: No deductions allowed; focus on post-tax optimization via tax-efficient products\n\nOUTPUT JSON STRUCTURE:\n{\n  \"title\": \"Tax Optimization: Maximize Your Savings\",\n  \"bullets\": [max 6 bullets with specific amounts and sections],\n  \"paragraphs\": [2-3 paragraphs explaining strategy and next steps],\n  \"actions\": [max 5 specific actions with amounts, timelines]\n}\n\nCRITICAL: Include SPECIFIC amounts from the data. Do NOT give vague advice."
+    },
+    "usage": {
+      "prompt_tokens": 781,
+      "completion_tokens": 472,
+      "total_tokens": 1253
+    }
+  },
+  "content": {
+    "title": "Tax Optimization: Maximize Your Savings",
+    "bullets": [
+      "Gross Income: ₹646,105; Taxable Income: ₹646,110",
+      "Effective Tax Rate: 0.02%; Marginal Tax Rate: 20.0%",
+      "Detected Regime: New Regime Likely; focus on post-tax optimization",
+      "80C: Consider ELSS for tax savings and equity exposure, PPF for safe returns",
+      "80CCD(1B): Invest up to ₹50,000 in NPS Tier-1 for additional tax benefits",
+      "80D: Enhance health coverage with top-up or super top-up policies"
+    ],
+    "paragraphs": [
+      "Given your current tax profile, you are likely under the new tax regime, which does not allow for traditional deductions. However, you can still optimize your tax liability through strategic investments and capital gains management. By utilizing gain harvesting, you can book up to ₹125,000 in long-term capital gains tax-free this year. This involves redeeming equity mutual funds showing gains and reinvesting to reset the cost base.",
+      "While the new regime limits deduction opportunities, focusing on tax-efficient investment products can enhance your post-tax returns. Consider investing in ELSS for both tax savings and equity market exposure, and PPF for assured returns. Additionally, contributing up to ₹50,000 to NPS Tier-1 can provide further tax benefits under Section 80CCD(1B). For health coverage, evaluate top-up or super top-up policies to ensure comprehensive protection and potential tax savings under Section 80D."
+    ],
+    "actions": [
+      "Redeem equity mutual funds to book ₹125,000 in LTCG tax-free by the end of the fiscal year.",
+      "Invest in ELSS up to ₹1,50,000 under Section 80C for tax savings and equity exposure.",
+      "Contribute an additional ₹50,000 to NPS Tier-1 for extra tax benefits under Section 80CCD(1B).",
+      "Review and enhance health insurance with top-up or super top-up policies for added coverage and tax benefits under Section 80D.",
+      "Reassess your investment portfolio to align with tax-efficient strategies and maximize post-tax returns."
+    ]
+  }
+}

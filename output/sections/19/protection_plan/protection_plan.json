@@ -1,0 +1,39 @@
+{
+  "_meta": {
+    "questionnaire_id": 19,
+    "section": "protection_plan",
+    "model": "gpt-4o",
+    "ts": 1771091657,
+    "facts_hash": "ea6e962b921a724a88ad458ff3e2b1f57d477a8251f7f10f7c6c9321df5950b6",
+    "prompt": {
+      "system": "You are a senior financial planner. Draft a protection (life/health) section for Indian clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Provide SPECIFIC coverage amounts and estimates. Avoid naming specific insurers but be specific about amounts.",
+      "user": "Section: Protection Plan\nFactsDigest:\n{\"age\": \"\", \"annualIncome\": \"646105\", \"dependents\": 0, \"healthCover\": \"\", \"insuranceGap\": \"Underinsured\", \"lifeCover\": \"\", \"requiredLifeCover\": 6461050.0}\n\nINSTRUCTIONS:\n1. Life Insurance Gap: Required Rs.6,461,050, Current Rs.0, Gap Rs.6,461,050\n   - If gap exists, recommend term insurance with specific cover amount\n   - Estimated premium: approx Rs.45,227/year (varies by age, health, insurer)\n2. Health Insurance: Current Rs.0\n   - Recommend Rs.10-15 lakh family floater for adequate coverage\n   - If current < Rs.5 lakh, flag as critical gap\n3. Priority Order: Term life first if dependents exist, then health cover\n\nOutput JSON keys: title, bullets, paragraphs, actions.\nLength limits: <=6 bullets, <=2 paragraphs, <=5 actions."
+    },
+    "usage": {
+      "prompt_tokens": 285,
+      "completion_tokens": 427,
+      "total_tokens": 712
+    }
+  },
+  "content": {
+    "title": "Protection Plan",
+    "bullets": [
+      "Current life insurance coverage is Rs.0; required coverage is Rs.6,461,050.",
+      "Estimated annual premium for term insurance: Rs.45,227.",
+      "No current health insurance; recommended coverage is Rs.10-15 lakh.",
+      "Critical health insurance gap if current coverage is less than Rs.5 lakh.",
+      "Priority: Address life insurance gap first, then health insurance."
+    ],
+    "paragraphs": [
+      "As you currently have no life insurance coverage, it is crucial to address this gap to ensure financial security for your dependents in the event of unforeseen circumstances. A term insurance policy with a coverage amount of Rs.6,461,050 is recommended. This will provide a safety net equivalent to approximately ten times your annual income, which is a standard benchmark for adequate life insurance coverage. The estimated annual premium for such a policy is around Rs.45,227, though this may vary based on factors such as age, health, and specific insurer policies.",
+      "In addition to life insurance, it is important to secure adequate health insurance coverage. Currently, you have no health insurance, which poses a significant risk. A family floater health insurance plan with a coverage amount of Rs.10-15 lakh is recommended to protect against high medical expenses. If your current health coverage is less than Rs.5 lakh, it is considered a critical gap that needs immediate attention. Prioritizing life insurance is essential if you have dependents, followed by securing health insurance to ensure comprehensive protection."
+    ],
+    "actions": [
+      "Purchase a term life insurance policy with a coverage of Rs.6,461,050.",
+      "Set aside approximately Rs.45,227 annually for the term insurance premium.",
+      "Evaluate and purchase a family floater health insurance plan with Rs.10-15 lakh coverage.",
+      "Review and increase health insurance coverage if currently below Rs.5 lakh.",
+      "Consult with a financial advisor to tailor the protection plan to your specific needs."
+    ]
+  }
+}

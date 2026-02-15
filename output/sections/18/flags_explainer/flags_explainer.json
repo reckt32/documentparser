@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "questionnaire_id": 18,
+    "section": "flags_explainer",
+    "model": "gpt-4o",
+    "ts": 1771090974,
+    "facts_hash": "6b2fadb5467423b76c50eecb01e1998a610b6afc95fd7cb2f14600b564bec21c",
+    "prompt": {
+      "system": "You are a senior financial planner writing for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Be precise, neutral, and practical. No guarantees or forward-looking promises. Return valid JSON with keys: title (string), bullets (array of short points), paragraphs (2-3 short paragraphs), actions (checklist items).",
+      "user": "Section: Flags and Actions\nFactsDigest JSON (<=2KB):\n{\"client\": {\"age\": \"\", \"dependents\": 0}, \"flags\": [\"Low Surplus: Saving 0.0% vs Benchmark 20%+\", \"Underinsured: Cover Rs. 0 vs Required Rs. 85.6 K\", \"Debt Stress: EMI 82.7% of Income vs Benchmark <=40%\", \"Insufficient Liquidity: Emergency fund 0.0 months vs Benchmark 6+\", \"Score = 0.0 -> Poor: Saving 0.0% income\"], \"kpis\": {\"debtStress\": \"Stressed\", \"emiPct\": 82.72, \"ihsBand\": \"Poor\", \"insuranceGap\": \"Underinsured\", \"liquidity\": \"Insufficient\", \"liquidityMonths\": 0.0, \"surplusBand\": \"Low\"}}\n\nConstraints:\n- Max 6 bullets, each <= 20 words.\n- 1-2 paragraphs, each <= 80 words.\n- Max 5 actions, each actionable and specific.\n"
+    },
+    "usage": {
+      "prompt_tokens": 320,
+      "completion_tokens": 251,
+      "total_tokens": 571
+    }
+  },
+  "content": {
+    "title": "Financial Health Assessment and Recommendations",
+    "bullets": [
+      "Saving rate is 0.0%, below 20% benchmark.",
+      "Insurance coverage gap of Rs. 85,600 detected.",
+      "EMI constitutes 82.7% of income, exceeding 40% benchmark.",
+      "No emergency fund; recommended is 6+ months.",
+      "Overall financial score is poor.",
+      "Immediate action needed to improve financial health."
+    ],
+    "paragraphs": [
+      "The current financial assessment indicates significant areas of concern. The saving rate is notably low, and the client is underinsured by Rs. 85,600. Additionally, the EMI burden is excessively high, consuming 82.7% of the income, which is well above the recommended 40% threshold.",
+      "There is also a lack of an emergency fund, which should ideally cover at least six months of expenses. These factors contribute to a poor financial health score, necessitating immediate corrective actions to stabilize and improve the financial situation."
+    ],
+    "actions": [
+      "Increase savings rate to at least 20% of income.",
+      "Secure insurance coverage to close the Rs. 85,600 gap.",
+      "Reduce EMI to below 40% of income.",
+      "Establish an emergency fund covering 6 months of expenses.",
+      "Review and adjust monthly budget to improve surplus."
+    ]
+  }
+}

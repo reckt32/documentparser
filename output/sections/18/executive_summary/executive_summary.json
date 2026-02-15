@@ -1,0 +1,32 @@
+{
+  "_meta": {
+    "questionnaire_id": 18,
+    "section": "executive_summary",
+    "model": "gpt-4o",
+    "ts": 1771091037,
+    "facts_hash": "8451d5d2293b3bf0f406b8ddb4c3ab808f4f998c7b5bd0c895bcb7c0ce30639a",
+    "prompt": {
+      "system": "You write a crisp executive summary for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Executive Summary\nYou are given short outlines from multiple sections. Create a concise summary.\nSectionOutlines:\n{\"cashflow\": {\"bullets\": [\"Current net cashflow is negative at Rs. -294.11.\", \"Total inflows amount to Rs. 8,558.84.\", \"Total outflows are Rs. 8,852.95.\", \"Surplus band is categorized as 'Low'.\"], \"title\": \"Optimizing Cashflow for Better Savings\"}, \"debt_strategy\": {\"bullets\": [\"Current EMI is Rs.590/month, which is 82.7% of your income.\", \"Ideal EMI should be between 30-40% of your income.\", \"Prioritize paying off high-interest debts first.\"], \"title\": \"Debt Optimization Strategy for Stress Reduction\"}, \"flags_explainer\": {\"bullets\": [\"Saving rate is 0.0%, below 20% benchmark.\", \"Insurance coverage gap of Rs. 85,600 detected.\", \"EMI constitutes 82.7% of income, exceeding 40% benchmark.\", \"No emergency fund; recommended is 6+ months.\", \"Overall financial score is poor.\"], \"title\": \"Financial Health Assessment and Recommendations\"}, \"goals_strategy\": {\"bullets\": [\"With Rs.0/month: Rs.2,917 for insurance, Rs.0 remaining for goals (100% of requirement)\", \"Allocate Rs.0/month for Emergency Fund\"], \"title\": \"Goal Strategy: Prioritized Action Plan\"}, \"liquidity_plan\": {\"bullets\": [\"Current Liquidity Status: Insufficient\", \"Current Liquidity Coverage: 0 months\", \"Recommended Liquidity Coverage: 6+ months\"], \"title\": \"Emergency Fund Enhancement Plan\"}, \"portfolio_rebalance\": {\"bullets\": [\"Current equity allocation is at 50%, which exceeds the recommended range for a conservative risk profile.\", \"Recommended equity allocation is between 25% and 40%, with a target of 32.5%.\", \"Action required: Reduce equity exposure by approximately 17.5% of the total portfolio.\"], \"title\": \"Portfolio Rebalancing Strategy for Conservative Investor\"}, \"protection_plan\": {\"bullets\": [\"Current life insurance coverage is Rs.0; required coverage is Rs.85,588.\", \"Estimated premium for term insurance: approximately Rs.599 per year.\", \"No current health insurance; recommended coverage is Rs.10-15 lakh.\", \"Critical gap in health coverage if current coverage is less than Rs.5 lakh.\", \"Priority: Address life insurance gap first, then secure health insurance.\"], \"title\": \"Protection Plan for Financial Security\"}, \"risk_rationale\": {\"bullets\": [\"Your risk appetite is categorized as Conservative.\", \"The recommended equity allocation is between 25% and 40%.\", \"A balanced equity allocation is suggested at 32.5%.\"], \"title\": \"Understanding Your Risk Profile and Asset Allocation\"}, \"tax_optimization\": {\"bullets\": [], \"title\": null}}\n\nOutput JSON keys: title, bullets (<=6), paragraphs (<=2). No actions."
+    },
+    "usage": {
+      "prompt_tokens": 685,
+      "completion_tokens": 272,
+      "total_tokens": 957
+    }
+  },
+  "content": {
+    "title": "Comprehensive Financial Strategy for Improved Stability",
+    "bullets": [
+      "Current net cashflow is negative at Rs. -294.11, with inflows of Rs. 8,558.84 and outflows of Rs. 8,852.95.",
+      "EMI payments are 82.7% of income, significantly above the ideal 30-40% range.",
+      "No emergency fund is in place; recommended coverage is 6+ months.",
+      "Life insurance coverage gap of Rs. 85,600 and no health insurance detected.",
+      "Equity allocation is at 50%, exceeding the conservative target of 32.5%."
+    ],
+    "paragraphs": [
+      "The financial assessment indicates a negative cashflow and a high EMI burden, which is unsustainable and requires immediate attention. The absence of an emergency fund and inadequate insurance coverage further exacerbate financial vulnerability. Prioritizing debt reduction, establishing an emergency fund, and securing necessary insurance coverage are crucial steps towards financial stability.",
+      "A conservative risk profile suggests reducing equity exposure to align with the recommended 25-40% range. This rebalancing will help mitigate risk and align with long-term financial goals. Implementing these strategies will enhance financial health and provide a more secure financial future."
+    ]
+  }
+}

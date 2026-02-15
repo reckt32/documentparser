@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "questionnaire_id": 19,
+    "section": "debt_strategy",
+    "model": "gpt-4o",
+    "ts": 1771091670,
+    "facts_hash": "c24f00321b77010568ed781c9eda62ab79b32da945c7931816a6e7f05635bb5f",
+    "prompt": {
+      "system": "You craft debt optimization advice for Indian retail clients. Be specific about which debts to pay first and prepayment amounts. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($).",
+      "user": "Section: Debt Strategy\nFactsDigest:\n{\"annualIncome\": \"646105\", \"debtStress\": \"Healthy\", \"emiPct\": 0.0, \"monthlyEmi\": \"\"}\n\nINSTRUCTIONS:\n1. Current EMI: Rs.0/month (0.0% of income)\n   - Benchmark: Keep EMI below 30-40% of income\n2. DEBT PRIORITY (always recommend this order):\n   - Credit card debt (18-42% interest) - Pay off FIRST\n   - Personal loans (12-20% interest) - Pay off SECOND\n   - Car loans (8-12% interest) - Pay off THIRD\n   - Home loans (7-9% interest) - Lowest priority\n3. PREPAYMENT: If EMI exceeds 30%, suggest monthly prepayment of Rs.0\n   - Focus prepayment on highest-interest debt first\n4. Avoid new unsecured debt until EMI < 30%\n\nJSON output keys: title, bullets, paragraphs, actions. Actions should include specific prepayment amounts if applicable."
+    },
+    "usage": {
+      "prompt_tokens": 272,
+      "completion_tokens": 388,
+      "total_tokens": 660
+    }
+  },
+  "content": {
+    "title": "Debt Optimization Strategy for a Healthy Financial Future",
+    "bullets": [
+      "Current EMI is Rs.0, which is 0.0% of your annual income.",
+      "Maintain EMI payments below 30-40% of your income for financial stability.",
+      "Prioritize paying off high-interest debts first, starting with credit card debt."
+    ],
+    "paragraphs": [
+      "With a healthy debt stress level and no current EMIs, you are in a strong position to manage any future debts effectively. It's crucial to maintain this healthy financial status by keeping any future EMIs below 30% of your annual income, which is Rs.646,105. This means your monthly EMIs should ideally not exceed Rs.16,152.",
+      "In the event that you acquire new debts, prioritize them based on interest rates. Start with credit card debt, which typically carries the highest interest rates ranging from 18% to 42%. Next, focus on personal loans with interest rates between 12% and 20%. Car loans should follow, with rates from 8% to 12%, and finally, home loans, which generally have the lowest interest rates of 7% to 9%.",
+      "If your EMI payments ever exceed 30% of your income, consider making prepayments to reduce the principal amount of the highest-interest debt first. This strategy will help you save on interest payments over time and reduce your overall debt burden."
+    ],
+    "actions": [
+      "Monitor your financial commitments to ensure that any new EMI does not exceed Rs.16,152 per month.",
+      "If you take on new debt, prioritize paying off credit card debt first, followed by personal loans, car loans, and finally home loans.",
+      "In case of high EMI burdens, focus on prepaying the highest-interest debt to reduce financial stress."
+    ]
+  }
+}

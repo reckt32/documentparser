@@ -204,6 +204,7 @@ def init_db():
           email TEXT,
           display_name TEXT,
           has_paid INTEGER DEFAULT 0,
+          report_credits INTEGER DEFAULT 0,
           payment_id TEXT,
           payment_order_id TEXT,
           payment_amount_paise INTEGER,
@@ -214,6 +215,31 @@ def init_db():
         """
     )
     _exec("CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid)")
+    
+    # Add report_credits column if it doesn't exist (migration for existing databases)
+    try:
+        _exec("ALTER TABLE users ADD COLUMN report_credits INTEGER DEFAULT 0")
+    except Exception:
+        pass  # Column already exists
+    
+    # Payments table for tracking payment history and credits granted
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS payments (
+          id INTEGER PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          firebase_uid TEXT NOT NULL,
+          payment_id TEXT NOT NULL,
+          order_id TEXT,
+          amount_paise INTEGER,
+          credits_granted INTEGER DEFAULT 3,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    _exec("CREATE INDEX IF NOT EXISTS idx_payments_firebase_uid ON payments(firebase_uid)")
+    _exec("CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)")
 
 
 def upsert_document(sha256: str, filename: str, page_count: int) -> int:
@@ -433,12 +459,18 @@ def get_user_by_firebase_uid(firebase_uid: str) -> Optional[Dict[str, Any]]:
     if not rows:
         return None
     row = rows[0]
+    # Handle report_credits column which might not exist in older databases
+    try:
+        report_credits = row["report_credits"] or 0
+    except (KeyError, IndexError):
+        report_credits = 0
     return {
         "id": row["id"],
         "firebase_uid": row["firebase_uid"],
         "email": row["email"],
         "display_name": row["display_name"],
         "has_paid": bool(row["has_paid"]),
+        "report_credits": report_credits,
         "payment_id": row["payment_id"],
         "payment_order_id": row["payment_order_id"],
         "payment_amount_paise": row["payment_amount_paise"],
@@ -470,17 +502,39 @@ def create_or_update_user(firebase_uid: str, email: str = None, display_name: st
         return cur.lastrowid
 
 
-def mark_user_as_paid(firebase_uid: str, payment_id: str, order_id: str = None, amount_paise: int = None) -> bool:
-    """Mark a user as paid after successful payment. Returns True if updated."""
+
+def mark_user_as_paid(firebase_uid: str, payment_id: str, order_id: str = None, amount_paise: int = None, credits_to_add: int = 3) -> bool:
+    """
+    Mark a user as paid after successful payment.
+    Adds credits and records payment in payments table.
+    Returns True if updated.
+    """
+    user = get_user_by_firebase_uid(firebase_uid)
+    if not user:
+        return False
+    
+    # Update user record with payment info and add credits
     result = _exec(
         """
         UPDATE users SET has_paid = 1, payment_id = ?, payment_order_id = ?,
         payment_amount_paise = ?, payment_date = CURRENT_TIMESTAMP,
+        report_credits = report_credits + ?,
         updated_at = CURRENT_TIMESTAMP WHERE firebase_uid = ?
         """,
-        (payment_id, order_id, amount_paise, firebase_uid)
+        (payment_id, order_id, amount_paise, credits_to_add, firebase_uid)
     )
-    return result.rowcount > 0
+    
+    if result.rowcount > 0:
+        # Record payment in payments table for audit trail
+        _exec(
+            """
+            INSERT INTO payments (user_id, firebase_uid, payment_id, order_id, amount_paise, credits_granted)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user["id"], firebase_uid, payment_id, order_id, amount_paise, credits_to_add)
+        )
+        return True
+    return False
 
 
 def check_user_payment_status(firebase_uid: str) -> bool:
@@ -491,6 +545,77 @@ def check_user_payment_status(firebase_uid: str) -> bool:
     return bool(rows[0]["has_paid"])
 
 
+def get_user_credits(firebase_uid: str) -> int:
+    """Get remaining report credits for a user. Returns 0 if user doesn't exist."""
+    rows = _query("SELECT report_credits FROM users WHERE firebase_uid = ?", (firebase_uid,))
+    if not rows:
+        return 0
+    return rows[0]["report_credits"] or 0
+
+
+def add_user_credits(firebase_uid: str, credits: int = 3) -> bool:
+    """Add credits to a user's account. Returns True if updated."""
+    result = _exec(
+        """
+        UPDATE users SET report_credits = report_credits + ?,
+        updated_at = CURRENT_TIMESTAMP WHERE firebase_uid = ?
+        """,
+        (credits, firebase_uid)
+    )
+    return result.rowcount > 0
+
+
+def consume_user_credit(firebase_uid: str) -> bool:
+    """
+    Atomically consume one report credit from user's account.
+    Returns True if successful, False if no credits available or user doesn't exist.
+    
+    Uses atomic SQL UPDATE with WHERE clause to prevent race conditions.
+    """
+    result = _exec(
+        """
+        UPDATE users SET report_credits = report_credits - 1,
+        updated_at = CURRENT_TIMESTAMP
+        WHERE firebase_uid = ? AND report_credits > 0
+        """,
+        (firebase_uid,)
+    )
+    return result.rowcount > 0
+
+
+def get_payment_history(firebase_uid: str) -> list:
+    """Get payment history for a user."""
+    rows = _query(
+        """
+        SELECT id, payment_id, order_id, amount_paise, credits_granted, created_at
+        FROM payments WHERE firebase_uid = ?
+        ORDER BY created_at DESC
+        """,
+        (firebase_uid,)
+    )
+    return [dict(row) for row in rows]
+
+
+def migrate_existing_paid_users(credits: int = 3) -> int:
+    """
+    One-time migration: Grant credits to existing paid users who have 0 credits.
+    Returns number of users updated.
+    """
+    result = _exec(
+        """
+        UPDATE users SET report_credits = ?
+        WHERE has_paid = 1 AND (report_credits IS NULL OR report_credits = 0)
+        """,
+        (credits,)
+    )
+    return result.rowcount
+
+
 # Initialize schema on import
 init_db()
+
+# Auto-migrate existing paid users who have 0 credits (from old one-time payment model)
+_migrated = migrate_existing_paid_users(credits=3)
+if _migrated > 0:
+    print(f"[db] Migrated {_migrated} existing paid user(s) → granted 3 report credits each")
 

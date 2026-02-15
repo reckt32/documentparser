@@ -155,10 +155,10 @@ def require_auth(f):
 
 def require_payment(f):
     """
-    Decorator that requires the user to have completed payment.
+    Decorator that requires the user to have report credits available.
 
     Must be used AFTER @require_auth decorator.
-    Returns 402 Payment Required if user hasn't paid.
+    Returns 402 Payment Required if user has no credits.
     """
     @functools.wraps(f)
     def decorated_function(*args, **kwargs):
@@ -170,15 +170,63 @@ def require_payment(f):
             }), 401
 
         user = g.current_user
-        if not user.get("has_paid", False):
+        remaining_credits = user.get("report_credits", 0)
+        
+        if remaining_credits <= 0:
             return jsonify({
                 "error": "Payment required",
-                "message": "Please complete payment to access this feature",
-                "payment_status": "unpaid"
+                "message": "You have no report credits remaining. Please purchase more credits to continue.",
+                "payment_status": "no_credits",
+                "remaining_credits": 0
             }), 402
 
         return f(*args, **kwargs)
     return decorated_function
+
+
+def consume_credit(f):
+    """
+    Decorator that atomically consumes one report credit after successful execution.
+    
+    Must be used AFTER @require_auth and @require_payment decorators.
+    
+    This decorator:
+    1. Attempts to atomically consume one credit before calling the wrapped function
+    2. If credit consumption fails (race condition), returns 402
+    3. On success, includes remaining_credits in the response
+    
+    Note: Credit is consumed BEFORE report generation to prevent generating
+    reports without valid credits in race conditions.
+    """
+    @functools.wraps(f)
+    def decorated_function(*args, **kwargs):
+        from db import consume_user_credit, get_user_credits
+        
+        # Ensure require_auth was called first
+        if not hasattr(g, 'current_user') or g.current_user is None:
+            return jsonify({
+                "error": "Authentication required",
+                "message": "This endpoint requires authentication"
+            }), 401
+        
+        user = g.current_user
+        firebase_uid = user.get("firebase_uid")
+        
+        # Atomically consume one credit
+        if not consume_user_credit(firebase_uid):
+            return jsonify({
+                "error": "Payment required",
+                "message": "Unable to consume credit. You may have no credits remaining.",
+                "payment_status": "no_credits",
+                "remaining_credits": 0
+            }), 402
+        
+        # Store remaining credits for use in response (after consumption)
+        g.remaining_credits = get_user_credits(firebase_uid)
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
 
 
 def optional_auth(f):

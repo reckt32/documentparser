@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "questionnaire_id": 18,
+    "section": "goals_strategy",
+    "model": "gpt-4o",
+    "ts": 1771091026,
+    "facts_hash": "7c790ece3a5acd3f27f6e5e4f6f4301527156adc00960e9260d3058a9295203b",
+    "prompt": {
+      "system": "You are a senior financial planner creating realistic goal strategies for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Your role is to provide HONEST and PRACTICAL advice. CRITICAL: The sum of ALL recommended SIPs MUST NOT exceed the available budget. You MUST use the 'affordable_sip' values from the data, NOT the 'ideal_sip' values. The ideal_sip is only for showing what would be needed in a perfect scenario - it is NOT the recommendation. Goals are pre-sorted by priority (priority_rank=1 is highest priority). If there's a gap (gap_exists=true), provide specific bridge recommendations.",
+      "user": "Section: Goal-wise Strategy with Priority Framework\nFactsDigest:\n{\"affordability_summary\": {\"budget_exceeded_by\": 0, \"constraint_violated\": true, \"fundable_percentage\": 100.0, \"funding_gap\": 0, \"remaining_budget_for_goals\": 0, \"total_affordable_sip\": 0, \"total_ideal_sip_required\": 0.0}, \"calculation_assumptions_note\": \"Calculations use expected returns of 7.4%-14% p.a. (based on risk category) and 6.0% inflation.\", \"financial_capacity\": {\"available_surplus\": 0, \"existing_sip_commitments\": 0.0, \"monthly_emi\": 590.0, \"monthly_expenses\": 737.75, \"monthly_income\": 713.24, \"net_available_for_new_goals\": 0, \"per_goal_budget\": 0.0, \"total_ideal_sip_required\": 0.0}, \"goals\": [], \"insurance_gaps\": {\"has_dependents\": false, \"health_insurance_gap\": 1000000.0, \"term_insurance_gap\": 85588.0}, \"overall_gap_exists\": true, \"overall_recommended_equity_band\": {\"max\": 40, \"min\": 25}, \"priority_framework\": {\"allocated_to_insurance\": 2917.0, \"available_savings\": 0.0, \"bridge_recommendations\": [], \"existing_investments_allocation\": [], \"existing_sip_running\": 0.0, \"goal_achievement_percent\": 100.0, \"goal_funding_percent\": 100.0, \"goal_sip_table\": [{\"allocated_sip\": 0.0, \"corpus_created_1yr\": 0, \"fund_type\": \"Liquid Fund / Savings Account\", \"ideal_sip\": 0.0, \"is_emergency\": true, \"name\": \"Emergency Fund\", \"risk_category\": \"Low\", \"shortfall\": 0, \"target_amount\": 4426.0, \"years_to_target\": null}], \"insurance_from_savings\": 0.0, \"insurance_recommendation\": {\"monthly_sip_for_next_year\": 2917.0, \"note\": null, \"savings_remaining\": 0.0, \"savings_used\": 0.0, \"use_savings\": false}, \"insurance_sip_monthly\": 2917.0, \"monthly_surplus\": 0, \"new_allocations_available\": 0, \"num_allocation_buckets\": 1, \"per_goal_sip\": 0.0, \"priority_breakdown\": [{\"from_savings\": 0, \"monthly_amount\": 0, \"name\": \"Term Insurance\", \"note\": \"Adequate coverage\", \"priority\": 1, \"status\": \"Not Required\", \"yearly_amount\": 0}, {\"from_savings\": 0, \"monthly_amount\": 2917.0, \"name\": \"Health Insurance\", \"note\": \"Use Rs. 0 from savings for this year. Cover gap: Rs. 1,000,000\", \"priority\": 2, \"status\": \"Partial from Savings\", \"yearly_amount\": 35000.0}, {\"ideal_amount\": 0.0, \"monthly_amount\": 0, \"name\": \"Emergency Fund + Goal SIPs\", \"note\": \"Divided equally: Rs. 0/month each for 1 items\", \"priority\": 3, \"status\": \"Full\"}], \"remaining_for_goals\": 0, \"savings_shortfall\": 0, \"summary\": \"With Rs. 0/month surplus: Rs. 2,917 for insurance, Rs. 0 remaining for goals. Total investing: Rs. 0/month (100.0% of goal requirement).\", \"total_allocated_sip\": 0.0, \"total_ideal_sip_needed\": 0.0, \"total_investing\": 0.0}, \"riskFinalCategory\": \"Conservative\"}\n\n⚠️ **CRITICAL BUDGET CONSTRAINT - READ CAREFULLY:**\n   - Available monthly budget for goals: Rs. 0\n   - Total IDEAL SIP needed (if unlimited funds): Rs. 0\n   - Insurance provision needed: Rs. 2,917/month\n   - Available after insurance: Rs. 0/month\n   - REQUIRED for all goals: Rs. 0/month\n   - SHORTFALL: Rs. 0/month\n\n**DO NOT say 'no surplus remains' or 'Available: Rs. 0' unless truly zero.**\n**Acknowledge existing investments and remaining capacity accurately.**\n\nIMPORTANT INSTRUCTIONS:\n\n**PRIORITY FRAMEWORK (MUST INCLUDE):**\nThe priority_framework section shows allocation in this order:\n  Priority 1: Term Insurance (if dependents exist)\n  Priority 2: Health Insurance (if gap exists)\n  Priority 3: Goal SIPs (remaining surplus)\n\nCurrent goal achievement level: 100% of total goal requirements.\n1. START WITH PRIORITY SUMMARY: Begin with a bullet stating:\n   'With Rs.[surplus]/month: Rs.[X] for insurance, Rs.[Y] remaining for goals ([Z]% of requirement)'\n\n2. GOAL PRIORITY ORDER: Discuss goals in priority order (priority_rank=1 first).\n   - 'Immediate' tier: Address within 1-2 years\n   - 'Short-term' tier: Address in years 3-5\n   - 'Long-term' tier: Can be deferred to year 5+\n\n3. For each goal, clearly state (IN THIS ORDER):\n   - RECOMMENDED SIP: 'Allocate Rs.[affordable_sip]/month for [goal_name]' (THIS IS THE KEY NUMBER)\n   - FUNDING GAP: If gap_exists=true, say 'Th"
+    },
+    "usage": {
+      "prompt_tokens": 1743,
+      "completion_tokens": 360,
+      "total_tokens": 2103
+    }
+  },
+  "content": {
+    "title": "Goal Strategy: Prioritized Action Plan",
+    "bullets": [
+      "With Rs.0/month: Rs.2,917 for insurance, Rs.0 remaining for goals (100% of requirement)",
+      "Allocate Rs.0/month for Emergency Fund"
+    ],
+    "paragraphs": [
+      "Given the current financial constraints, the primary focus is on addressing the insurance needs. With Rs.2,917/month allocated for health insurance, there is no surplus available for goal SIPs. The Emergency Fund is fully funded with the existing allocation, ensuring immediate liquidity needs are met.",
+      "The priority framework emphasizes the importance of insurance coverage, especially health insurance, due to the existing gap of Rs.1,000,000. This allocation ensures that critical health coverage is partially addressed, while the Emergency Fund remains stable. Calculations use expected returns of 7.4%-14% p.a. (based on risk category) and 6.0% inflation.",
+      "To achieve full funding for future goals, consider strategies such as extending timelines, reducing target amounts, or increasing income. Although the current allocation meets 100% of the immediate goal requirements, any future surplus should be directed towards building a robust financial plan that aligns with the recommended equity band of 25-40%."
+    ],
+    "actions": [
+      "Focus on maintaining health insurance coverage to close the existing gap.",
+      "Monitor monthly expenses closely to identify potential savings opportunities.",
+      "Consider increasing income through additional work or investments to create surplus for future goals.",
+      "Reassess financial goals annually to adjust SIPs as income and expenses change.",
+      "Ensure overall portfolio remains within the recommended equity band of 25-40% for balanced growth."
+    ]
+  }
+}

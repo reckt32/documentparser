@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, url_for, send_from_directory, send_file
+from flask import Flask, request, jsonify, g, url_for, send_from_directory, send_file
 import pdfplumber
 import re
 import json
@@ -44,7 +44,7 @@ from db import (
 )
 
 # Auth and Payment modules
-from auth import require_auth, require_payment, verify_firebase_token, optional_auth
+from auth import require_auth, require_payment, consume_credit, verify_firebase_token, optional_auth
 from payment import (
     create_razorpay_order,
     verify_razorpay_signature,
@@ -5553,6 +5553,7 @@ def _default_strategy_for_goal(g):
 @app.route("/report/generate", methods=["POST"])
 @require_auth
 @require_payment
+@consume_credit
 def report_generate():
     data = request.get_json(force=True) or {}
     questionnaire_id = data.get("questionnaire_id")
@@ -5583,6 +5584,10 @@ def report_generate():
     pdf_path = os.path.join(OUTPUT_DIR, pdf_filename)
     generate_financial_plan_pdf(q, analysis, pdf_path, doc_insights=doc_insights, narratives=sections)
     url = url_for("download_file", filename=pdf_filename, _external=True)
+    
+    # Include remaining credits from consume_credit decorator
+    remaining_credits = getattr(g, 'remaining_credits', 0)
+    
     return jsonify({
         "financial_plan_pdf_url": url,
         "summary_pdf_url": url,
@@ -5590,7 +5595,8 @@ def report_generate():
         "questionnaire_id": questionnaire_id,
         "analysis": analysis,
         "docInsights": doc_insights,
-        "sections": sections
+        "sections": sections,
+        "remaining_credits": remaining_credits
     }), 200
 
 # --- PDF Generation Logic (Enhanced) ---
@@ -5879,9 +5885,11 @@ def auth_status():
             "email": user["email"],
             "display_name": user["display_name"],
             "has_paid": user["has_paid"],
+            "report_credits": user.get("report_credits", 0),
             "payment_date": user["payment_date"],
         },
         "report_price_paise": get_report_price_paise(),
+        "credits_per_payment": 3,
     }), 200
 
 
@@ -5892,18 +5900,16 @@ def payment_create_order():
     Create a Razorpay order for payment.
     Requires valid Firebase ID token in Authorization header.
     
+    Users can purchase multiple times to stack credits.
+    Each payment grants 3 report credits.
+    
     Returns:
         - Razorpay order details for client-side payment
     """
     from flask import g
     user = g.current_user
     
-    # Check if already paid
-    if user.get("has_paid"):
-        return jsonify({
-            "error": "Already paid",
-            "message": "You have already completed payment"
-        }), 400
+    # Note: We no longer block "already paid" users - they can buy more credits
     
     try:
         order = create_razorpay_order(firebase_uid=user["firebase_uid"])
@@ -5911,6 +5917,8 @@ def payment_create_order():
             "success": True,
             "order": order,
             "user_email": user.get("email"),
+            "current_credits": user.get("report_credits", 0),
+            "credits_per_payment": 3,
         }), 200
     except ValueError as e:
         return jsonify({"error": str(e)}), 500
@@ -5932,10 +5940,10 @@ def payment_verify():
         - signature: Razorpay signature
     
     Returns:
-        - Payment verification status
+        - Payment verification status and updated credit count
     """
     from flask import g
-    from db import mark_user_as_paid
+    from db import mark_user_as_paid, get_user_credits
     
     user = g.current_user
     data = request.get_json(force=True) or {}
@@ -5951,19 +5959,24 @@ def payment_verify():
     if not verify_razorpay_signature(order_id, payment_id, signature):
         return jsonify({"error": "Invalid payment signature"}), 400
     
-    # Mark user as paid
+    # Mark user as paid and add credits (default 3 credits per payment)
     success = mark_user_as_paid(
         firebase_uid=user["firebase_uid"],
         payment_id=payment_id,
         order_id=order_id,
-        amount_paise=get_report_price_paise()
+        amount_paise=get_report_price_paise(),
+        credits_to_add=3
     )
     
     if success:
+        # Get updated credit count
+        remaining_credits = get_user_credits(user["firebase_uid"])
         return jsonify({
             "success": True,
-            "message": "Payment verified successfully",
-            "has_paid": True
+            "message": "Payment verified successfully. 3 report credits added.",
+            "has_paid": True,
+            "remaining_credits": remaining_credits,
+            "credits_added": 3
         }), 200
     else:
         return jsonify({
@@ -6024,17 +6037,22 @@ def payment_webhook():
 @require_auth
 def payment_status():
     """
-    Get current user's payment status.
+    Get current user's payment status and credit information.
     """
     from flask import g
     user = g.current_user
+    remaining_credits = user.get("report_credits", 0)
     
     return jsonify({
         "has_paid": user.get("has_paid", False),
         "payment_id": user.get("payment_id"),
         "payment_date": user.get("payment_date"),
         "report_price_paise": get_report_price_paise(),
+        "remaining_credits": remaining_credits,
+        "can_generate_report": remaining_credits > 0,
+        "credits_per_payment": 3,
     }), 200
+
 
 
 @app.route("/payment/reconcile", methods=["POST"])

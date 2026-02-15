@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "questionnaire_id": 22,
+    "section": "flags_explainer",
+    "model": "gpt-4o",
+    "ts": 1771151541,
+    "facts_hash": "21ddbb59280ebb798f0aa3caa1f7c541283b6e973e3333e50d53c1866a845213",
+    "prompt": {
+      "system": "You are a senior financial planner writing for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Be precise, neutral, and practical. No guarantees or forward-looking promises. Return valid JSON with keys: title (string), bullets (array of short points), paragraphs (2-3 short paragraphs), actions (checklist items).",
+      "user": "Section: Flags and Actions\nFactsDigest JSON (<=2KB):\n{\"client\": {\"age\": \"\", \"dependents\": 0}, \"flags\": [\"Low Surplus: Saving 0.0% vs Benchmark 20%+\", \"Underinsured: Cover Rs. 0 vs Required Rs. 64.6 L\", \"Insufficient Liquidity: Emergency fund 0.0 months vs Benchmark 6+\", \"Score = 0.0 -> Poor: Saving 0.0% income\"], \"kpis\": {\"debtStress\": \"Healthy\", \"emiPct\": 0.0, \"ihsBand\": \"Poor\", \"insuranceGap\": \"Underinsured\", \"liquidity\": \"Insufficient\", \"liquidityMonths\": 0.0, \"surplusBand\": \"Low\"}}\n\nConstraints:\n- Max 6 bullets, each <= 20 words.\n- 1-2 paragraphs, each <= 80 words.\n- Max 5 actions, each actionable and specific.\n"
+    },
+    "usage": {
+      "prompt_tokens": 302,
+      "completion_tokens": 279,
+      "total_tokens": 581
+    }
+  },
+  "content": {
+    "title": "Financial Health Assessment and Recommendations",
+    "bullets": [
+      "Saving rate is 0.0%, below 20% benchmark.",
+      "Insurance coverage is Rs. 0; required is Rs. 64.6 L.",
+      "Emergency fund covers 0.0 months; benchmark is 6+ months.",
+      "Debt stress is healthy with 0% EMI.",
+      "Overall financial score is poor.",
+      "Immediate focus needed on savings and insurance."
+    ],
+    "paragraphs": [
+      "Your current financial situation indicates a need for immediate action. With no savings and inadequate insurance coverage, your financial security is at risk. Establishing a robust emergency fund and enhancing your insurance coverage are critical steps.",
+      "Although your debt stress is healthy, the lack of savings and insurance could lead to financial instability. Prioritizing these areas will help improve your financial health and provide a safety net for unforeseen circumstances."
+    ],
+    "actions": [
+      "Set a monthly savings goal to reach at least 20% of your income.",
+      "Review and increase your insurance coverage to Rs. 64.6 L.",
+      "Build an emergency fund to cover at least 6 months of expenses.",
+      "Track and reduce unnecessary expenses to boost savings.",
+      "Consult a financial advisor to create a comprehensive financial plan."
+    ]
+  }
+}

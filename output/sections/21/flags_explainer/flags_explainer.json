@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "questionnaire_id": 21,
+    "section": "flags_explainer",
+    "model": "gpt-4o",
+    "ts": 1771151057,
+    "facts_hash": "21ddbb59280ebb798f0aa3caa1f7c541283b6e973e3333e50d53c1866a845213",
+    "prompt": {
+      "system": "You are a senior financial planner writing for Indian retail clients. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. Be precise, neutral, and practical. No guarantees or forward-looking promises. Return valid JSON with keys: title (string), bullets (array of short points), paragraphs (2-3 short paragraphs), actions (checklist items).",
+      "user": "Section: Flags and Actions\nFactsDigest JSON (<=2KB):\n{\"client\": {\"age\": \"\", \"dependents\": 0}, \"flags\": [\"Low Surplus: Saving 0.0% vs Benchmark 20%+\", \"Underinsured: Cover Rs. 0 vs Required Rs. 64.6 L\", \"Insufficient Liquidity: Emergency fund 0.0 months vs Benchmark 6+\", \"Score = 0.0 -> Poor: Saving 0.0% income\"], \"kpis\": {\"debtStress\": \"Healthy\", \"emiPct\": 0.0, \"ihsBand\": \"Poor\", \"insuranceGap\": \"Underinsured\", \"liquidity\": \"Insufficient\", \"liquidityMonths\": 0.0, \"surplusBand\": \"Low\"}}\n\nConstraints:\n- Max 6 bullets, each <= 20 words.\n- 1-2 paragraphs, each <= 80 words.\n- Max 5 actions, each actionable and specific.\n"
+    },
+    "usage": {
+      "prompt_tokens": 302,
+      "completion_tokens": 226,
+      "total_tokens": 528
+    }
+  },
+  "content": {
+    "title": "Financial Health Assessment and Recommendations",
+    "bullets": [
+      "Saving rate is 0.0%, below 20% benchmark.",
+      "Insurance coverage is Rs. 0; required is Rs. 64.6 L.",
+      "Emergency fund covers 0.0 months; aim for 6+ months.",
+      "Debt stress is healthy with 0.0% EMI.",
+      "Overall financial score is poor.",
+      "Immediate focus on savings and insurance needed."
+    ],
+    "paragraphs": [
+      "Your current financial situation indicates a need for immediate improvement in savings, insurance, and liquidity. With no surplus savings and inadequate insurance coverage, it's crucial to address these gaps to secure your financial future.",
+      "Building an emergency fund is essential, as it currently covers 0.0 months. Prioritize setting aside funds to cover at least six months of expenses. This will provide a safety net during unforeseen circumstances."
+    ],
+    "actions": [
+      "Increase savings rate to at least 20% of income.",
+      "Purchase insurance to cover Rs. 64.6 L.",
+      "Establish an emergency fund for six months' expenses.",
+      "Review monthly expenses to identify saving opportunities.",
+      "Consult a financial advisor for personalized planning."
+    ]
+  }
+}

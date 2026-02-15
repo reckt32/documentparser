@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "questionnaire_id": 18,
+    "section": "cashflow",
+    "model": "gpt-4o",
+    "ts": 1771090987,
+    "facts_hash": "e93c2504ae9e38f3ff69bf5e470b3e4859d67ade131f3149c7eca70217bb215d",
+    "prompt": {
+      "system": "You are a financial planner for Indian clients. Explain cashflows clearly, with practical advice to improve savings. IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Cashflow Overview\nFactsDigest:\n{\"bank\": {\"net_cashflow\": -294.1100000000006, \"total_inflows\": 8558.84, \"total_outflows\": 8852.95}, \"surplusBand\": \"Low\"}\n\nReturn JSON: title, bullets, paragraphs, actions. Keep concise and actionable."
+    },
+    "usage": {
+      "prompt_tokens": 130,
+      "completion_tokens": 323,
+      "total_tokens": 453
+    }
+  },
+  "content": {
+    "title": "Optimizing Cashflow for Better Savings",
+    "bullets": [
+      "Current net cashflow is negative at Rs. -294.11.",
+      "Total inflows amount to Rs. 8,558.84.",
+      "Total outflows are Rs. 8,852.95.",
+      "Surplus band is categorized as 'Low'."
+    ],
+    "paragraphs": [
+      "Your current financial situation indicates a negative cashflow, meaning your expenses exceed your income by Rs. 294.11. This can be a concern if it continues over time, as it may lead to debt accumulation. It's essential to address this imbalance to improve your financial health.",
+      "The key to improving your cashflow is to either increase your income or decrease your expenses. By doing so, you can move from a negative to a positive cashflow, which will allow you to save more and achieve your financial goals."
+    ],
+    "actions": [
+      "Review and categorize your expenses to identify non-essential spending. Consider cutting back on discretionary expenses such as dining out, entertainment, or subscriptions.",
+      "Explore opportunities to increase your income. This could include asking for a raise, taking on a part-time job, or exploring freelance work.",
+      "Set a monthly budget to track your spending and ensure you are living within your means.",
+      "Consider setting up an automatic savings plan where a fixed amount is transferred to your savings account each month.",
+      "Review your utility bills and other recurring expenses to see if there are cheaper alternatives or plans available."
+    ]
+  }
+}

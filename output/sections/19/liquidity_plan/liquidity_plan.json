@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "questionnaire_id": 19,
+    "section": "liquidity_plan",
+    "model": "gpt-4o",
+    "ts": 1771091674,
+    "facts_hash": "15077fbecb207232d857919acc676e6b2774559900fc88a52c6aad5fef6b2f38",
+    "prompt": {
+      "system": "You design emergency fund guidance aligned with Indian norms (6+ months as baseline). IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency.",
+      "user": "Section: Liquidity Plan\nFactsDigest:\n{\"liquidity\": \"Insufficient\", \"liquidityMonths\": 0.0}\n\nReturn JSON with title, bullets, paragraphs, actions. Keep it concise and practical."
+    },
+    "usage": {
+      "prompt_tokens": 99,
+      "completion_tokens": 268,
+      "total_tokens": 367
+    }
+  },
+  "content": {
+    "title": "Enhancing Your Liquidity Plan",
+    "bullets": [
+      "Current Liquidity Status: Insufficient",
+      "Current Liquidity Coverage: 0 months"
+    ],
+    "paragraphs": [
+      "Having a robust emergency fund is crucial for financial stability, especially in uncertain times. The recommended baseline for an emergency fund is to cover at least 6 months of essential expenses. This ensures that you have a financial cushion to rely on in case of unexpected events such as job loss, medical emergencies, or urgent repairs.",
+      "Given your current liquidity status, it is important to take immediate steps to build your emergency fund. This will not only provide peace of mind but also prevent you from incurring debt during emergencies."
+    ],
+    "actions": [
+      "Calculate your monthly essential expenses to determine the target amount for your emergency fund.",
+      "Set a realistic monthly savings goal to gradually build your fund. Consider starting with at least 10% of your monthly income.",
+      "Automate your savings by setting up a recurring transfer to a dedicated savings account.",
+      "Review your budget to identify areas where you can cut back and redirect those funds towards your emergency savings.",
+      "Consider additional income streams, such as freelance work or part-time jobs, to accelerate your savings."
+    ]
+  }
+}
