@@ -58,7 +58,8 @@ def _get_razorpay_client() -> razorpay.Client:
             super().__init__(**kwargs)
         
         def send(self, request, **kwargs):
-            kwargs.setdefault('timeout', self.timeout)
+            if kwargs.get('timeout') is None:
+                kwargs['timeout'] = self.timeout
             return super().send(request, **kwargs)
     
     adapter = TimeoutAdapter(timeout=(5, 15))  # connect: 5s, read: 15s
