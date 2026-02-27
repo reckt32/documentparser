@@ -1,8 +1,11 @@
 import os
 import json
 import sqlite3
+import logging
 import threading
 from typing import Any, Dict, Iterable, Optional
+
+logger = logging.getLogger(__name__)
 
 # SQLite file lives under backend/output/index.db
 _BASE_DIR = os.path.dirname(__file__)
@@ -240,6 +243,7 @@ def init_db():
     )
     _exec("CREATE INDEX IF NOT EXISTS idx_payments_firebase_uid ON payments(firebase_uid)")
     _exec("CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)")
+    _exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_payment_id ON payments(payment_id)")
 
 
 def upsert_document(sha256: str, filename: str, page_count: int) -> int:
@@ -507,8 +511,18 @@ def mark_user_as_paid(firebase_uid: str, payment_id: str, order_id: str = None, 
     """
     Mark a user as paid after successful payment.
     Adds credits and records payment in payments table.
-    Returns True if updated.
+    
+    IDEMPOTENT: If payment_id was already processed, skips credit addition
+    and returns True. This prevents duplicate credits from verify + webhook + reconcile.
+    
+    Returns True if updated (or already processed).
     """
+    # Idempotency: check if this payment_id was already processed
+    existing = _query("SELECT id FROM payments WHERE payment_id = ?", (payment_id,))
+    if existing:
+        logger.info(f"Payment {payment_id} already processed for user {firebase_uid} (idempotent skip)")
+        return True
+    
     user = get_user_by_firebase_uid(firebase_uid)
     if not user:
         return False

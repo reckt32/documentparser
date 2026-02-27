@@ -70,8 +70,8 @@ def _get_razorpay_client() -> razorpay.Client:
 
 
 def get_report_price_paise() -> int:
-    """Get the report price in paise from environment or default (₹499 = 49900 paise)."""
-    return int(os.getenv("REPORT_PRICE_PAISE", "49900"))
+    """Get the report price in paise from environment or default (₹999 = 99900 paise)."""
+    return int(os.getenv("REPORT_PRICE_PAISE", "99900"))
 
 
 def create_razorpay_order(
