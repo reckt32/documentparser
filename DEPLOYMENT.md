@@ -2,17 +2,22 @@
 
 ## Deployment Details
 
-**App URL**: https://docparser-app.azurewebsites.net
+**App URL**: https://meerkat.azurewebsites.net
 **Status**: Running
 **Region**: Central India
-**Tier**: B1 Basic (~$13/month)
-**Resource Group**: docparser-prod-rg
-**App Service Plan**: docparser-prod-plan
+**Tier**: B2 Basic (~$26/month)
+**Resource Group**: meerkat-prod-rg
+**App Service Plan**: meerkat-prod-plan
 
 ## Environment Variables
 
 The following environment variables are configured:
 - `OPENAI_API_KEY` - OpenAI API key for document processing
+- `FIREBASE_SERVICE_ACCOUNT_PATH` - Path to Firebase service account key
+- `RAZORPAY_KEY_ID` - Razorpay payment gateway key
+- `RAZORPAY_KEY_SECRET` - Razorpay secret key
+- `RAZORPAY_WEBHOOK_SECRET` - Razorpay webhook verification secret
+- `REPORT_PRICE_PAISE` - Report price in paise (99900 = ₹999)
 - `STORE_REPORTS` - Set to `memory`
 - `OUTPUT_DIR` - Set to `/tmp`
 - `SAVE_TX_JSON` - Set to `false`
@@ -35,27 +40,27 @@ The following environment variables are configured:
 
 ### View Logs
 ```bash
-az webapp log tail --resource-group docparser-prod-rg --name docparser-app
+az webapp log tail --resource-group meerkat-prod-rg --name meerkat
 ```
 
 ### Download Logs
 ```bash
-az webapp log download --resource-group docparser-prod-rg --name docparser-app --log-file app-logs.zip
+az webapp log download --resource-group meerkat-prod-rg --name meerkat --log-file app-logs.zip
 ```
 
 ### Restart App
 ```bash
-az webapp restart --resource-group docparser-prod-rg --name docparser-app
+az webapp restart --resource-group meerkat-prod-rg --name meerkat
 ```
 
 ### Update Environment Variables
 ```bash
-az webapp config appsettings set --resource-group docparser-prod-rg --name docparser-app --settings KEY=VALUE
+az webapp config appsettings set --resource-group meerkat-prod-rg --name meerkat --settings KEY=VALUE
 ```
 
 ### Deploy Updates
 ```bash
-az webapp up --resource-group docparser-prod-rg --name docparser-app --plan docparser-prod-plan --runtime "PYTHON:3.11" --sku B1 --location centralindia
+az webapp up --resource-group meerkat-prod-rg --name meerkat --plan meerkat-prod-plan --runtime "PYTHON:3.11" --sku B2 --location centralindia
 ```
 
 ## Deployment Architecture
@@ -70,27 +75,26 @@ az webapp up --resource-group docparser-prod-rg --name docparser-app --plan docp
 
 ### Check App Status
 ```bash
-curl https://docparser-app.azurewebsites.net/healthz
+curl https://meerkat.azurewebsites.net/healthz
 ```
 
 ### View in Azure Portal
-https://portal.azure.com > Resource Groups > docparser-prod-rg > docparser-app
+https://portal.azure.com > Resource Groups > meerkat-prod-rg > meerkat
 
 ## Cost Management
 
-**B1 Basic Tier Costs**:
-- ~$13.14/month (Pay as you go)
-- 1 core, 1.75 GB RAM
-- Free tier available: Azure for Students includes credits
+**B2 Basic Tier Costs**:
+- ~$26/month (Pay as you go)
+- 2 cores, 3.5 GB RAM
 
 ### Stop App to Save Costs
 ```bash
-az webapp stop --resource-group docparser-prod-rg --name docparser-app
+az webapp stop --resource-group meerkat-prod-rg --name meerkat
 ```
 
 ### Delete Resources
 ```bash
-az group delete --name docparser-prod-rg --yes
+az group delete --name meerkat-prod-rg --yes
 ```
 
 ## Troubleshooting
@@ -98,11 +102,11 @@ az group delete --name docparser-prod-rg --yes
 ### Common Issues
 
 **503 Service Unavailable**: App is starting or crashed
-- Check logs: `az webapp log tail --resource-group docparser-prod-rg --name docparser-app`
-- Restart: `az webapp restart --resource-group docparser-prod-rg --name docparser-app`
+- Check logs: `az webapp log tail --resource-group meerkat-prod-rg --name meerkat`
+- Restart: `az webapp restart --resource-group meerkat-prod-rg --name meerkat`
 
 **Module Not Found Errors**: Dependencies not installed
-- Redeploy with: `az webapp up --resource-group docparser-prod-rg --name docparser-app --runtime "PYTHON:3.11"`
+- Redeploy with: `az webapp up --resource-group meerkat-prod-rg --name meerkat --runtime "PYTHON:3.11"`
 
 **Timeout Errors**: Gunicorn timeout (currently set to 600s)
 - Increase in startup command if needed
@@ -110,9 +114,6 @@ az group delete --name docparser-prod-rg --yes
 ## Security Notes
 
 - HTTPS is enabled by default
-- OPENAI_API_KEY is stored securely in App Settings
+- API keys are stored securely in App Settings
 - Temporary files are stored in `/tmp` and cleaned on restart
 - No persistent storage configured (ephemeral file system)
-
-## Deployment Date
-November 29, 2025
