@@ -40,7 +40,7 @@ load_dotenv()
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 SECTIONS_DIR_NAME = "sections"
-DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
+DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-5.2")
 
 # ------------------------ Financial Assumptions (Configurable) ------------------------ #
 # These assumptions are used for SIP calculations and are displayed in reports

@@ -799,7 +799,7 @@ def extract_bank_statement_hybrid(text, transactions_payload=None, save_json_pat
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=[
                 {"role": "system", "content": "You are a financial analyst expert at extracting structured data from Indian bank statements. All monetary values are in Indian Rupees (INR). Return valid JSON only."},
                 {"role": "user", "content": llm_prompt}
@@ -968,7 +968,7 @@ def extract_itr_hybrid(text):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=[
                 {"role": "system", "content": "You are a tax expert analyzing Indian ITR documents. All monetary values are in Indian Rupees (INR). Extract all financial data accurately. Return valid JSON only."},
                 {"role": "user", "content": llm_prompt}
@@ -1249,7 +1249,7 @@ def extract_insurance_hybrid(text):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=[
                 {"role": "system", "content": "You are an insurance expert analyzing Indian insurance policies. All monetary values are in Indian Rupees (INR). Extract all details accurately based on the insurance type. Return valid JSON only."},
                 {"role": "user", "content": llm_prompt}
@@ -1351,7 +1351,7 @@ def extract_mutual_fund_cas_hybrid(text):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.2",
             messages=[
                 {"role": "system", "content": "You are a mutual fund analysis expert for Indian markets. All monetary values are in Indian Rupees (INR). Extract structured data into a valid JSON format."},
                 {"role": "user", "content": llm_prompt}
