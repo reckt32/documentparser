@@ -31,20 +31,43 @@ logger = logging.getLogger(__name__)
 _razorpay_client = None
 
 
+def get_razorpay_mode() -> str:
+    """Get the current Razorpay mode ('test' or 'live')."""
+    mode = os.getenv("RAZORPAY_MODE", "test").lower().strip()
+    if mode not in ("test", "live"):
+        logger.warning(f"Invalid RAZORPAY_MODE='{mode}', defaulting to 'test'")
+        return "test"
+    return mode
+
+
 def _get_razorpay_client() -> razorpay.Client:
-    """Get or initialize Razorpay client with timeout configuration."""
+    """Get or initialize Razorpay client with timeout configuration.
+    
+    Reads RAZORPAY_MODE ('test' or 'live', default 'test') and picks
+    the corresponding key pair:
+      - test: RAZORPAY_KEY_ID_TEST / RAZORPAY_KEY_SECRET_TEST
+      - live: RAZORPAY_KEY_ID_LIVE / RAZORPAY_KEY_SECRET_LIVE
+    
+    Falls back to RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET for backward compat.
+    """
     global _razorpay_client
     if _razorpay_client is not None:
         return _razorpay_client
 
-    key_id = os.getenv("RAZORPAY_KEY_ID")
-    key_secret = os.getenv("RAZORPAY_KEY_SECRET")
+    mode = get_razorpay_mode()
+    suffix = mode.upper()  # "TEST" or "LIVE"
+
+    # Try mode-specific keys first, then fall back to generic
+    key_id = os.getenv(f"RAZORPAY_KEY_ID_{suffix}") or os.getenv("RAZORPAY_KEY_ID")
+    key_secret = os.getenv(f"RAZORPAY_KEY_SECRET_{suffix}") or os.getenv("RAZORPAY_KEY_SECRET")
 
     if not key_id or not key_secret:
         raise ValueError(
-            "Razorpay credentials not configured. "
-            "Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET environment variables."
+            f"Razorpay credentials not configured for '{mode}' mode. "
+            f"Set RAZORPAY_KEY_ID_{suffix} and RAZORPAY_KEY_SECRET_{suffix} environment variables."
         )
+
+    logger.info(f"Initializing Razorpay client in {mode.upper()} mode (key: {key_id[:12]}...)")
 
     _razorpay_client = razorpay.Client(auth=(key_id, key_secret))
     
@@ -130,7 +153,7 @@ def create_razorpay_order(
                 "amount": order["amount"],
                 "currency": order["currency"],
                 "receipt": order["receipt"],
-                "key_id": os.getenv("RAZORPAY_KEY_ID"),
+                "key_id": os.getenv(f"RAZORPAY_KEY_ID_{get_razorpay_mode().upper()}") or os.getenv("RAZORPAY_KEY_ID"),
                 "status": order["status"]
             }
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
@@ -166,9 +189,10 @@ def verify_razorpay_signature(
     Returns:
         True if signature is valid, False otherwise
     """
-    key_secret = os.getenv("RAZORPAY_KEY_SECRET")
+    suffix = get_razorpay_mode().upper()
+    key_secret = os.getenv(f"RAZORPAY_KEY_SECRET_{suffix}") or os.getenv("RAZORPAY_KEY_SECRET")
     if not key_secret:
-        logger.error("RAZORPAY_KEY_SECRET not configured - cannot verify signature")
+        logger.error(f"RAZORPAY_KEY_SECRET_{suffix} not configured - cannot verify signature")
         return False
 
     # Generate signature using order_id|payment_id

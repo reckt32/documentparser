@@ -14,8 +14,11 @@
 The following environment variables are configured:
 - `OPENAI_API_KEY` - OpenAI API key for document processing
 - `FIREBASE_SERVICE_ACCOUNT_PATH` - Path to Firebase service account key
-- `RAZORPAY_KEY_ID` - Razorpay payment gateway key
-- `RAZORPAY_KEY_SECRET` - Razorpay secret key
+- `RAZORPAY_MODE` - Razorpay mode: `test` or `live` (controls which key pair is used)
+- `RAZORPAY_KEY_ID_TEST` - Razorpay test mode key ID (`rzp_test_...`)
+- `RAZORPAY_KEY_SECRET_TEST` - Razorpay test mode secret key
+- `RAZORPAY_KEY_ID_LIVE` - Razorpay live mode key ID (`rzp_live_...`)
+- `RAZORPAY_KEY_SECRET_LIVE` - Razorpay live mode secret key
 - `RAZORPAY_WEBHOOK_SECRET` - Razorpay webhook verification secret
 - `REPORT_PRICE_PAISE` - Report price in paise (99900 = ₹999)
 - `STORE_REPORTS` - Set to `memory`
