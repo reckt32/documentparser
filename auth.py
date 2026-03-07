@@ -253,3 +253,43 @@ def optional_auth(f):
 
         return f(*args, **kwargs)
     return decorated_function
+
+
+def require_admin(f):
+    """
+    Decorator that requires the authenticated user to be an admin.
+
+    Must be used AFTER @require_auth decorator.
+    Checks g.firebase_token["email"] against the ADMIN_EMAILS environment variable
+    (comma-separated list of admin email addresses).
+    Returns 403 Forbidden if not an admin.
+    """
+    @functools.wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Ensure require_auth was called first
+        if not hasattr(g, 'firebase_token') or g.firebase_token is None:
+            return jsonify({
+                "error": "Authentication required",
+                "message": "This endpoint requires authentication"
+            }), 401
+
+        user_email = (g.firebase_token.get("email") or "").lower().strip()
+        admin_emails_raw = os.getenv("ADMIN_EMAILS", "")
+        admin_emails = [
+            e.strip().lower() for e in admin_emails_raw.split(",") if e.strip()
+        ]
+
+        if not admin_emails:
+            return jsonify({
+                "error": "Admin not configured",
+                "message": "No admin emails have been configured on the server"
+            }), 403
+
+        if user_email not in admin_emails:
+            return jsonify({
+                "error": "Forbidden",
+                "message": "You do not have admin access"
+            }), 403
+
+        return f(*args, **kwargs)
+    return decorated_function

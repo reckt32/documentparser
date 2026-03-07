@@ -625,6 +625,82 @@ def migrate_existing_paid_users(credits: int = 3) -> int:
     return result.rowcount
 
 
+# --- Admin helpers ---
+
+def list_all_users(page: int = 1, per_page: int = 25, search: Optional[str] = None):
+    """List all users with pagination and optional email search. Returns (users, total)."""
+    offset = (page - 1) * per_page
+
+    if search:
+        like = f"%{search}%"
+        total_rows = _query(
+            "SELECT COUNT(*) AS cnt FROM users WHERE email LIKE ? OR display_name LIKE ?",
+            (like, like),
+        )
+        total = total_rows[0]["cnt"] if total_rows else 0
+        rows = _query(
+            """
+            SELECT id, firebase_uid, email, display_name, has_paid,
+                   report_credits, payment_date, created_at, updated_at
+            FROM users
+            WHERE email LIKE ? OR display_name LIKE ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (like, like, per_page, offset),
+        )
+    else:
+        total_rows = _query("SELECT COUNT(*) AS cnt FROM users")
+        total = total_rows[0]["cnt"] if total_rows else 0
+        rows = _query(
+            """
+            SELECT id, firebase_uid, email, display_name, has_paid,
+                   report_credits, payment_date, created_at, updated_at
+            FROM users
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (per_page, offset),
+        )
+
+    users = [dict(r) for r in rows]
+    return users, total
+
+
+def delete_user(firebase_uid: str) -> bool:
+    """Delete a user and their payment history. Returns True if user existed."""
+    user = get_user_by_firebase_uid(firebase_uid)
+    if not user:
+        return False
+    _exec("DELETE FROM payments WHERE firebase_uid = ?", (firebase_uid,))
+    _exec("DELETE FROM users WHERE firebase_uid = ?", (firebase_uid,))
+    return True
+
+
+def set_user_credits(firebase_uid: str, credits: int) -> bool:
+    """Set credits to an exact value. Returns True if updated."""
+    result = _exec(
+        """
+        UPDATE users SET report_credits = ?,
+        updated_at = CURRENT_TIMESTAMP WHERE firebase_uid = ?
+        """,
+        (credits, firebase_uid),
+    )
+    return result.rowcount > 0
+
+
+def get_user_count() -> Dict[str, int]:
+    """Get total and paid user counts for dashboard stats."""
+    total_rows = _query("SELECT COUNT(*) AS cnt FROM users")
+    paid_rows = _query("SELECT COUNT(*) AS cnt FROM users WHERE has_paid = 1")
+    credits_rows = _query("SELECT COUNT(*) AS cnt FROM users WHERE report_credits > 0")
+    return {
+        "total": total_rows[0]["cnt"] if total_rows else 0,
+        "paid": paid_rows[0]["cnt"] if paid_rows else 0,
+        "with_credits": credits_rows[0]["cnt"] if credits_rows else 0,
+    }
+
+
 # Initialize schema on import
 init_db()
 
