@@ -5588,10 +5588,13 @@ def _strip_in_app_report_text(value):
 def _report_styles():
     base = getSampleStyleSheet()
     return {
-        "cover_name": ParagraphStyle("mk_cover_name", parent=base["Title"], fontName="Helvetica-Bold", fontSize=28, leading=32, textColor=MEERKAT_NAVY, spaceAfter=8),
+        "cover_name": ParagraphStyle("mk_cover_name", parent=base["Title"], fontName="Helvetica-Bold", fontSize=28, leading=32, textColor=MEERKAT_NAVY, spaceAfter=8, alignment=TA_CENTER),
         "title": ParagraphStyle("mk_title", parent=base["Title"], fontName="Helvetica-Bold", fontSize=22, leading=26, textColor=MEERKAT_NAVY, alignment=TA_LEFT),
+        "cover_title": ParagraphStyle("mk_cover_title", parent=base["Title"], fontName="Helvetica-Bold", fontSize=24, leading=29, textColor=MEERKAT_NAVY, alignment=TA_CENTER),
+        "cover_subtitle": ParagraphStyle("mk_cover_subtitle", parent=base["BodyText"], fontName="Helvetica", fontSize=10, leading=14, textColor=colors.HexColor("#555555"), alignment=TA_CENTER),
         "section": ParagraphStyle("mk_section", parent=base["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=15, textColor=colors.HexColor("#666666"), uppercase=True),
         "h2": ParagraphStyle("mk_h2", parent=base["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=15, textColor=MEERKAT_NAVY, spaceBefore=4, spaceAfter=6),
+        "cover_status": ParagraphStyle("mk_cover_status", parent=base["Heading2"], fontName="Helvetica-Bold", fontSize=15, leading=18, textColor=MEERKAT_ORANGE, alignment=TA_CENTER, spaceBefore=4, spaceAfter=10),
         "body": ParagraphStyle("mk_body", parent=base["BodyText"], fontName="Helvetica", fontSize=9.5, leading=12, textColor=colors.HexColor("#222222")),
         "small": ParagraphStyle("mk_small", parent=base["BodyText"], fontName="Helvetica", fontSize=8, leading=10, textColor=colors.HexColor("#666666")),
         "label": ParagraphStyle("mk_label", parent=base["BodyText"], fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=colors.HexColor("#666666")),
@@ -5614,6 +5617,114 @@ class CanvasBlock(Flowable):
         self.draw_fn(self.canv, 0, 0, self.width, self.height)
 
 
+class TagFlowable(Flowable):
+    def __init__(self, label, width=None, height=15):
+        super().__init__()
+        self.label = str(label or "-")
+        self.width = width or max(48, len(self.label) * 4.8 + 14)
+        self.height = height
+
+    def wrap(self, avail_width, avail_height):
+        return min(self.width, avail_width), self.height
+
+    def draw(self):
+        draw_tag(self.canv, 0, 1, self.label, width=self.width)
+
+
+class KPIFlowable(Flowable):
+    def __init__(self, tiles, width=500, height=70):
+        super().__init__()
+        self.tiles = tiles
+        self.width = width
+        self.height = height
+
+    def wrap(self, avail_width, avail_height):
+        return self.width, self.height
+
+    def draw(self):
+        count = max(1, len(self.tiles))
+        gap = 9
+        tile_w = (self.width - gap * (count - 1)) / count
+        for idx, tile in enumerate(self.tiles):
+            x = idx * (tile_w + gap)
+            draw_kpi_tile(
+                self.canv,
+                x,
+                8,
+                tile_w,
+                54,
+                tile.get("label"),
+                tile.get("value"),
+                tile.get("note", ""),
+                value_color=tile.get("value_color", MEERKAT_NAVY),
+                note_color=tile.get("note_color", colors.HexColor("#777777")),
+            )
+
+
+class ScoreBarFlowable(Flowable):
+    def __init__(self, label, score, band=None, width=500, height=24):
+        super().__init__()
+        self.label = label
+        self.score = max(0, min(100, _num(score, 0)))
+        self.band = band or _urgency(self.score)
+        self.width = width
+        self.height = height
+
+    def wrap(self, avail_width, avail_height):
+        return self.width, self.height
+
+    def draw(self):
+        c = self.canv
+        c.setFillColor(MEERKAT_NAVY)
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(0, 13, self.label)
+        bar_x = 140
+        bar_w = 245
+        colour = MEERKAT_RED if self.score < 40 else MEERKAT_ORANGE if self.score < 75 else MEERKAT_GREEN
+        c.setFillColor(colors.HexColor("#E8E8E8"))
+        c.rect(bar_x, 9, bar_w, 8, stroke=0, fill=1)
+        c.setFillColor(colour)
+        c.rect(bar_x, 9, bar_w * self.score / 100, 8, stroke=0, fill=1)
+        c.setFillColor(MEERKAT_NAVY)
+        c.setFont("Helvetica-Bold", 8)
+        c.drawRightString(self.width - 72, 13, f"{self.score:.0f}/100")
+        draw_tag(c, self.width - 62, 7, self.band, width=62)
+
+
+class GaugePairFlowable(Flowable):
+    def __init__(self, current, target, width=500, height=132):
+        super().__init__()
+        self.current = current
+        self.target = target
+        self.width = width
+        self.height = height
+
+    def wrap(self, avail_width, avail_height):
+        return self.width, self.height
+
+    def draw(self):
+        c = self.canv
+        draw_arc_gauge(c, 70, 10, 105, self.current, "Current Equity", MEERKAT_RED)
+        c.setFillColor(MEERKAT_NAVY)
+        c.setFont("Helvetica-Bold", 24)
+        c.drawCentredString(250, 60, "->")
+        draw_arc_gauge(c, 315, 10, 105, self.target, "Target Equity", MEERKAT_GREEN)
+
+
+class CoverageFlowable(Flowable):
+    def __init__(self, pct, width=92, height=12):
+        super().__init__()
+        self.pct = pct
+        self.width = width
+        self.height = height
+
+    def wrap(self, avail_width, avail_height):
+        return min(self.width, avail_width), self.height
+
+    def draw(self):
+        draw_coverage_bar(self.canv, 0, 3, self.width, self.pct)
+
+
 def _fmt_rs(amount, compact=True):
     try:
         val = float(amount or 0)
@@ -5628,6 +5739,17 @@ def _num(value, default=0.0):
 
 def _portfolio_equity(portfolio):
     return _num(portfolio.get("equity_pct") or portfolio.get("equity") or portfolio.get("equity_percentage"), 0)
+
+
+def _display_monthly_surplus(client_facts):
+    income = client_facts.get("income") or {}
+    bank = client_facts.get("bank") or {}
+    monthly_income = _num(income.get("annualIncome"), 0) / 12
+    computed = monthly_income - _num(income.get("monthlyExpenses"), 0) - _num(income.get("monthlyEmi"), 0)
+    bank_net = _num(bank.get("net_cashflow"), 0)
+    if monthly_income > 0 and abs(bank_net) <= monthly_income * 1.5:
+        return bank_net
+    return computed
 
 
 def _recommended_band_text(advanced_risk):
@@ -5664,17 +5786,21 @@ def _tag_color(tag):
     return MEERKAT_GREEN
 
 
-def draw_status_tag(c, x, y, text, tag=None, width=None):
-    width = width or max(46, len(str(text)) * 4.8 + 12)
-    c.setFillColor(_tag_color(tag or text))
+def draw_tag(c, x, y, label, width=None):
+    width = width or max(46, len(str(label)) * 4.8 + 12)
+    c.setFillColor(_tag_color(label))
     c.roundRect(x, y, width, 14, 2, stroke=0, fill=1)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 7.5)
-    c.drawCentredString(x + width / 2, y + 4, str(text).upper()[:18])
+    c.drawCentredString(x + width / 2, y + 4, str(label).upper()[:18])
 
 
-def draw_kpi_tile(c, x, y, w, h, label, value, note="", value_color=MEERKAT_NAVY):
-    c.setFillColor(MEERKAT_CARD)
+def draw_status_tag(c, x, y, text, tag=None, width=None):
+    draw_tag(c, x, y, tag or text, width=width)
+
+
+def draw_kpi_tile(c, x, y, w, h, label, value, note="", value_color=MEERKAT_NAVY, note_color=colors.HexColor("#777777")):
+    c.setFillColor(colors.white)
     c.setStrokeColor(MEERKAT_LINE)
     c.roundRect(x, y, w, h, 4, stroke=1, fill=1)
     c.setFillColor(colors.HexColor("#666666"))
@@ -5684,7 +5810,7 @@ def draw_kpi_tile(c, x, y, w, h, label, value, note="", value_color=MEERKAT_NAVY
     c.setFont("Helvetica-Bold", 16)
     c.drawString(x + 8, y + h - 36, str(value)[:18])
     if note:
-        c.setFillColor(colors.HexColor("#777777"))
+        c.setFillColor(note_color)
         c.setFont("Helvetica", 7.5)
         c.drawString(x + 8, y + 8, str(note)[:28])
 
@@ -5706,17 +5832,19 @@ def draw_score_bar(c, x, y, w, score, label=""):
 def draw_arc_gauge(c, x, y, size, value, label="", colour=None):
     value = max(0, min(100, _num(value, 0)))
     colour = colour or (MEERKAT_RED if value < 40 else MEERKAT_ORANGE if value < 75 else MEERKAT_GREEN)
-    c.setLineWidth(9)
-    c.setStrokeColor(colors.HexColor("#D8D8D8"))
+    c.setLineWidth(6)
+    c.setStrokeColor(colors.HexColor("#E0E0E0"))
     c.arc(x, y, x + size, y + size, 135, 270)
     extent = 270 * value / 100
     if extent > 0:
+        c.setLineWidth(12)
         c.setStrokeColor(colour)
         c.arc(x, y, x + size, y + size, 135, extent)
     c.setFillColor(MEERKAT_NAVY)
-    c.setFont("Helvetica-Bold", 22)
+    c.setFont("Helvetica-Bold", 30)
     c.drawCentredString(x + size / 2, y + size / 2 - 2, f"{value:.0f}")
-    c.setFont("Helvetica", 8)
+    c.setFillColor(colors.HexColor("#777777"))
+    c.setFont("Helvetica", 7.5)
     c.drawCentredString(x + size / 2, y + size / 2 - 17, label or "out of 100")
     c.setLineWidth(1)
 
@@ -5727,6 +5855,19 @@ def draw_coverage_bar(c, x, y, w, coverage_pct):
     c.rect(x, y, w, 6, stroke=0, fill=1)
     c.setFillColor(MEERKAT_RED if pct < 50 else MEERKAT_ORANGE if pct < 95 else MEERKAT_GREEN)
     c.rect(x, y, w * pct / 100, 6, stroke=0, fill=1)
+
+
+def _tag(label):
+    return ("__TAG__", label)
+
+
+def _page_header(section_no, title, sublabel):
+    styles = _report_styles()
+    return [
+        Paragraph(str(sublabel or "").upper(), styles["label"]),
+        Spacer(1, 3),
+        draw_section_badge(section_no, title),
+    ]
 
 
 def draw_section_badge(section_no, title, width=500):
@@ -5752,10 +5893,15 @@ def _styled_table(rows, col_widths, header=True):
     styles = _report_styles()
     data = []
     for r, row in enumerate(rows):
-        data.append([
-            Paragraph(sanitize_pdf_text(str(cell)), styles["table_head" if header and r == 0 else "table"])
-            for cell in row
-        ])
+        rendered = []
+        for cell in row:
+            if isinstance(cell, Flowable):
+                rendered.append(cell)
+            elif isinstance(cell, tuple) and len(cell) == 2 and cell[0] == "__TAG__":
+                rendered.append(TagFlowable(cell[1]))
+            else:
+                rendered.append(Paragraph(sanitize_pdf_text(str(cell)), styles["table_head" if header and r == 0 else "table"]))
+        data.append(rendered)
     table = Table(data, colWidths=col_widths, hAlign="LEFT", repeatRows=1 if header else 0)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), MEERKAT_NAVY if header else MEERKAT_CARD),
@@ -5786,9 +5932,7 @@ def _allocation_output(client_facts):
     personal = client_facts.get("personal") or {}
     portfolio = client_facts.get("portfolio") or {}
     monthly_income = _num(income.get("annualIncome"), 0) / 12
-    monthly_surplus = _num(client_facts.get("bank", {}).get("net_cashflow"), 0)
-    if monthly_surplus == 0:
-        monthly_surplus = monthly_income - _num(income.get("monthlyExpenses"), 0) - _num(income.get("monthlyEmi"), 0)
+    monthly_surplus = _display_monthly_surplus(client_facts)
     required_life = _num((analysis.get("_diagnostics") or {}).get("requiredLifeCover"), monthly_income * 12 * 10)
     current_life = _num(insurance.get("lifeCover"), 0)
     current_health = _num(insurance.get("healthCover"), 0)
@@ -5822,6 +5966,25 @@ def _allocation_output(client_facts):
     out.setdefault("combined_shortfall", combined)
     out.setdefault("insurance_provision", out.get("insurance_sip_monthly") or 0)
     out.setdefault("available_for_goals", out.get("remaining_for_goals") or 0)
+    if not out.get("goal_sip_table") and goals:
+        available = _num(out.get("available_for_goals"), 0)
+        total_ideal = sum(_num(g.get("ideal_sip"), 0) for g in goals)
+        fallback_rows = []
+        for g in goals:
+            ideal = _num(g.get("ideal_sip"), 0)
+            allocated = available * ideal / total_ideal if total_ideal > 0 else 0
+            fallback_rows.append({
+                "name": g.get("name"),
+                "target_amount": g.get("target_amount"),
+                "horizon_years": g.get("horizon_years"),
+                "ideal_sip": ideal,
+                "allocated_sip": allocated,
+                "shortfall": max(0, ideal - allocated),
+                "coverage_pct": (allocated / ideal * 100) if ideal else 100,
+                "status": "Gap" if allocated < ideal else "Funded",
+            })
+        out["goal_sip_table"] = fallback_rows
+        out["combined_shortfall"] = sum(_num(g.get("shortfall"), 0) for g in fallback_rows)
     return out
 
 
@@ -5840,11 +6003,21 @@ def build_page_cover(client_facts, allocation_output, narratives=None):
         table = Table(top, colWidths=[330, 170])
         table.setStyle(TableStyle([("ALIGN", (1, 0), (1, 0), "RIGHT"), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
         story.append(table)
-    story += [Spacer(1, 34), Paragraph(f"Prepared for: {sanitize_pdf_text(name)}", styles["cover_name"]), Paragraph("Your Financial Health Report", styles["title"]), Spacer(1, 26)]
-    story.append(CanvasBlock(500, 150, lambda c, x, y, w, h: draw_arc_gauge(c, 185, 15, 120, ihs.get("score"), "Financial Health")))
-    story.append(Paragraph(f"<font color='#E67E22'><b>{sanitize_pdf_text(str(ihs.get('band') or 'Needs Attention'))}</b></font>", styles["h2"]))
+    subtitle = "A comprehensive analysis across Six Critical Dimensions of your financial wellbeing - designed to help you take clear, prioritised action."
+    title = "Your Financial <font name='Times-BoldItalic' color='#B8860B'>Health Report</font>"
+    story += [
+        Spacer(1, 34),
+        Paragraph(f"Prepared for: {sanitize_pdf_text(name)}", styles["cover_name"]),
+        Paragraph(title, styles["cover_title"]),
+        Spacer(1, 8),
+        Paragraph(subtitle, styles["cover_subtitle"]),
+        Spacer(1, 34),
+    ]
+    story.append(CanvasBlock(500, 170, lambda c, x, y, w, h: draw_arc_gauge(c, 180, 20, 140, ihs.get("score"), "Financial Health")))
+    story.append(Paragraph(sanitize_pdf_text(str(ihs.get('band') or 'Needs Attention')), styles["cover_status"]))
+    story.append(Spacer(1, 14))
     for key, val in alerts:
-        story.append(Paragraph(f"- {_urgency((val or {}).get('score'))}: {key.replace('_', ' ').title()} needs attention ({_num((val or {}).get('score'), 0):.0f}/100)", styles["body"]))
+        story.append(Paragraph(f"• {key.replace('_', ' ').title()} needs attention", styles["body"]))
     story += [Spacer(1, 70), Paragraph("11-page analysis covering protection, portfolio, liquidity, goals, tax and action planning", styles["small"])]
     return story
 
@@ -5859,26 +6032,27 @@ def build_page_snapshot(client_facts, allocation_output):
     diag = analysis.get("_diagnostics") or {}
     ar = analysis.get("advancedRisk") or {}
     expenses = _num(income.get("monthlyExpenses"), 0)
+    monthly_surplus = _display_monthly_surplus(client_facts)
     ef_target = expenses * 6
     rows = [["Area", "Current", "Ideal", "Priority"]]
     rows += [
-        ["Life Cover", _fmt_rs(insurance.get("lifeCover")), _fmt_rs(diag.get("requiredLifeCover")), _urgency(((analysis.get("ihs") or {}).get("breakdown") or {}).get("protection", {}).get("score"))],
-        ["Health Cover", _fmt_rs(insurance.get("healthCover")), "Rs. 10-15 L", analysis.get("insuranceGap") or "-"],
-        ["Emergency Fund", f"{_num(diag.get('liquidityMonths'), 0):.1f} months", f"6 months expenses ({_fmt_rs(ef_target)})", analysis.get("liquidity") or "-"],
-        ["Equity Allocation", f"{_portfolio_equity(portfolio):.0f}%", _recommended_band_text(ar), "Review"],
-        ["EMI/Income", f"{_num(diag.get('emiPct'), 0):.1f}%", "<40%", analysis.get("debtStress") or "-"],
-        ["Active SIP", "Rs. 0/mo", f"Need {_fmt_rs(allocation_output.get('combined_shortfall'), False)}/mo", "HIGH"],
-        ["Goals Funded", f"0 of {len(client_facts.get('goals') or [])}", f"{len(client_facts.get('goals') or [])} of {len(client_facts.get('goals') or [])}", "HIGH"],
+        ["Life Cover", _fmt_rs(insurance.get("lifeCover")), _fmt_rs(diag.get("requiredLifeCover")), _tag(_urgency(((analysis.get("ihs") or {}).get("breakdown") or {}).get("protection", {}).get("score")))],
+        ["Health Cover", _fmt_rs(insurance.get("healthCover")), "Rs. 10-15 L", _tag(analysis.get("insuranceGap") or "-")],
+        ["Emergency Fund", f"{_num(diag.get('liquidityMonths'), 0):.1f} months", f"6 months expenses ({_fmt_rs(ef_target)})", _tag(analysis.get("liquidity") or "-")],
+        ["Equity Allocation", f"{_portfolio_equity(portfolio):.0f}%", _recommended_band_text(ar), _tag("HIGH")],
+        ["EMI/Income", f"{_num(diag.get('emiPct'), 0):.1f}%", "<40%", _tag(analysis.get("debtStress") or "-")],
+        ["Active SIP", "Rs. 0/mo", f"Need {_fmt_rs(allocation_output.get('combined_shortfall'), False)}/mo", _tag("HIGH")],
+        ["Goals Funded", f"0 of {len(client_facts.get('goals') or [])}", f"{len(client_facts.get('goals') or [])} of {len(client_facts.get('goals') or [])}", _tag("HIGH")],
     ]
-    profile = [["Assessment", "Result"], ["Risk Profile", analysis.get("riskProfile")], ["Surplus", analysis.get("surplusBand")], ["Insurance", analysis.get("insuranceGap")], ["Debt", analysis.get("debtStress")], ["Liquidity", analysis.get("liquidity")], ["IHS Band", ((analysis.get("ihs") or {}).get("band"))]]
-    adv = [["Risk Parameter", "Value"], ["Risk Score", ar.get("riskScore") or ar.get("score") or "-"], ["Risk Appetite", ar.get("riskAppetite") or ar.get("appetiteCategory") or "-"], ["Tenure Limit", ar.get("tenureLimit") or ar.get("tenureLimitCategory") or "-"], ["Final Category", ar.get("finalCategory") or "-"], ["Recommended Equity", _recommended_band_text(ar)]]
+    profile = [["Profile at a Glance", "Value"], ["Risk Profile", analysis.get("riskProfile")], ["Surplus", analysis.get("surplusBand")], ["Insurance", analysis.get("insuranceGap")], ["Debt", analysis.get("debtStress")], ["Liquidity", analysis.get("liquidity")], ["IHS Band", ((analysis.get("ihs") or {}).get("band"))]]
+    adv = [["Advanced Risk Assessment", "Value"], ["Risk Score", ar.get("riskScore") or ar.get("score") or "-"], ["Risk Appetite", ar.get("riskAppetite") or ar.get("appetiteCategory") or "-"], ["Tenure Limit", ar.get("tenureLimit") or ar.get("tenureLimitCategory") or "-"], ["Final Category", ar.get("finalCategory") or "-"], ["Recommended Equity", _recommended_band_text(ar)]]
     return [
         draw_section_badge("01", "Financial Snapshot"), Spacer(1, 10),
-        CanvasBlock(500, 70, lambda c, x, y, w, h: [
-            draw_kpi_tile(c, 0, 8, 118, 54, "Annual Income", _fmt_rs(income.get("annualIncome"))),
-            draw_kpi_tile(c, 127, 8, 118, 54, "Monthly Surplus", _fmt_rs(bank.get("net_cashflow"))),
-            draw_kpi_tile(c, 254, 8, 118, 54, "Current Portfolio", _fmt_rs(portfolio.get("total_value") or portfolio.get("current_value")), f"Equity {_portfolio_equity(portfolio):.0f}%"),
-            draw_kpi_tile(c, 381, 8, 118, 54, "Active SIP", "Rs. 0", f"Need {_fmt_rs(allocation_output.get('combined_shortfall'), False)}/mo"),
+        KPIFlowable([
+            {"label": "Annual Income", "value": _fmt_rs(income.get("annualIncome"))},
+            {"label": "Monthly Surplus", "value": _fmt_rs(monthly_surplus)},
+            {"label": "Current Portfolio", "value": _fmt_rs(portfolio.get("total_value") or portfolio.get("current_value")), "note": f"Equity {_portfolio_equity(portfolio):.0f}%"},
+            {"label": "Active SIP", "value": "Rs. 0", "note": f"Need {_fmt_rs(allocation_output.get('combined_shortfall'), False)}/mo", "note_color": MEERKAT_RED},
         ]),
         Spacer(1, 6), _styled_table(rows, [108, 116, 150, 96]), Spacer(1, 10),
         Table([[_styled_table(profile, [95, 135]), _styled_table(adv, [105, 145])]], colWidths=[245, 255]),
@@ -5889,20 +6063,32 @@ def build_page_executive_summary(client_facts, allocation_output, narratives=Non
     styles = _report_styles()
     breakdown = (((client_facts.get("analysis") or {}).get("ihs") or {}).get("breakdown") or {})
     why = {
-        "portfolio_health": "Keeps risk aligned with time horizon.",
-        "goal_readiness": "Shows if future goals are funded.",
-        "protection": "Protects dependents from income loss.",
-        "liquidity": "Prevents forced selling during shocks.",
-        "tax_efficiency": "Reduces avoidable leakage.",
-        "debt_management": "Keeps EMIs within sustainable limits.",
+        "portfolio_health": "Equity allocation far outside your risk band",
+        "goal_readiness": "SIP shortfall across all financial goals",
+        "protection": "Life cover gap is a critical family risk",
+        "liquidity": "Emergency fund unknown or insufficient",
+        "tax_efficiency": "Potential regime saving not yet captured",
+        "debt_management": "EMI/income ratio vs 40% benchmark",
     }
+    canonical = [
+        ("portfolio_health", "Portfolio Health"),
+        ("goal_readiness", "Goal Readiness"),
+        ("protection", "Protection"),
+        ("liquidity", "Liquidity"),
+        ("tax_efficiency", "Tax Efficiency"),
+        ("debt_management", "Debt Management"),
+    ]
     rows = [["Area", "Score", "Action Required", "Why It Matters"]]
-    for k, v in sorted(breakdown.items(), key=lambda kv: _num((kv[1] or {}).get("score"), 0)):
-        rows.append([k.replace("_", " ").title(), f"{_num((v or {}).get('score'), 0):.0f}/100", _urgency((v or {}).get("score")), why.get(k, "Improves plan resilience.")])
-    blocks = [draw_section_badge("02", "Executive Summary / Health Score"), Spacer(1, 12)]
-    for k, v in breakdown.items():
-        blocks.append(CanvasBlock(500, 25, lambda c, x, y, w, h, k=k, v=v: draw_score_bar(c, 0, 5, 500, (v or {}).get("score"), k.replace("_", " ").title())))
-    blocks += [Spacer(1, 8), _styled_table(rows, [115, 55, 90, 230]), Spacer(1, 8), Paragraph("Urgency: scores below 40 are IMMEDIATE, 40-74 are HIGH, and 75+ are MAINTAIN.", styles["small"])]
+    scored = []
+    for key, label in canonical:
+        item = breakdown.get(key) or {}
+        scored.append((key, label, _num(item.get("score"), 0)))
+    for key, label, score in sorted(scored, key=lambda item: item[2]):
+        rows.append([label, f"{score:.0f}/100", _tag(_urgency(score)), why[key]])
+    blocks = _page_header("02", "Executive Summary / Health Score", "Six Critical Dimensions") + [Spacer(1, 12)]
+    for key, label, score in scored:
+        blocks.append(ScoreBarFlowable(label, score, width=500))
+    blocks += [Spacer(1, 8), _styled_table(rows, [110, 55, 88, 237]), Spacer(1, 8), Paragraph("Urgency: scores below 40 are IMMEDIATE, 40-74 are HIGH, and 75+ are MAINTAIN.", styles["small"])]
     return blocks
 
 
@@ -5913,9 +6099,37 @@ def build_page_protection(client_facts, allocation_output):
     diag = analysis.get("_diagnostics") or {}
     current_life = _num(insurance.get("lifeCover"), 0)
     required_life = _num(diag.get("requiredLifeCover"), 0)
-    life_rows = [["Life Insurance", "Amount"], ["Current cover", _fmt_rs(current_life)], ["Required cover", _fmt_rs(required_life)], ["Coverage gap", _fmt_rs(max(0, required_life - current_life))], ["Monthly premium provision", _fmt_rs(allocation_output.get("insurance_provision"), False)]]
-    health_rows = [["Health Insurance", "Guidance"], ["Current cover", _fmt_rs(insurance.get("healthCover"))], ["Recommended", "Rs. 10-15 L family floater"], ["Status", analysis.get("insuranceGap") or "-"], ["Checklist", "No room cap; cashless network; restore benefit; critical illness review"]]
-    return [draw_section_badge("03", "Protection"), Spacer(1, 14), Table([[_styled_table(life_rows, [130, 110]), _styled_table(health_rows, [125, 135])]], colWidths=[245, 255]), Spacer(1, 10), Paragraph("Prioritize pure term insurance for income replacement and a separate health policy for hospitalization risk.", styles["body"])]
+    gap = max(0, required_life - current_life)
+    coverage_pct = (current_life / required_life * 100) if required_life > 0 else 100
+    life_rows = [
+        ["Life Insurance", "Amount"],
+        ["Current cover", _fmt_rs(current_life)],
+        ["Required cover", _fmt_rs(required_life)],
+        ["Coverage", CoverageFlowable(coverage_pct, width=120)],
+        ["Protection gap", Paragraph(f"<b>{_fmt_rs(gap)}</b>", styles["h2"])],
+        ["Monthly provision", _fmt_rs(allocation_output.get("insurance_provision"), False)],
+    ]
+    health_rows = [
+        ["Health Insurance", "Guidance"],
+        ["Current cover", _fmt_rs(insurance.get("healthCover"))],
+        ["Recommended", "Rs. 10-15 L family floater"],
+        ["Status", _tag(analysis.get("insuranceGap") or "-")],
+        ["What to Look For", Paragraph("✓ No room rent cap", styles["table"])],
+        ["", Paragraph("✓ Cashless hospital network", styles["table"])],
+        ["", Paragraph("✓ Restore benefit", styles["table"])],
+        ["", Paragraph("✓ Critical illness review", styles["table"])],
+    ]
+    cards = Table([[_styled_table(life_rows, [115, 120]), _styled_table(health_rows, [110, 135])]], colWidths=[245, 255])
+    cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    return (
+        _page_header("03", "Protection", "Protection Gap Analysis")
+        + [
+            Spacer(1, 14),
+            cards,
+            Spacer(1, 10),
+            Paragraph("Prioritize pure term insurance for income replacement and a separate health policy for hospitalization risk.", styles["body"]),
+        ]
+    )
 
 
 def build_page_portfolio_debt(client_facts, allocation_output):
@@ -5926,9 +6140,22 @@ def build_page_portfolio_debt(client_facts, allocation_output):
     diag = analysis.get("_diagnostics") or {}
     ar = analysis.get("advancedRisk") or {}
     debt_score = (((analysis.get("ihs") or {}).get("breakdown") or {}).get("debt_management") or {}).get("score")
-    debt_rows = [["Metric", "Value"], ["EMI as % of income", f"{_num(diag.get('emiPct'), 0):.1f}%"], ["Debt stress", analysis.get("debtStress") or "-"], ["Monthly EMI", _fmt_rs(income.get("monthlyEmi"), False)], ["Debt score", f"{_num(debt_score, 0):.0f}/100"]]
+    emi_pct = _num(diag.get("emiPct"), 0)
+    debt_rows = [
+        ["Metric", "Your Value", "Benchmark", "Status"],
+        ["EMI ratio", f"{emi_pct:.1f}%", "<40%", _tag("GOOD" if emi_pct < 40 else "HIGH")],
+        ["Debt stress", analysis.get("debtStress") or "-", "Healthy", _tag(analysis.get("debtStress") or "-")],
+        ["Monthly EMI", _fmt_rs(income.get("monthlyEmi"), False), "Lower is better", _tag("GOOD" if emi_pct < 40 else "HIGH")],
+        ["Debt score", f"{_num(debt_score, 0):.0f}/100", ">=75 = Good", _tag(_urgency(debt_score))],
+    ]
     bullets = ["Asset allocation is the main lever.", "Use SIPs for gradual rebalancing.", "Keep near-term goals in debt/liquid assets.", "Review fund overlap and concentration annually."]
-    return [draw_section_badge("04", "Portfolio & Debt"), Spacer(1, 12), CanvasBlock(500, 125, lambda c, x, y, w, h: [draw_arc_gauge(c, 70, 5, 100, _portfolio_equity(portfolio), "Current Equity", MEERKAT_RED), draw_arc_gauge(c, 315, 5, 100, _recommended_band_mid(ar), "Target Equity", MEERKAT_GREEN)]), Paragraph("What You Control", styles["h2"])] + [Paragraph(f"- {b}", styles["body"]) for b in bullets] + [Spacer(1, 10), _styled_table(debt_rows, [180, 250])]
+    gauge = GaugePairFlowable(_portfolio_equity(portfolio), _recommended_band_mid(ar))
+    return (
+        _page_header("04", "Portfolio & Debt", "Portfolio Rebalancing")
+        + [Spacer(1, 12), gauge, Paragraph("What You Control", styles["h2"])]
+        + [Paragraph(f"- {b}", styles["body"]) for b in bullets]
+        + [Spacer(1, 10), _styled_table(debt_rows, [120, 90, 145, 85])]
+    )
 
 
 def build_page_liquidity(client_facts, allocation_output):
@@ -5942,15 +6169,19 @@ def build_page_liquidity(client_facts, allocation_output):
     params = [["Parameter", "Value"], ["Liquidity score", f"{_num(score, 0):.0f}/100"], ["Months on hand", f"{_num(diag.get('liquidityMonths'), 0):.1f}"], ["Monthly expenses", _fmt_rs(expenses)], ["Target", _fmt_rs(target)], ["Status", analysis.get("liquidity") or "-"]]
     strategy = [["Option", "Duration", "Monthly Amount"], ["Fast", "12 months", _fmt_rs(target / 12, False)], ["Balanced", "18 months", _fmt_rs(target / 18, False)], ["Gentle", "24 months", _fmt_rs(target / 24, False)]]
     tiers = [["Tier", "Where to Park"], ["Instant", "Savings account for first 1-2 months"], ["Quick", "Liquid fund or sweep FD"], ["Short-term", "Short-duration FD or high-quality debt fund"]]
-    return [draw_section_badge("05", "Liquidity"), Spacer(1, 10), _styled_table(params, [180, 250]), Spacer(1, 8), Paragraph("<b>Build emergency fund BEFORE investing in long-term goals.</b>", styles["body"]), Spacer(1, 10), _styled_table(strategy, [130, 120, 160]), Spacer(1, 10), _styled_table(tiers, [100, 330])]
+    return _page_header("05", "Liquidity", "Emergency Fund Planning") + [Spacer(1, 10), _styled_table(params, [180, 250]), Spacer(1, 8), Paragraph("<b>Build emergency fund BEFORE investing in long-term goals.</b>", styles["body"]), Spacer(1, 10), _styled_table(strategy, [130, 120, 160]), Spacer(1, 10), _styled_table(tiers, [100, 330])]
 
 
 def build_page_goal_feasibility(client_facts, allocation_output):
     styles = _report_styles()
     rows = [["Goal", "Target", "Horizon", "Current SIP", "Ideal SIP", "Gap/mo", "Coverage"]]
     for g in allocation_output.get("goal_sip_table") or []:
-        rows.append([g.get("name") or "Goal", _fmt_rs(g.get("target_amount")), f"{g.get('horizon_years') or '-'} yrs", "Rs. 0", _fmt_rs(g.get("ideal_sip"), False), _fmt_rs(g.get("shortfall"), False), f"{_num(g.get('coverage_pct'), 0):.0f}%"])
-    return [draw_section_badge("06", "Goal Feasibility"), Spacer(1, 12), _styled_table(rows, [88, 70, 48, 62, 70, 62, 55]), Spacer(1, 12), CanvasBlock(500, 55, lambda c, x, y, w, h: [c.setFont("Helvetica-Bold", 16), c.setFillColor(MEERKAT_NAVY), c.drawString(0, 32, f"Combined monthly SIP shortfall: {_fmt_rs(allocation_output.get('combined_shortfall'), False)}"), draw_coverage_bar(c, 0, 12, 500, 100 - min(100, (_num(allocation_output.get('combined_shortfall'), 0) / max(1, _num(allocation_output.get('combined_shortfall'), 0) + _num(allocation_output.get('available_for_goals'), 0))) * 100))])]
+        coverage = g.get("coverage_pct")
+        if coverage is None:
+            ideal = _num(g.get("ideal_sip"), 0)
+            coverage = (_num(g.get("allocated_sip"), 0) / ideal * 100) if ideal else 100
+        rows.append([g.get("name") or "Goal", _fmt_rs(g.get("target_amount")), f"{g.get('horizon_years') or '-'} yrs", "Rs. 0", _fmt_rs(g.get("ideal_sip"), False), _fmt_rs(g.get("shortfall"), False), CoverageFlowable(coverage, width=55)])
+    return _page_header("06", "Goal Feasibility", "Goal Funding Analysis") + [Spacer(1, 12), _styled_table(rows, [88, 70, 48, 62, 70, 62, 55]), Spacer(1, 12), CanvasBlock(500, 55, lambda c, x, y, w, h: [c.setFont("Helvetica-Bold", 16), c.setFillColor(MEERKAT_NAVY), c.drawString(0, 32, f"Combined monthly SIP shortfall: {_fmt_rs(allocation_output.get('combined_shortfall'), False)}"), draw_coverage_bar(c, 0, 12, 500, 100 - min(100, (_num(allocation_output.get('combined_shortfall'), 0) / max(1, _num(allocation_output.get('combined_shortfall'), 0) + _num(allocation_output.get('available_for_goals'), 0))) * 100))])]
 
 
 def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
@@ -5958,14 +6189,30 @@ def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
     income = client_facts.get("income") or {}
     bank = client_facts.get("bank") or {}
     monthly_income = _num(income.get("annualIncome"), 0) / 12
+    monthly_surplus = _display_monthly_surplus(client_facts)
     total_req = _num(allocation_output.get("combined_shortfall"), 0)
     available = _num(allocation_output.get("available_for_goals"), 0)
     coverage = available / total_req * 100 if total_req else 100
     rows = [["Goal", "Required SIP", "Allocated SIP", "Monthly Gap", "Status"]]
     for g in allocation_output.get("goal_sip_table") or []:
-        rows.append([g.get("name") or "Goal", _fmt_rs(g.get("ideal_sip"), False), _fmt_rs(g.get("allocated_sip"), False), _fmt_rs(g.get("shortfall"), False), g.get("status") or ("Gap" if _num(g.get("shortfall"), 0) else "Funded")])
+        status = g.get("status") or ("Gap" if _num(g.get("shortfall"), 0) else "Funded")
+        rows.append([g.get("name") or "Goal", _fmt_rs(g.get("ideal_sip"), False), _fmt_rs(g.get("allocated_sip"), False), _fmt_rs(g.get("shortfall"), False), _tag(status)])
     insight = _llm_paragraph(narratives, "cashflow") or "Start with the available surplus, protect the household first, then scale SIPs as income grows."
-    return [draw_section_badge("07", "Cash Flow & SIP Plan"), Spacer(1, 10), CanvasBlock(500, 70, lambda c, x, y, w, h: [draw_kpi_tile(c, 0, 8, 92, 54, "Income/mo", _fmt_rs(monthly_income)), draw_kpi_tile(c, 101, 8, 92, 54, "Expenses", _fmt_rs(income.get("monthlyExpenses"))), draw_kpi_tile(c, 202, 8, 92, 54, "Surplus", _fmt_rs(bank.get("net_cashflow"))), draw_kpi_tile(c, 303, 8, 92, 54, "Insurance", _fmt_rs(allocation_output.get("insurance_provision"), False)), draw_kpi_tile(c, 404, 8, 92, 54, "For Goals", _fmt_rs(available, False))]), Paragraph(f"<b>Total Goal Requirement:</b> {_fmt_rs(total_req, False)}/month | <b>Coverage:</b> {coverage:.0f}%", styles["body"]), Spacer(1, 8), _styled_table(rows, [130, 85, 85, 85, 75]), Spacer(1, 8), Paragraph(f"<b>Key Insight:</b> {sanitize_pdf_text(insight)}", styles["body"])]
+    return _page_header("07", "Cash Flow & SIP Plan", "Monthly Allocation Plan") + [
+        Spacer(1, 10),
+        KPIFlowable([
+            {"label": "Income/mo", "value": _fmt_rs(monthly_income)},
+            {"label": "Expenses", "value": _fmt_rs(income.get("monthlyExpenses"))},
+            {"label": "Surplus", "value": _fmt_rs(monthly_surplus)},
+            {"label": "Insurance", "value": _fmt_rs(allocation_output.get("insurance_provision"), False)},
+            {"label": "For Goals", "value": _fmt_rs(available, False)},
+        ]),
+        Paragraph(f"<b>Total Goal Requirement:</b> {_fmt_rs(total_req, False)}/month | <b>Coverage:</b> {coverage:.0f}%", styles["body"]),
+        Spacer(1, 8),
+        _styled_table(rows, [130, 85, 85, 85, 75]),
+        Spacer(1, 8),
+        Paragraph(f"<b>Key Insight:</b> {sanitize_pdf_text(insight)}", styles["body"]),
+    ]
 
 
 def build_page_tax(client_facts, allocation_output):
@@ -5985,24 +6232,39 @@ def build_page_tax(client_facts, allocation_output):
             claimed["80C"] += amt
     current = compute_regime_comparison(gross, claimed["80C"], claimed["80D"], claimed["80CCD_1B"])
     optimized = compute_regime_comparison(gross, 150000, 75000, 50000)
-    rows = [["Scenario", "Old Regime", "New Regime", "Better"], ["Current", _fmt_rs(current["old_regime"]["tax_liability"]), _fmt_rs(current["new_regime"]["tax_liability"]), current["better_regime"].title()], ["Optimized", _fmt_rs(optimized["old_regime"]["tax_liability"]), _fmt_rs(optimized["new_regime"]["tax_liability"]), optimized["better_regime"].title()]]
-    actions = [["Action", "Why"], ["Switch regime", "Choose the lower tax outcome while filing."], ["Maximise employer NPS", "Useful deduction even where available under new-regime structures."], ["Hold equity >1yr", "Improves LTCG treatment and reduces churn."], ["Claim standard deduction", "Ensure salary standard deduction is included."]]
-    return [draw_section_badge("08", "Tax Optimisation"), Spacer(1, 10), _styled_table(rows, [120, 115, 115, 95]), Spacer(1, 10), Paragraph(f"<b>Potential annual saving:</b> {_fmt_rs(max(_num(current.get('savings'), 0), _num(optimized.get('savings'), 0)))}", styles["h2"]), _styled_table(actions, [160, 290])]
+    rows = [["Scenario", "Old Regime", "New Regime", "Better"], ["Current", _fmt_rs(current["old_regime"]["tax_liability"]), _fmt_rs(current["new_regime"]["tax_liability"]), current["better_regime"].title()], ["Max Deductions", _fmt_rs(optimized["old_regime"]["tax_liability"]), _fmt_rs(optimized["new_regime"]["tax_liability"]), optimized["better_regime"].title()]]
+    actions = [
+        ["#", "Action", "Why", "How / Note"],
+        ["1", "Switch regime", "Choose the lower tax outcome while filing.", "Inform employer before April; applies from new FY"],
+        ["2", "Maximise employer NPS", "Useful deduction where available.", "Up to 14% of Basic via Section 80CCD(2)"],
+        ["3", "Hold equity >1yr", "Improves LTCG treatment and reduces churn.", "Avoid redemptions before 12-month mark"],
+        ["4", "Claim standard deduction", "Ensure salary deduction is included.", "Confirm with payroll / CA before filing"],
+    ]
+    return _page_header("08", "Tax Optimisation", "Regime Comparison") + [Spacer(1, 10), _styled_table(rows, [120, 115, 115, 95]), Spacer(1, 10), Paragraph(f"<b>Potential annual saving:</b> {_fmt_rs(max(_num(current.get('savings'), 0), _num(optimized.get('savings'), 0)))}", styles["h2"]), _styled_table(actions, [25, 115, 145, 190])]
 
 
 def build_page_action_plan(client_facts, allocation_output):
     styles = _report_styles()
     bank = client_facts.get("bank") or {}
     surplus_after_insurance = _num(bank.get("net_cashflow"), 0) - _num(allocation_output.get("insurance_provision"), 0)
-    p1_rows = [["Phase 1: Months 1-6", "Amount / Action"]]
+    phase1 = [Paragraph("Phase 1: Months 1-6", styles["h2"])]
     for p in (allocation_output.get("priority_breakdown") or [])[:4]:
-        p1_rows.append([p.get("name") or f"Priority {p.get('priority')}", f"{_fmt_rs(p.get('monthly_amount'), False)}/mo - {p.get('status') or ''}"])
-    p1_rows.append(["Surplus after insurance", _fmt_rs(surplus_after_insurance, False)])
+        item_name = p.get("name") or f"Priority {p.get('priority')}"
+        phase1.append(Paragraph(f"→ {sanitize_pdf_text(item_name)}: {_fmt_rs(p.get('monthly_amount'), False)}/mo", styles["body"]))
+    phase1.append(Paragraph(f"→ Surplus after insurance: {_fmt_rs(surplus_after_insurance, False)}/mo", styles["body"]))
     phase2 = [["Goal", "Allocated SIP", "Required SIP"]]
     for g in allocation_output.get("goal_sip_table") or []:
         phase2.append([g.get("name") or "Goal", _fmt_rs(g.get("allocated_sip"), False), _fmt_rs(g.get("ideal_sip"), False)])
-    roadmap = [["Milestone", "Action"], ["Week 1", "Confirm insurance gaps and quote term/health cover."], ["Week 2", "Set emergency fund target and automate transfer."], ["Week 3", "Map current portfolio to recommended equity band."], ["Week 4", "Finalize SIP allocation by priority."], ["Day 90", "Review progress and update surplus."], ["Quarterly", "Recalculate score and rebalance if needed."]]
-    return [draw_section_badge("09", "Action Plan"), Spacer(1, 10), _styled_table(p1_rows, [190, 270]), Spacer(1, 10), _styled_table(phase2, [180, 130, 130]), Spacer(1, 10), _styled_table(roadmap, [90, 360])]
+    roadmap = [
+        ["Milestone", "Action", "Time"],
+        ["Week 1", "Confirm insurance gaps and quote term/health cover.", Paragraph("<i>(2-3 hrs)</i>", styles["table"])],
+        ["Week 2", "Set emergency fund target and automate transfer.", Paragraph("<i>(1 hr)</i>", styles["table"])],
+        ["Week 3", "Map current portfolio to recommended equity band.", Paragraph("<i>(1-2 hrs)</i>", styles["table"])],
+        ["Week 4", "Finalize SIP allocation by priority.", Paragraph("<i>(1 hr)</i>", styles["table"])],
+        ["Day 90", "Review progress and update surplus.", Paragraph("<i>(45 mins)</i>", styles["table"])],
+        ["Quarterly", "Recalculate score and rebalance if needed.", Paragraph("<i>(1 hr)</i>", styles["table"])],
+    ]
+    return _page_header("09", "Action Plan", "Prioritised Roadmap") + [Spacer(1, 10)] + phase1 + [Spacer(1, 10), Paragraph("Phase 2: Month 7+ Goal SIPs", styles["h2"]), _styled_table(phase2, [180, 130, 130]), Spacer(1, 10), _styled_table(roadmap, [80, 310, 80])]
 
 
 def build_page_review(client_facts, allocation_output):
@@ -6010,8 +6272,21 @@ def build_page_review(client_facts, allocation_output):
     recalc = [["Trigger", "Recalculate When"], ["Income changes", "Salary, business income, or bonus changes materially."], ["Expense shift", "Rent, school fees, lifestyle costs, or EMIs change."], ["New goal", "A major purchase, child education, or retirement target changes."], ["Life event", "Marriage, child, dependents, job loss, or relocation."], ["Portfolio move", "Large redemption, inheritance, or asset purchase."], ["Tax law", "Budget or tax-regime rules change."]]
     schedule = [["Review", "Action"], ["Immediate", "Close protection and liquidity gaps."], ["30 days", "Set SIP and emergency fund transfers."], ["90 days", "Check execution against this plan."], ["Quarterly", "Refresh score and cash-flow numbers."], ["Annually", "Rebuild assumptions and tax plan."]]
     contains = ["Health score", "Dimension scores", "Financial snapshot", "Protection gap", "Portfolio risk", "Debt status", "Liquidity plan", "Goal feasibility", "SIP allocation", "Tax comparison", "Action roadmap", "Review schedule"]
-    left = [Paragraph(f"- {c}", styles["body"]) for c in contains]
-    return [draw_section_badge("10", "Review & Next Steps"), Spacer(1, 10), _styled_table(recalc, [120, 340]), Spacer(1, 10), _styled_table(schedule, [95, 365]), Spacer(1, 10), Paragraph("What This Report Contains", styles["h2"])] + left + [Spacer(1, 12), Paragraph("Educational analysis tool - Not financial advice - Consult a SEBI-registered Investment Advisor", styles["small"])]
+    contains_rows = []
+    for idx in range(0, len(contains), 2):
+        contains_rows.append([
+            Paragraph(f"✓ {contains[idx]}", styles["body"]),
+            Paragraph(f"✓ {contains[idx + 1]}", styles["body"]) if idx + 1 < len(contains) else "",
+        ])
+    contains_table = Table(contains_rows, colWidths=[230, 230], hAlign="LEFT")
+    contains_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    return _page_header("10", "Review & Next Steps", "Ongoing Review") + [Spacer(1, 10), _styled_table(recalc, [120, 340]), Spacer(1, 10), _styled_table(schedule, [95, 365]), Spacer(1, 10), Paragraph("What This Report Contains", styles["h2"]), contains_table, Spacer(1, 12), Paragraph("Educational analysis tool - Not financial advice - Consult a SEBI-registered Investment Advisor", styles["small"])]
 
 
 def _meerkat_page_background(c, doc):
