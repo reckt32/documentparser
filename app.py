@@ -5709,8 +5709,10 @@ def draw_arc_gauge(c, x, y, size, value, label="", colour=None):
     c.setLineWidth(9)
     c.setStrokeColor(colors.HexColor("#D8D8D8"))
     c.arc(x, y, x + size, y + size, 135, 270)
-    c.setStrokeColor(colour)
-    c.arc(x, y, x + size, y + size, 135, 270 * value / 100)
+    extent = 270 * value / 100
+    if extent > 0:
+        c.setStrokeColor(colour)
+        c.arc(x, y, x + size, y + size, 135, extent)
     c.setFillColor(MEERKAT_NAVY)
     c.setFont("Helvetica-Bold", 22)
     c.drawCentredString(x + size / 2, y + size / 2 - 2, f"{value:.0f}")
