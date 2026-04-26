@@ -41,6 +41,11 @@ load_dotenv()
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 SECTIONS_DIR_NAME = "sections"
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "gpt-5.2")
+NO_IN_APP_NUDGE_CLAUSE = (
+    "NEVER reference in-app nudges, mobile notifications, push alerts, "
+    "or product engagement features. This is a printed client report."
+)
+LLM_OUTPUT_BLOCKLIST = ("in-app", "nudge", "push notification", "mobile alert")
 
 # ------------------------ Financial Assumptions (Configurable) ------------------------ #
 # These assumptions are used for SIP calculations and are displayed in reports
@@ -88,6 +93,23 @@ def _coerce_float(x: Any, default: float = 0.0) -> float:
         return float(sx)
     except Exception:
         return default
+
+
+def _strip_in_app_references(value: Any) -> Any:
+    """Remove LLM text fragments that belong to app engagement, not printed reports."""
+    if isinstance(value, str):
+        paragraphs = [p for p in value.splitlines() if not any(term in p.lower() for term in LLM_OUTPUT_BLOCKLIST)]
+        return "\n".join(paragraphs).strip()
+    if isinstance(value, list):
+        cleaned = []
+        for item in value:
+            new_item = _strip_in_app_references(item)
+            if new_item not in ("", None, [], {}):
+                cleaned.append(new_item)
+        return cleaned
+    if isinstance(value, dict):
+        return {k: _strip_in_app_references(v) for k, v in value.items()}
+    return value
 
 
 # ------------------------ LLM Client Wrapper ------------------------ #
@@ -198,7 +220,10 @@ class SectionRunner:
                 pass
 
         system, user = self.prompt(dg)
+        if NO_IN_APP_NUDGE_CLAUSE not in system:
+            system = f"{system} {NO_IN_APP_NUDGE_CLAUSE}"
         data, usage = self.llm.complete_json(system, user, retry_on_schema_error=True)
+        data = _strip_in_app_references(data)
         if not self.validate(data):
             raise RuntimeError(f"Schema validation failed for section {self.name}")
 
