@@ -5617,47 +5617,61 @@ class CanvasBlock(Flowable):
         self.draw_fn(self.canv, 0, 0, self.width, self.height)
 
 
-class TagFlowable(Flowable):
-    def __init__(self, label, width=None, height=15):
+class DrawingFlowable(Flowable):
+    def __init__(self, draw_fn, width, height, *args, **kwargs):
         super().__init__()
-        self.label = str(label or "-")
-        self.width = width or max(48, len(self.label) * 4.8 + 14)
+        self.draw_fn = draw_fn
+        self.width = width
         self.height = height
+        self.args = args
+        self.kwargs = kwargs
 
     def wrap(self, avail_width, avail_height):
-        return min(self.width, avail_width), self.height
+        return self.width, self.height
 
     def draw(self):
-        draw_tag(self.canv, 0, 1, self.label, width=self.width)
+        self.draw_fn(self.canv, 0, 0, *self.args, **self.kwargs)
 
 
-class KPIFlowable(Flowable):
-    def __init__(self, tiles, width=500, height=70):
+class TagFlowable(Flowable):
+    def __init__(self, label, height=15):
         super().__init__()
-        self.tiles = tiles
-        self.width = width
+        self.label = str(label or "-").upper()
+        self.width = len(self.label) * 5.5 + 16
         self.height = height
 
     def wrap(self, avail_width, avail_height):
         return self.width, self.height
 
     def draw(self):
+        draw_tag(self.canv, 0, 1, self.label)
+
+
+class KPIFlowable(Flowable):
+    def __init__(self, tiles, width=500, height=70, card_height=54, gap=9, card_y=8):
+        super().__init__()
+        self.tiles = tiles
+        self.width = width
+        self.height = height
+        self.card_height = card_height
+        self.gap = gap
+        self.card_y = card_y
+
+    def wrap(self, avail_width, avail_height):
+        return self.width, self.height
+
+    def draw(self):
         count = max(1, len(self.tiles))
-        gap = 9
-        tile_w = (self.width - gap * (count - 1)) / count
+        tile_w = (self.width - self.gap * (count - 1)) / count
         for idx, tile in enumerate(self.tiles):
-            x = idx * (tile_w + gap)
-            draw_kpi_tile(
+            x = idx * (tile_w + self.gap)
+            draw_kpi_card(
                 self.canv,
-                x,
-                8,
-                tile_w,
-                54,
+                x, self.card_y, tile_w, self.card_height,
                 tile.get("label"),
                 tile.get("value"),
-                tile.get("note", ""),
-                value_color=tile.get("value_color", MEERKAT_NAVY),
-                note_color=tile.get("note_color", colors.HexColor("#777777")),
+                sub_value=tile.get("note"),
+                sub_colour=tile.get("note_color")
             )
 
 
@@ -5688,14 +5702,15 @@ class ScoreBarFlowable(Flowable):
         c.setFillColor(MEERKAT_NAVY)
         c.setFont("Helvetica-Bold", 8)
         c.drawRightString(self.width - 72, 13, f"{self.score:.0f}/100")
-        draw_tag(c, self.width - 62, 7, self.band, width=62)
+        draw_tag(c, self.width - 62, 7, self.band)
 
 
 class GaugePairFlowable(Flowable):
-    def __init__(self, current, target, width=500, height=132):
+    def __init__(self, current, target, ar=None, width=500, height=132):
         super().__init__()
         self.current = current
         self.target = target
+        self.ar = ar
         self.width = width
         self.height = height
 
@@ -5704,11 +5719,10 @@ class GaugePairFlowable(Flowable):
 
     def draw(self):
         c = self.canv
-        draw_arc_gauge(c, 70, 10, 105, self.current, "Current Equity", MEERKAT_RED)
-        c.setFillColor(MEERKAT_NAVY)
-        c.setFont("Helvetica-Bold", 24)
-        c.drawCentredString(250, 60, "->")
-        draw_arc_gauge(c, 315, 10, 105, self.target, "Target Equity", MEERKAT_GREEN)
+        band = (self.ar or {}).get("recommendedEquityBand") or {}
+        b_min = _num(band.get("min"), 40)
+        b_max = _num(band.get("max"), 60)
+        draw_equity_gauges(c, 130, 370, 60, 35, _num(self.current, 0), _num(self.target, 0), b_min, b_max)
 
 
 class CoverageFlowable(Flowable):
@@ -5719,10 +5733,10 @@ class CoverageFlowable(Flowable):
         self.height = height
 
     def wrap(self, avail_width, avail_height):
-        return min(self.width, avail_width), self.height
+        return self.width, self.height
 
     def draw(self):
-        draw_coverage_bar(self.canv, 0, 3, self.width, self.pct)
+        draw_coverage_bar(self.canv, 0, 1, max(24, self.width - 24), self.pct)
 
 
 def _fmt_rs(amount, compact=True):
@@ -5777,84 +5791,180 @@ def _urgency(score):
     return "MAINTAIN"
 
 
-def _tag_color(tag):
-    tag = (tag or "").upper()
-    if tag in ("IMMEDIATE", "URGENT", "CRITICAL", "GAP"):
-        return MEERKAT_RED
-    if tag in ("HIGH", "MEDIUM", "ATTENTION", "PARTIAL"):
-        return MEERKAT_ORANGE
-    return MEERKAT_GREEN
+def draw_tag(canvas, x, y, label, font_size=8):
+    # y is baseline of text
+    pad_x, pad_y = 8, 3
+    text_width = canvas.stringWidth(label, 'Helvetica-Bold', font_size)
+    rect_w = text_width + pad_x * 2
+    rect_h = font_size + pad_y * 2
+    colour_map = {
+        'IMMEDIATE': '#C0392B', 'UNDERINSURED': '#C0392B',
+        'HIGH': '#E67E22', 'MODERATE': '#E67E22', 'GAP': '#E67E22', 'LOW': '#E67E22',
+        'GOOD': '#27AE60', 'ADEQUATE': '#27AE60', 'HEALTHY': '#27AE60',
+        'FUNDED': '#27AE60', 'MAINTAIN': '#27AE60', 'COMFORTABLE': '#27AE60',
+    }
+    hex_col = colour_map.get(label.upper(), '#888888')
+    r, g, b = int(hex_col[1:3],16)/255, int(hex_col[3:5],16)/255, int(hex_col[5:7],16)/255
+    canvas.setFillColorRGB(r, g, b)
+    canvas.roundRect(x, y - pad_y, rect_w, rect_h, radius=3, fill=1, stroke=0)
+    canvas.setFillColorRGB(1, 1, 1)
+    canvas.setFont('Helvetica-Bold', font_size)
+    canvas.drawString(x + pad_x, y + 1, label)
 
 
-def draw_tag(c, x, y, label, width=None):
-    width = width or max(46, len(str(label)) * 4.8 + 12)
-    c.setFillColor(_tag_color(label))
-    c.roundRect(x, y, width, 14, 2, stroke=0, fill=1)
-    c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 7.5)
-    c.drawCentredString(x + width / 2, y + 4, str(label).upper()[:18])
+def draw_kpi_card(canvas, x, y, w, h, label, value, sub_value=None, sub_colour=None):
+    # Draw white card with grey border
+    canvas.setFillColorRGB(1, 1, 1)
+    canvas.setStrokeColorRGB(0.87, 0.87, 0.87)
+    canvas.setLineWidth(0.5)
+    canvas.rect(x, y, w, h, fill=1, stroke=1)
+    # Label
+    canvas.setFillColorRGB(0.5, 0.5, 0.5)
+    canvas.setFont('Helvetica', 8)
+    canvas.drawString(x + 10, y + h - 16, label)
+    # Value
+    canvas.setFillColorRGB(0.1, 0.1, 0.18)
+    canvas.setFont('Helvetica-Bold', 16)
+    canvas.drawString(x + 10, y + h - 34, value)
+    # Sub value (e.g. "Need Rs. X/mo" on Active SIP card)
+    if sub_value:
+        r, g, b = (0.9, 0.49, 0.13) if sub_colour == 'orange' else (0.5, 0.5, 0.5)
+        canvas.setFillColorRGB(r, g, b)
+        canvas.setFont('Helvetica', 8)
+        canvas.drawString(x + 10, y + h - 48, sub_value)
 
 
-def draw_status_tag(c, x, y, text, tag=None, width=None):
-    draw_tag(c, x, y, tag or text, width=width)
+def draw_score_bar(canvas, x, y, bar_width, label, score, tag_label):
+    label_w = 130
+    score_w = 40
+    actual_bar_w = bar_width - label_w - score_w - 20
+    # Label
+    canvas.setFillColorRGB(0.1, 0.1, 0.18)
+    canvas.setFont('Helvetica-Bold', 10)
+    canvas.drawString(x, y + 2, label)
+    bx = x + label_w
+    # Background bar
+    canvas.setFillColorRGB(0.91, 0.91, 0.91)
+    canvas.rect(bx, y, actual_bar_w, 10, fill=1, stroke=0)
+    # Foreground bar
+    fill_w = (score / 100) * actual_bar_w
+    if score < 40:
+        canvas.setFillColorRGB(0.75, 0.22, 0.17)
+    elif score < 75:
+        canvas.setFillColorRGB(0.9, 0.49, 0.13)
+    else:
+        canvas.setFillColorRGB(0.15, 0.68, 0.38)
+    canvas.rect(bx, y, fill_w, 10, fill=1, stroke=0)
+    # Score text
+    canvas.setFillColorRGB(0.1, 0.1, 0.18)
+    canvas.setFont('Helvetica-Bold', 10)
+    canvas.drawString(bx + actual_bar_w + 6, y + 2, f'{score}/100')
+    # Tag
+    draw_tag(canvas, bx + actual_bar_w + 50, y, tag_label)
 
 
-def draw_kpi_tile(c, x, y, w, h, label, value, note="", value_color=MEERKAT_NAVY, note_color=colors.HexColor("#777777")):
-    c.setFillColor(colors.white)
-    c.setStrokeColor(MEERKAT_LINE)
-    c.roundRect(x, y, w, h, 4, stroke=1, fill=1)
-    c.setFillColor(colors.HexColor("#666666"))
-    c.setFont("Helvetica", 8)
-    c.drawString(x + 8, y + h - 15, str(label))
-    c.setFillColor(value_color)
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(x + 8, y + h - 36, str(value)[:18])
-    if note:
-        c.setFillColor(note_color)
-        c.setFont("Helvetica", 7.5)
-        c.drawString(x + 8, y + 8, str(note)[:28])
+def _draw_dimension_score_bars(canvas, left_margin, starting_y, content_width, dimension_rows):
+    bar_x = left_margin + 160
+    bar_w = content_width - 160 - 80
+    y = starting_y
+    for label, score, tag in dimension_rows:
+        canvas.setFillColorRGB(0.1, 0.1, 0.18)
+        canvas.setFont("Helvetica-Bold", 10)
+        canvas.drawString(left_margin, y + 2, str(label))
+        canvas.setFillColorRGB(0.91, 0.91, 0.91)
+        canvas.rect(bar_x, y, bar_w, 10, fill=1, stroke=0)
+        fill_w = (_num(score, 0) / 100.0) * bar_w
+        if _num(score, 0) < 40:
+            canvas.setFillColorRGB(0.75, 0.22, 0.17)
+        elif _num(score, 0) < 75:
+            canvas.setFillColorRGB(0.9, 0.49, 0.13)
+        else:
+            canvas.setFillColorRGB(0.15, 0.68, 0.38)
+        canvas.rect(bar_x, y, fill_w, 10, fill=1, stroke=0)
+        canvas.setFillColorRGB(0.1, 0.1, 0.18)
+        canvas.setFont("Helvetica", 10)
+        canvas.drawString(bar_x + bar_w + 6, y + 2, f"{int(_num(score, 0))}/100")
+        draw_tag(canvas, bar_x + bar_w + 52, y, str(tag))
+        y -= 28
 
 
-def draw_score_bar(c, x, y, w, score, label=""):
-    score = max(0, min(100, _num(score, 0)))
-    colour = MEERKAT_RED if score < 40 else MEERKAT_ORANGE if score < 75 else MEERKAT_GREEN
-    c.setFillColor(colors.HexColor("#E8E8E8"))
-    c.rect(x, y, w, 8, stroke=0, fill=1)
-    c.setFillColor(colour)
-    c.rect(x, y, w * score / 100, 8, stroke=0, fill=1)
-    c.setFillColor(MEERKAT_NAVY)
-    c.setFont("Helvetica-Bold", 8)
-    if label:
-        c.drawString(x, y + 12, label)
-    c.drawRightString(x + w, y + 12, f"{score:.0f}/100")
+def draw_arc_gauge(canvas, cx, cy, radius, score, max_score=100,
+                   label='Financial Health', score_font_size=28, colour=None):
+    stroke_bg = 6      # background arc stroke width
+    stroke_fg = 9      # foreground arc stroke width
+    start_angle = 225
+    total_sweep = 270
+
+    # Background arc
+    canvas.setStrokeColorRGB(0.87, 0.87, 0.87)
+    canvas.setLineWidth(stroke_bg)
+    canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius,
+               startAng=start_angle, extent=-total_sweep)
+
+    # Foreground arc
+    sweep = (score / max_score) * total_sweep
+    if colour:
+        canvas.setStrokeColor(colour)
+    else:
+        if score < 40:
+            canvas.setStrokeColorRGB(0.75, 0.22, 0.17)
+        elif score < 75:
+            canvas.setStrokeColorRGB(0.9, 0.49, 0.13)
+        else:
+            canvas.setStrokeColorRGB(0.15, 0.68, 0.38)
+    canvas.setLineWidth(stroke_fg)
+    canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius,
+               startAng=start_angle, extent=-sweep)
+
+    # Score number
+    canvas.setFillColorRGB(0.1, 0.1, 0.18)
+    canvas.setFont('Helvetica-Bold', score_font_size)
+    canvas.drawCentredString(cx, cy + 8, str(int(score)))
+
+    # Label below score
+    canvas.setFillColorRGB(0.5, 0.5, 0.5)
+    canvas.setFont('Helvetica', 9)
+    canvas.drawCentredString(cx, cy - 8, label)
 
 
-def draw_arc_gauge(c, x, y, size, value, label="", colour=None):
-    value = max(0, min(100, _num(value, 0)))
-    colour = colour or (MEERKAT_RED if value < 40 else MEERKAT_ORANGE if value < 75 else MEERKAT_GREEN)
-    c.setLineWidth(6)
-    c.setStrokeColor(colors.HexColor("#E0E0E0"))
-    c.arc(x, y, x + size, y + size, 135, 270)
-    extent = 270 * value / 100
-    if extent > 0:
-        c.setLineWidth(12)
-        c.setStrokeColor(colour)
-        c.arc(x, y, x + size, y + size, 135, extent)
-    c.setFillColor(MEERKAT_NAVY)
-    c.setFont("Helvetica-Bold", 30)
-    c.drawCentredString(x + size / 2, y + size / 2 - 2, f"{value:.0f}")
-    c.setFillColor(colors.HexColor("#777777"))
-    c.setFont("Helvetica", 7.5)
-    c.drawCentredString(x + size / 2, y + size / 2 - 17, label or "out of 100")
-    c.setLineWidth(1)
+def draw_coverage_bar(canvas, x, y, width, coverage_pct):
+    canvas.setFillColorRGB(0.91, 0.91, 0.91)
+    canvas.rect(x, y + 2, width, 6, fill=1, stroke=0)
+    if coverage_pct > 0:
+        fill_w = min(coverage_pct / 100, 1.0) * width
+        if coverage_pct < 50:
+            canvas.setFillColorRGB(0.75, 0.22, 0.17)
+        elif coverage_pct < 80:
+            canvas.setFillColorRGB(0.9, 0.49, 0.13)
+        else:
+            canvas.setFillColorRGB(0.15, 0.68, 0.38)
+        canvas.rect(x, y + 2, fill_w, 6, fill=1, stroke=0)
+    canvas.setFillColorRGB(0.4, 0.4, 0.4)
+    canvas.setFont('Helvetica', 8)
+    canvas.drawString(x + width + 4, y + 2, f'{int(coverage_pct)}%')
 
 
-def draw_coverage_bar(c, x, y, w, coverage_pct):
-    pct = max(0, min(100, _num(coverage_pct, 0)))
-    c.setFillColor(colors.HexColor("#E8E8E8"))
-    c.rect(x, y, w, 6, stroke=0, fill=1)
-    c.setFillColor(MEERKAT_RED if pct < 50 else MEERKAT_ORANGE if pct < 95 else MEERKAT_GREEN)
-    c.rect(x, y, w * pct / 100, 6, stroke=0, fill=1)
+def draw_equity_gauges(canvas, cx_left, cx_right, cy, radius, current_pct, target_pct, band_low, band_high):
+    for cx, pct, is_current in [(cx_left, current_pct, True), (cx_right, target_pct, False)]:
+        canvas.setStrokeColorRGB(0.87, 0.87, 0.87)
+        canvas.setLineWidth(6)
+        canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius, startAng=-45, extent=270)
+        if is_current and (_num(pct, 0) < _num(band_low, 0) or _num(pct, 0) > _num(band_high, 0)):
+            canvas.setStrokeColorRGB(0.75, 0.22, 0.17)
+        else:
+            canvas.setStrokeColorRGB(0.15, 0.68, 0.38)
+        canvas.setLineWidth(9)
+        sweep = (_num(pct, 0) / 100.0) * 270
+        canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius, startAng=-45, extent=sweep)
+        canvas.setFillColorRGB(0.1, 0.1, 0.18)
+        canvas.setFont("Helvetica-Bold", 18)
+        canvas.drawCentredString(cx, cy + 4, f"{int(_num(pct, 0))}%")
+        canvas.setFillColorRGB(0.5, 0.5, 0.5)
+        canvas.setFont("Helvetica", 8)
+        canvas.drawCentredString(cx, cy - 12, "Current Equity" if is_current else "Target Equity")
+    canvas.setFillColorRGB(0.6, 0.6, 0.6)
+    canvas.setFont("Helvetica", 16)
+    canvas.drawCentredString((cx_left + cx_right) / 2, cy, "→")
 
 
 def _tag(label):
@@ -6003,22 +6113,30 @@ def build_page_cover(client_facts, allocation_output, narratives=None):
         table = Table(top, colWidths=[330, 170])
         table.setStyle(TableStyle([("ALIGN", (1, 0), (1, 0), "RIGHT"), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
         story.append(table)
+        story.append(Spacer(1, 6))
+        story.append(CanvasBlock(500, 1, lambda c, x, y, w, h: [c.setStrokeColor(colors.HexColor("#E3D8C7")), c.setLineWidth(0.8), c.line(0, 0, w, 0)]))
     subtitle = "A comprehensive analysis across Six Critical Dimensions of your financial wellbeing - designed to help you take clear, prioritised action."
     title = "Your Financial <font name='Times-BoldItalic' color='#B8860B'>Health Report</font>"
     story += [
-        Spacer(1, 34),
-        Paragraph(f"Prepared for: {sanitize_pdf_text(name)}", styles["cover_name"]),
-        Paragraph(title, styles["cover_title"]),
+        Spacer(1, 32),
+        Paragraph("<para align='center'><font size='9' color='#6E8094'><b>PREPARED FOR</b></font></para>", styles["cover_subtitle"]),
+        Spacer(1, 3),
+        Paragraph(f"<para align='center'>{sanitize_pdf_text(name)}</para>", styles["cover_name"]),
+        Spacer(1, 4),
+        Paragraph(f"<para align='center'>{title}</para>", styles["cover_title"]),
         Spacer(1, 8),
-        Paragraph(subtitle, styles["cover_subtitle"]),
-        Spacer(1, 34),
+        Paragraph(f"<para align='center'>{subtitle}</para>", styles["cover_subtitle"]),
+        Spacer(1, 42),
     ]
-    story.append(CanvasBlock(500, 170, lambda c, x, y, w, h: draw_arc_gauge(c, 180, 20, 140, ihs.get("score"), "Financial Health")))
-    story.append(Paragraph(sanitize_pdf_text(str(ihs.get('band') or 'Needs Attention')), styles["cover_status"]))
-    story.append(Spacer(1, 14))
+    story.append(CanvasBlock(500, 170, lambda c, x, y, w, h: draw_arc_gauge(c, 250, 90, 70, ihs.get("score"))))
+    story.append(Spacer(1, 2))
+    story.append(Paragraph("<para align='center'><font size='9' color='#6E8094'><b>OVERALL STATUS</b></font></para>", styles["cover_subtitle"]))
+    story.append(Paragraph(f"<para align='center'>{sanitize_pdf_text(str(ihs.get('band') or 'Needs Attention'))}</para>", styles["cover_status"]))
+    story.append(Spacer(1, 8))
+    alert_style = ParagraphStyle("mk_cover_alert", parent=styles["body"], alignment=TA_CENTER, textColor=colors.HexColor("#5E738A"), leading=14)
     for key, val in alerts:
-        story.append(Paragraph(f"• {key.replace('_', ' ').title()} needs attention", styles["body"]))
-    story += [Spacer(1, 70), Paragraph("11-page analysis covering protection, portfolio, liquidity, goals, tax and action planning", styles["small"])]
+        story.append(Paragraph(f"<para align='center'>! {key.replace('_', ' ').title()} needs attention</para>", alert_style))
+    story += [Spacer(1, 58), Paragraph(f"<para align='center'>11-page analysis covering protection, portfolio, liquidity, goals, tax and action planning</para>", styles["small"])]
     return story
 
 
@@ -6044,16 +6162,31 @@ def build_page_snapshot(client_facts, allocation_output):
         ["Active SIP", "Rs. 0/mo", f"Need {_fmt_rs(allocation_output.get('combined_shortfall'), False)}/mo", _tag("HIGH")],
         ["Goals Funded", f"0 of {len(client_facts.get('goals') or [])}", f"{len(client_facts.get('goals') or [])} of {len(client_facts.get('goals') or [])}", _tag("HIGH")],
     ]
-    profile = [["Profile at a Glance", "Value"], ["Risk Profile", analysis.get("riskProfile")], ["Surplus", analysis.get("surplusBand")], ["Insurance", analysis.get("insuranceGap")], ["Debt", analysis.get("debtStress")], ["Liquidity", analysis.get("liquidity")], ["IHS Band", ((analysis.get("ihs") or {}).get("band"))]]
+    profile = [
+        ["Profile at a Glance", "Value"],
+        ["Risk Profile", analysis.get("riskProfile")],
+        ["Surplus", _tag(analysis.get("surplusBand") or "-")],
+        ["Insurance", _tag(analysis.get("insuranceGap") or "-")],
+        ["Debt", _tag(analysis.get("debtStress") or "-")],
+        ["Liquidity", _tag(analysis.get("liquidity") or "-")],
+        ["IHS Band", _tag((analysis.get("ihs") or {}).get("band") or "-")],
+    ]
     adv = [["Advanced Risk Assessment", "Value"], ["Risk Score", ar.get("riskScore") or ar.get("score") or "-"], ["Risk Appetite", ar.get("riskAppetite") or ar.get("appetiteCategory") or "-"], ["Tenure Limit", ar.get("tenureLimit") or ar.get("tenureLimitCategory") or "-"], ["Final Category", ar.get("finalCategory") or "-"], ["Recommended Equity", _recommended_band_text(ar)]]
+    snapshot_kpis = [
+        {"label": "Annual Income", "value": _fmt_rs(income.get("annualIncome"))},
+        {"label": "Monthly Surplus", "value": _fmt_rs(monthly_surplus)},
+        {"label": "Current Portfolio", "value": _fmt_rs(portfolio.get("total_value") or portfolio.get("current_value")), "note": f"Equity {_portfolio_equity(portfolio):.0f}%"},
+        {"label": "Active SIP", "value": "Rs. 0", "note": f"Need {_fmt_rs(allocation_output.get('combined_shortfall'), False)}/mo", "note_color": "orange"},
+    ]
     return [
+        Paragraph("FINANCIAL SNAPSHOT", styles["label"]), Spacer(1, 4),
+        Paragraph("Where You Stand Today", ParagraphStyle("mk_snap_title", parent=styles["h2"], fontName="Times-Bold", fontSize=24, leading=28)),
+        Spacer(1, 10),
         draw_section_badge("01", "Financial Snapshot"), Spacer(1, 10),
-        KPIFlowable([
-            {"label": "Annual Income", "value": _fmt_rs(income.get("annualIncome"))},
-            {"label": "Monthly Surplus", "value": _fmt_rs(monthly_surplus)},
-            {"label": "Current Portfolio", "value": _fmt_rs(portfolio.get("total_value") or portfolio.get("current_value")), "note": f"Equity {_portfolio_equity(portfolio):.0f}%"},
-            {"label": "Active SIP", "value": "Rs. 0", "note": f"Need {_fmt_rs(allocation_output.get('combined_shortfall'), False)}/mo", "note_color": MEERKAT_RED},
-        ]),
+        DrawingFlowable(
+            lambda c, x, y, tiles: KPIFlowable(tiles, width=500, height=79, card_height=65, gap=10, card_y=7).drawOn(c, x, y),
+            500, 79, snapshot_kpis
+        ),
         Spacer(1, 6), _styled_table(rows, [108, 116, 150, 96]), Spacer(1, 10),
         Table([[_styled_table(profile, [95, 135]), _styled_table(adv, [105, 145])]], colWidths=[245, 255]),
     ]
@@ -6078,17 +6211,31 @@ def build_page_executive_summary(client_facts, allocation_output, narratives=Non
         ("tax_efficiency", "Tax Efficiency"),
         ("debt_management", "Debt Management"),
     ]
-    rows = [["Area", "Score", "Action Required", "Why It Matters"]]
     scored = []
     for key, label in canonical:
         item = breakdown.get(key) or {}
         scored.append((key, label, _num(item.get("score"), 0)))
+    dimension_rows = []
+    for _, label, score in sorted(scored, key=lambda item: item[2]):
+        dimension_rows.append((label, _num(score, 0), _urgency(score)))
+    priority_rows = [["Area", "Score", "Action Required", "Why It Matters"]]
     for key, label, score in sorted(scored, key=lambda item: item[2]):
-        rows.append([label, f"{score:.0f}/100", _tag(_urgency(score)), why[key]])
-    blocks = _page_header("02", "Executive Summary / Health Score", "Six Critical Dimensions") + [Spacer(1, 12)]
-    for key, label, score in scored:
-        blocks.append(ScoreBarFlowable(label, score, width=500))
-    blocks += [Spacer(1, 8), _styled_table(rows, [110, 55, 88, 237]), Spacer(1, 8), Paragraph("Urgency: scores below 40 are IMMEDIATE, 40-74 are HIGH, and 75+ are MAINTAIN.", styles["small"])]
+        priority_rows.append([label, f"{int(_num(score, 0))}/100", _tag(_urgency(score)), why.get(key, "-")])
+    overall = int(_num((((client_facts.get("analysis") or {}).get("ihs") or {}).get("score")), 0))
+    overall_label = (("Needs Attention" if overall < 75 else "Healthy") if overall > 0 else "-")
+    priority_rows.append(["Overall Score", f"{overall}/100", _tag(overall_label.upper()), "3 areas require immediate action before deploying capital into goals"])
+
+    blocks = _page_header("02", "Executive Summary / Health Score", "Six Critical Dimensions") + [Spacer(1, 8)]
+    blocks.append(Paragraph("Your Financial Health Score", ParagraphStyle("mk_exec_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)))
+    blocks.append(Spacer(1, 8))
+    # Keep all 6 rows fully inside the flowable box to prevent overlap with the next table.
+    blocks.append(DrawingFlowable(lambda c, x, y, rows=dimension_rows: _draw_dimension_score_bars(c, 0, 150, 500, rows), 500, 170))
+    blocks.append(Spacer(1, 8))
+    blocks.append(Paragraph("Color key: Critical <40  |  Needs Attention 40-74  |  Good ≥75", styles["small"]))
+    blocks.append(Paragraph("Urgency: scores below 40 are IMMEDIATE, 40-74 are HIGH, and 75+ are MAINTAIN.", styles["small"]))
+    blocks.append(Spacer(1, 8))
+    blocks.append(Paragraph("Priority Ranking", styles["h2"]))
+    blocks.append(_styled_table(priority_rows, [130, 65, 105, 200]))
     return blocks
 
 
@@ -6101,32 +6248,63 @@ def build_page_protection(client_facts, allocation_output):
     required_life = _num(diag.get("requiredLifeCover"), 0)
     gap = max(0, required_life - current_life)
     coverage_pct = (current_life / required_life * 100) if required_life > 0 else 100
-    life_rows = [
-        ["Life Insurance", "Amount"],
-        ["Current cover", _fmt_rs(current_life)],
-        ["Required cover", _fmt_rs(required_life)],
-        ["Coverage", CoverageFlowable(coverage_pct, width=120)],
-        ["Protection gap", Paragraph(f"<b>{_fmt_rs(gap)}</b>", styles["h2"])],
-        ["Monthly provision", _fmt_rs(allocation_output.get("insurance_provision"), False)],
+
+    gap_text = _fmt_rs(gap)
+    life_card = [
+        Paragraph("Life Insurance", styles["h2"]),
+        Spacer(1, 12),
+        Paragraph(f"Current cover: <b>{_fmt_rs(current_life)}</b>", styles["body"]),
+        Paragraph(f"Required cover: <b>{_fmt_rs(required_life)}</b>", styles["body"]),
+        Spacer(1, 8),
+        CanvasBlock(200, 12, lambda c, x, y, w, h: draw_coverage_bar(c, 0, 4, 200, coverage_pct)),
+        Spacer(1, 16),
+        Paragraph("Protection Gap", styles["label"]),
+        Paragraph(f"<b>{_fmt_rs(gap)}</b>", ParagraphStyle("gap", parent=styles["h2"], fontSize=16, textColor=MEERKAT_NAVY)),
+        Spacer(1, 12),
+        Paragraph(f"Monthly provision: {_fmt_rs(allocation_output.get('insurance_provision'), False)}", styles["body"]),
     ]
-    health_rows = [
-        ["Health Insurance", "Guidance"],
-        ["Current cover", _fmt_rs(insurance.get("healthCover"))],
-        ["Recommended", "Rs. 10-15 L family floater"],
-        ["Status", _tag(analysis.get("insuranceGap") or "-")],
-        ["What to Look For", Paragraph("✓ No room rent cap", styles["table"])],
-        ["", Paragraph("✓ Cashless hospital network", styles["table"])],
-        ["", Paragraph("✓ Restore benefit", styles["table"])],
-        ["", Paragraph("✓ Critical illness review", styles["table"])],
+    
+    health_tag = "UPGRADE RECOMMENDED" if _num(insurance.get("healthCover"), 0) < 1000000 else "ADEQUATE"
+    health_card = [
+        Paragraph("Health Insurance", styles["h2"]),
+        Spacer(1, 12),
+        CanvasBlock(200, 18, lambda c, x, y, w, h: [c.setFont("Helvetica", 9), c.setFillColorRGB(0.35, 0.35, 0.35), c.drawString(0, 6, "Status:"), draw_tag(c, 46, 2, health_tag)]),
+        Spacer(1, 8),
+        Paragraph(f"Current cover: <b>{_fmt_rs(insurance.get('healthCover'))}</b>", styles["body"]),
+        Paragraph("Recommended: <b>Rs. 10-15 L family floater</b>", styles["body"]),
+        Spacer(1, 8),
+        CanvasBlock(200, 20, lambda c, x, y, w, h: [c.setFont("Helvetica", 9.5), c.setFillColor(colors.HexColor("#222222")), c.drawString(0, 6, "Status:"), draw_tag(c, 40, 2, analysis.get("insuranceGap") or "-")]),
+        Spacer(1, 12),
+        Paragraph("<b>What to Look For</b>", styles["label"]),
+        Paragraph("✓ No room rent cap", styles["body"]),
+        Paragraph("✓ Cashless hospital network", styles["body"]),
+        Paragraph("✓ Restore benefit", styles["body"]),
+        Paragraph("✓ Critical illness review", styles["body"]),
     ]
-    cards = Table([[_styled_table(life_rows, [115, 120]), _styled_table(health_rows, [110, 135])]], colWidths=[245, 255])
+
+    left_cell = Table([[item] for item in life_card], colWidths=[225])
+    right_cell = Table([[item] for item in health_card], colWidths=[225])
+    
+    left_cell.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF6F4")),
+        ("BOX", (0, 0), (-1, -1), 1, MEERKAT_LINE),
+        ("PADDING", (0, 0), (-1, -1), 12),
+    ]))
+    right_cell.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F5FBF7")),
+        ("BOX", (0, 0), (-1, -1), 1, MEERKAT_LINE),
+        ("PADDING", (0, 0), (-1, -1), 12),
+    ]))
+
+    cards = Table([[left_cell, right_cell]], colWidths=[240, 240])
     cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+
     return (
         _page_header("03", "Protection", "Protection Gap Analysis")
         + [
             Spacer(1, 14),
             cards,
-            Spacer(1, 10),
+            Spacer(1, 14),
             Paragraph("Prioritize pure term insurance for income replacement and a separate health policy for hospitalization risk.", styles["body"]),
         ]
     )
@@ -6149,12 +6327,33 @@ def build_page_portfolio_debt(client_facts, allocation_output):
         ["Debt score", f"{_num(debt_score, 0):.0f}/100", ">=75 = Good", _tag(_urgency(debt_score))],
     ]
     bullets = ["Asset allocation is the main lever.", "Use SIPs for gradual rebalancing.", "Keep near-term goals in debt/liquid assets.", "Review fund overlap and concentration annually."]
-    gauge = GaugePairFlowable(_portfolio_equity(portfolio), _recommended_band_mid(ar))
+    gauge = DrawingFlowable(
+        lambda c, x, y, current, target, risk: draw_equity_gauges(
+            c, 130, 370, 60, 35, _num(current, 0), _num(target, 0),
+            _num((risk.get("recommendedEquityBand") or {}).get("min"), 40),
+            _num((risk.get("recommendedEquityBand") or {}).get("max"), 60),
+        ),
+        500, 132, _portfolio_equity(portfolio), _recommended_band_mid(ar), ar
+    )
+    gauge_block = [
+        Paragraph("Equity Allocation — Actual vs Target", ParagraphStyle("mk_pf_title", parent=styles["h2"], fontName="Times-Bold", fontSize=20, leading=24)),
+        Spacer(1, 10),
+        gauge,
+        Spacer(1, 4),
+        Paragraph("What You Control", styles["h2"]),
+    ] + [Paragraph(f"• {b}", styles["body"]) for b in bullets]
+    gauge_card = Table([[item] for item in gauge_block], colWidths=[500])
+    gauge_card.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
     return (
         _page_header("04", "Portfolio & Debt", "Portfolio Rebalancing")
-        + [Spacer(1, 12), gauge, Paragraph("What You Control", styles["h2"])]
-        + [Paragraph(f"- {b}", styles["body"]) for b in bullets]
-        + [Spacer(1, 10), _styled_table(debt_rows, [120, 90, 145, 85])]
+        + [Spacer(1, 10), gauge_card, Spacer(1, 10), _styled_table(debt_rows, [120, 90, 145, 85])]
     )
 
 
@@ -6169,19 +6368,40 @@ def build_page_liquidity(client_facts, allocation_output):
     params = [["Parameter", "Value"], ["Liquidity score", f"{_num(score, 0):.0f}/100"], ["Months on hand", f"{_num(diag.get('liquidityMonths'), 0):.1f}"], ["Monthly expenses", _fmt_rs(expenses)], ["Target", _fmt_rs(target)], ["Status", analysis.get("liquidity") or "-"]]
     strategy = [["Option", "Duration", "Monthly Amount"], ["Fast", "12 months", _fmt_rs(target / 12, False)], ["Balanced", "18 months", _fmt_rs(target / 18, False)], ["Gentle", "24 months", _fmt_rs(target / 24, False)]]
     tiers = [["Tier", "Where to Park"], ["Instant", "Savings account for first 1-2 months"], ["Quick", "Liquid fund or sweep FD"], ["Short-term", "Short-duration FD or high-quality debt fund"]]
-    return _page_header("05", "Liquidity", "Emergency Fund Planning") + [Spacer(1, 10), _styled_table(params, [180, 250]), Spacer(1, 8), Paragraph("<b>Build emergency fund BEFORE investing in long-term goals.</b>", styles["body"]), Spacer(1, 10), _styled_table(strategy, [130, 120, 160]), Spacer(1, 10), _styled_table(tiers, [100, 330])]
+    left = Table([[Paragraph("Emergency Fund Parameters", styles["h2"])], [_styled_table(params, [145, 95])]], colWidths=[240])
+    left.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.white), ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE), ("PADDING", (0, 0), (-1, -1), 10)]))
+    right = Table([[Paragraph("Building Strategy — From Zero", styles["h2"])], [_styled_table(strategy, [78, 62, 100])]], colWidths=[240])
+    right.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.white), ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE), ("PADDING", (0, 0), (-1, -1), 10)]))
+    pair = Table([[left, right]], colWidths=[250, 250])
+    pair.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    t1 = Table([[Paragraph("<b>Instant Access</b><br/><font color='#666666'>40% · savings account / high-yield</font>", styles["body"])]], colWidths=[160])
+    t2 = Table([[Paragraph("<b>Quick Access</b><br/><font color='#666666'>40% · liquid fund or sweep FD</font>", styles["body"])]], colWidths=[160])
+    t3 = Table([[Paragraph("<b>Short-Term FD</b><br/><font color='#666666'>20% · short-duration debt/FD</font>", styles["body"])]], colWidths=[160])
+    for t, bg in [(t1, colors.HexColor("#FFF6F4")), (t2, colors.HexColor("#FFF9F0")), (t3, colors.HexColor("#F7F8FA"))]:
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), bg), ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE), ("PADDING", (0, 0), (-1, -1), 10)]))
+    tier_cards = Table([[t1, t2, t3]], colWidths=[166, 166, 166])
+    tier_cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    return _page_header("05", "Liquidity", "Emergency Fund Planning") + [Spacer(1, 10), Paragraph("Emergency Fund Assessment", ParagraphStyle("mk_lq_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)), Spacer(1, 8), pair, Spacer(1, 8), Paragraph("<b>Build emergency fund BEFORE investing in long-term goals.</b>", styles["body"]), Spacer(1, 10), Paragraph("Where to Park the Emergency Fund", styles["label"]), Spacer(1, 6), tier_cards]
 
 
 def build_page_goal_feasibility(client_facts, allocation_output):
     styles = _report_styles()
     rows = [["Goal", "Target", "Horizon", "Current SIP", "Ideal SIP", "Gap/mo", "Coverage"]]
     for g in allocation_output.get("goal_sip_table") or []:
-        coverage = g.get("coverage_pct")
-        if coverage is None:
-            ideal = _num(g.get("ideal_sip"), 0)
-            coverage = (_num(g.get("allocated_sip"), 0) / ideal * 100) if ideal else 100
-        rows.append([g.get("name") or "Goal", _fmt_rs(g.get("target_amount")), f"{g.get('horizon_years') or '-'} yrs", "Rs. 0", _fmt_rs(g.get("ideal_sip"), False), _fmt_rs(g.get("shortfall"), False), CoverageFlowable(coverage, width=55)])
-    return _page_header("06", "Goal Feasibility", "Goal Funding Analysis") + [Spacer(1, 12), _styled_table(rows, [88, 70, 48, 62, 70, 62, 55]), Spacer(1, 12), CanvasBlock(500, 55, lambda c, x, y, w, h: [c.setFont("Helvetica-Bold", 16), c.setFillColor(MEERKAT_NAVY), c.drawString(0, 32, f"Combined monthly SIP shortfall: {_fmt_rs(allocation_output.get('combined_shortfall'), False)}"), draw_coverage_bar(c, 0, 12, 500, 100 - min(100, (_num(allocation_output.get('combined_shortfall'), 0) / max(1, _num(allocation_output.get('combined_shortfall'), 0) + _num(allocation_output.get('available_for_goals'), 0))) * 100))])]
+        ideal = _num(g.get("ideal_sip"), 0)
+        coverage = (_num(g.get("allocated_sip"), 0) / ideal * 100) if ideal > 0 else 0
+        rows.append([g.get("name") or "Goal", _fmt_rs(g.get("target_amount")), f"{g.get('horizon_years') or '-'} yrs", "Rs. 0", _fmt_rs(g.get("ideal_sip"), False), _fmt_rs(g.get("shortfall"), False), CoverageFlowable(coverage, width=65)])
+    return _page_header("06", "Goal Feasibility", "Goal Funding Analysis") + [
+        Spacer(1, 4),
+        Paragraph("All Goals — Current vs Required", ParagraphStyle("mk_goal_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)),
+        Spacer(1, 12),
+        _styled_table(rows, [88, 70, 48, 62, 70, 62, 65]),
+        Spacer(1, 10),
+        Paragraph(
+            f"<b>Combined monthly SIP shortfall:</b> {_fmt_rs(allocation_output.get('combined_shortfall'), False)}",
+            styles["body"],
+        ),
+    ]
 
 
 def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
@@ -6195,18 +6415,24 @@ def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
     coverage = available / total_req * 100 if total_req else 100
     rows = [["Goal", "Required SIP", "Allocated SIP", "Monthly Gap", "Status"]]
     for g in allocation_output.get("goal_sip_table") or []:
-        status = g.get("status") or ("Gap" if _num(g.get("shortfall"), 0) else "Funded")
-        rows.append([g.get("name") or "Goal", _fmt_rs(g.get("ideal_sip"), False), _fmt_rs(g.get("allocated_sip"), False), _fmt_rs(g.get("shortfall"), False), _tag(status)])
+        status = g.get("status") or ("GAP" if _num(g.get("shortfall"), 0) else "FUNDED")
+        rows.append([g.get("name") or "Goal", _fmt_rs(g.get("ideal_sip"), False), _fmt_rs(g.get("allocated_sip"), False), _fmt_rs(g.get("shortfall"), False), _tag(str(status).upper())])
     insight = _llm_paragraph(narratives, "cashflow") or "Start with the available surplus, protect the household first, then scale SIPs as income grows."
+    cashflow_kpis = [
+        {"label": "Income/mo", "value": _fmt_rs(monthly_income)},
+        {"label": "Expenses", "value": _fmt_rs(income.get("monthlyExpenses"))},
+        {"label": "Surplus", "value": _fmt_rs(monthly_surplus)},
+        {"label": "Insurance", "value": _fmt_rs(allocation_output.get("insurance_provision"), False)},
+        {"label": "For Goals", "value": _fmt_rs(available, False)},
+    ]
     return _page_header("07", "Cash Flow & SIP Plan", "Monthly Allocation Plan") + [
+        Spacer(1, 4),
+        Paragraph("Can You Afford All This?", ParagraphStyle("mk_cf_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)),
         Spacer(1, 10),
-        KPIFlowable([
-            {"label": "Income/mo", "value": _fmt_rs(monthly_income)},
-            {"label": "Expenses", "value": _fmt_rs(income.get("monthlyExpenses"))},
-            {"label": "Surplus", "value": _fmt_rs(monthly_surplus)},
-            {"label": "Insurance", "value": _fmt_rs(allocation_output.get("insurance_provision"), False)},
-            {"label": "For Goals", "value": _fmt_rs(available, False)},
-        ]),
+        DrawingFlowable(
+            lambda c, x, y, tiles: KPIFlowable(tiles, width=500, height=72, card_height=60, gap=10, card_y=6).drawOn(c, x, y),
+            500, 72, cashflow_kpis
+        ),
         Paragraph(f"<b>Total Goal Requirement:</b> {_fmt_rs(total_req, False)}/month | <b>Coverage:</b> {coverage:.0f}%", styles["body"]),
         Spacer(1, 8),
         _styled_table(rows, [130, 85, 85, 85, 75]),
@@ -6240,13 +6466,22 @@ def build_page_tax(client_facts, allocation_output):
         ["3", "Hold equity >1yr", "Improves LTCG treatment and reduces churn.", "Avoid redemptions before 12-month mark"],
         ["4", "Claim standard deduction", "Ensure salary deduction is included.", "Confirm with payroll / CA before filing"],
     ]
-    return _page_header("08", "Tax Optimisation", "Regime Comparison") + [Spacer(1, 10), _styled_table(rows, [120, 115, 115, 95]), Spacer(1, 10), Paragraph(f"<b>Potential annual saving:</b> {_fmt_rs(max(_num(current.get('savings'), 0), _num(optimized.get('savings'), 0)))}", styles["h2"]), _styled_table(actions, [25, 115, 145, 190])]
+    return _page_header("08", "Tax Optimisation", "Regime Comparison") + [
+        Spacer(1, 4),
+        Paragraph("Regime Comparison & Structured Actions", ParagraphStyle("mk_tax_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)),
+        Spacer(1, 10),
+        _styled_table(rows, [120, 115, 115, 95]),
+        Spacer(1, 10),
+        Paragraph(f"<b>Potential annual saving:</b> {_fmt_rs(max(_num(current.get('savings'), 0), _num(optimized.get('savings'), 0)))}", styles["h2"]),
+        _styled_table(actions, [25, 115, 145, 190]),
+    ]
 
 
 def build_page_action_plan(client_facts, allocation_output):
     styles = _report_styles()
     bank = client_facts.get("bank") or {}
-    surplus_after_insurance = _num(bank.get("net_cashflow"), 0) - _num(allocation_output.get("insurance_provision"), 0)
+    monthly_surplus = _display_monthly_surplus(client_facts)
+    surplus_after_insurance = monthly_surplus - _num(allocation_output.get("insurance_provision"), 0)
     phase1 = [Paragraph("Phase 1: Months 1-6", styles["h2"])]
     for p in (allocation_output.get("priority_breakdown") or [])[:4]:
         item_name = p.get("name") or f"Priority {p.get('priority')}"
@@ -6264,7 +6499,21 @@ def build_page_action_plan(client_facts, allocation_output):
         ["Day 90", "Review progress and update surplus.", Paragraph("<i>(45 mins)</i>", styles["table"])],
         ["Quarterly", "Recalculate score and rebalance if needed.", Paragraph("<i>(1 hr)</i>", styles["table"])],
     ]
-    return _page_header("09", "Action Plan", "Prioritised Roadmap") + [Spacer(1, 10)] + phase1 + [Spacer(1, 10), Paragraph("Phase 2: Month 7+ Goal SIPs", styles["h2"]), _styled_table(phase2, [180, 130, 130]), Spacer(1, 10), _styled_table(roadmap, [80, 310, 80])]
+    left = Table([[item] for item in phase1], colWidths=[240])
+    left.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.white), ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE), ("PADDING", (0, 0), (-1, -1), 10)]))
+    right_items = [Paragraph("Phase 2: Month 7 Onwards", styles["h2"]), _styled_table(phase2, [110, 70, 70])]
+    right = Table([[item] for item in right_items], colWidths=[240])
+    right.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.white), ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE), ("PADDING", (0, 0), (-1, -1), 10)]))
+    cards = Table([[left, right]], colWidths=[245, 245])
+    cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    return _page_header("09", "Action Plan", "Prioritised Roadmap") + [
+        Spacer(1, 4),
+        Paragraph("Phase-wise Roadmap", ParagraphStyle("mk_ap_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)),
+        Spacer(1, 10),
+        cards,
+        Spacer(1, 10),
+        _styled_table(roadmap, [80, 310, 80]),
+    ]
 
 
 def build_page_review(client_facts, allocation_output):
