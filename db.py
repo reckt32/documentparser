@@ -7,11 +7,18 @@ from typing import Any, Dict, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
-# SQLite file lives under backend/output/index.db
+# SQLite file path:
+# - Prefer DB_PATH env var (for persistent cloud storage mounts)
+# - Fall back to local repo output/index.db for development
 _BASE_DIR = os.path.dirname(__file__)
-_DB_DIR = os.path.join(_BASE_DIR, "output")
-os.makedirs(_DB_DIR, exist_ok=True)
-DB_PATH = os.path.join(_DB_DIR, "index.db")
+_DEFAULT_DB_DIR = os.path.join(_BASE_DIR, "output")
+os.makedirs(_DEFAULT_DB_DIR, exist_ok=True)
+DB_PATH = os.getenv("DB_PATH", os.path.join(_DEFAULT_DB_DIR, "index.db"))
+
+# Ensure parent directory exists for custom DB paths (e.g., Azure /home/site/data)
+_db_parent = os.path.dirname(DB_PATH)
+if _db_parent:
+    os.makedirs(_db_parent, exist_ok=True)
 
 _CONN_LOCK = threading.Lock()
 _CONN: Optional[sqlite3.Connection] = None
@@ -708,4 +715,3 @@ init_db()
 _migrated = migrate_existing_paid_users(credits=3)
 if _migrated > 0:
     print(f"[db] Migrated {_migrated} existing paid user(s) → granted 3 report credits each")
-

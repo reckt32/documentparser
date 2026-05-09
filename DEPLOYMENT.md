@@ -23,6 +23,7 @@ The following environment variables are configured:
 - `REPORT_PRICE_PAISE` - Report price in paise (99900 = ₹999)
 - `STORE_REPORTS` - Set to `memory`
 - `OUTPUT_DIR` - Set to `/tmp`
+- `DB_PATH` - Set to `/home/site/data/index.db` (persistent SQLite on Azure App Service)
 - `SAVE_TX_JSON` - Set to `false`
 - `WEBSITES_PORT` - Set to `8000`
 - `ENABLE_ORYX_BUILD` - Set to `true`
