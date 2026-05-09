@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, g, url_for, send_from_directory, send
 import pdfplumber
 import re
 import json
+import math
 from openai import OpenAI
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file
@@ -1440,10 +1441,14 @@ def _safe_float(x, default=0.0):
         if x is None:
             return default
         if isinstance(x, (int, float)):
-            return float(x)
+            f = float(x)
+            return f if math.isfinite(f) else default
         s = str(x).strip()
         v = clean_and_convert_to_float(s)
-        return v if v != "N/A" else default
+        if v == "N/A":
+            return default
+        f = float(v)
+        return f if math.isfinite(f) else default
     except Exception:
         return default
 
@@ -5826,6 +5831,23 @@ def _num(value, default=0.0):
     return _safe_float(value, default)
 
 
+def _safe_canvas_arc(canvas_obj, x1, y1, x2, y2, start_ang, extent, min_extent=1e-6):
+    """Draw arc only when geometry and extent are valid to avoid ReportLab runtime failures."""
+    try:
+        fx1, fy1, fx2, fy2 = float(x1), float(y1), float(x2), float(y2)
+        fstart = float(start_ang)
+        fextent = float(extent)
+    except Exception:
+        return
+    if not all(math.isfinite(v) for v in (fx1, fy1, fx2, fy2, fstart, fextent)):
+        return
+    if fx2 <= fx1 or fy2 <= fy1:
+        return
+    if abs(fextent) <= float(min_extent):
+        return
+    canvas_obj.arc(fx1, fy1, fx2, fy2, startAng=fstart, extent=fextent)
+
+
 def _portfolio_equity(portfolio):
     return _num(portfolio.get("equity_pct") or portfolio.get("equity") or portfolio.get("equity_percentage"), 0)
 
@@ -6012,8 +6034,11 @@ def draw_arc_gauge(canvas, cx, cy, radius, score, max_score=100,
     canvas.setStrokeColorRGB(0.87, 0.87, 0.87)
     canvas.setLineWidth(stroke_bg)
     canvas.setLineCap(1)  # round caps for smoother arc ends
-    canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius,
-               startAng=start_angle, extent=-total_sweep)
+    _safe_canvas_arc(
+        canvas,
+        cx - radius, cy - radius, cx + radius, cy + radius,
+        start_angle, -total_sweep
+    )
 
     # Foreground arc
     sweep = (score_val / max_score_val) * total_sweep
@@ -6030,8 +6055,11 @@ def draw_arc_gauge(canvas, cx, cy, radius, score, max_score=100,
     canvas.setLineWidth(stroke_fg)
     canvas.setLineCap(1)  # round caps for smoother arc ends
     if sweep > min_sweep:
-        canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius,
-                   startAng=start_angle, extent=-sweep)
+        _safe_canvas_arc(
+            canvas,
+            cx - radius, cy - radius, cx + radius, cy + radius,
+            start_angle, -sweep
+        )
 
     # Score number
     canvas.setFillColorRGB(0.1, 0.1, 0.18)
@@ -6051,17 +6079,18 @@ def draw_arc_gauge(canvas, cx, cy, radius, score, max_score=100,
 
 
 def draw_coverage_bar(canvas, x, y, width, coverage_pct, inner_text="", bar_color=None, height=12):
+    coverage_val = _num(coverage_pct, 0)
     canvas.setFillColorRGB(0.88, 0.90, 0.88)
     h = height
     canvas.roundRect(x, y, width, h, radius=h/2, fill=1, stroke=0)
-    if coverage_pct > 0:
-        fill_w = min(coverage_pct / 100, 1.0) * width
+    if coverage_val > 0:
+        fill_w = min(coverage_val / 100, 1.0) * width
         if bar_color:
             canvas.setFillColorRGB(*bar_color)
         else:
-            if coverage_pct < 50:
+            if coverage_val < 50:
                 canvas.setFillColorRGB(0.75, 0.22, 0.17)
-            elif coverage_pct < 80:
+            elif coverage_val < 80:
                 canvas.setFillColorRGB(0.9, 0.49, 0.13)
             else:
                 canvas.setFillColorRGB(0.15, 0.68, 0.38)
@@ -6080,7 +6109,7 @@ def draw_equity_gauges(canvas, cx_left, cx_right, cy, radius, current_pct, targe
         canvas.setStrokeColorRGB(0.87, 0.87, 0.87)
         canvas.setLineWidth(6)
         canvas.setLineCap(1)
-        canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius, startAng=-45, extent=270)
+        _safe_canvas_arc(canvas, cx - radius, cy - radius, cx + radius, cy + radius, -45, 270)
         if is_current and (_num(pct, 0) < _num(band_low, 0) or _num(pct, 0) > _num(band_high, 0)):
             canvas.setStrokeColorRGB(0.75, 0.22, 0.17)
         else:
@@ -6090,7 +6119,7 @@ def draw_equity_gauges(canvas, cx_left, cx_right, cy, radius, current_pct, targe
         sweep = (_num(pct, 0) / 100.0) * 270
         sweep = max(0.0, min(270.0, float(sweep)))
         if sweep > min_sweep:
-            canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius, startAng=-45, extent=sweep)
+            _safe_canvas_arc(canvas, cx - radius, cy - radius, cx + radius, cy + radius, -45, sweep)
         canvas.setFillColorRGB(0.1, 0.1, 0.18)
         canvas.setFont("Helvetica-Bold", 18)
         canvas.drawCentredString(cx, cy + 4, f"{int(_num(pct, 0))}%")
@@ -6734,12 +6763,13 @@ def build_page_portfolio_debt(client_facts, allocation_output):
         c.setStrokeColorRGB(0.55, 0.65, 0.75)
         c.setLineWidth(10)
         c.setLineCap(1)
-        c.arc(x+10, y+10, x+w-10, y+h-10, startAng=-45, extent=270)
+        _safe_canvas_arc(c, x+10, y+10, x+w-10, y+h-10, -45, 270)
         ch = colors.HexColor(col)
         c.setStrokeColorRGB(ch.red, ch.green, ch.blue)
         c.setLineWidth(10)
         c.setLineCap(1)
-        c.arc(x+10, y+10, x+w-10, y+h-10, startAng=-45, extent=(_num(pct, 0) / 100.0) * 270)
+        sweep = max(0.0, min(270.0, (_num(pct, 0) / 100.0) * 270))
+        _safe_canvas_arc(c, x+10, y+10, x+w-10, y+h-10, -45, sweep)
         c.setFillColorRGB(ch.red, ch.green, ch.blue)
         c.setFont("Helvetica-Bold", 18)
         c.drawCentredString(x + w/2, y + h/2 - 6, f"{int(_num(pct, 0))}%")
