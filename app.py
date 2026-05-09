@@ -6002,6 +6002,11 @@ def draw_arc_gauge(canvas, cx, cy, radius, score, max_score=100,
     stroke_fg = 9      # foreground arc stroke width
     start_angle = 225
     total_sweep = 270
+    min_sweep = 1e-6
+    score_val = _num(score, 0)
+    max_score_val = _num(max_score, 100)
+    if max_score_val <= 0:
+        max_score_val = 100
 
     # Background arc
     canvas.setStrokeColorRGB(0.87, 0.87, 0.87)
@@ -6011,32 +6016,34 @@ def draw_arc_gauge(canvas, cx, cy, radius, score, max_score=100,
                startAng=start_angle, extent=-total_sweep)
 
     # Foreground arc
-    sweep = (score / max_score) * total_sweep
+    sweep = (score_val / max_score_val) * total_sweep
+    sweep = max(0.0, min(float(total_sweep), float(sweep)))
     if colour:
         canvas.setStrokeColor(colour)
     else:
-        if score < 40:
+        if score_val < 40:
             canvas.setStrokeColorRGB(0.75, 0.22, 0.17)
-        elif score < 75:
+        elif score_val < 75:
             canvas.setStrokeColorRGB(0.9, 0.49, 0.13)
         else:
             canvas.setStrokeColorRGB(0.15, 0.68, 0.38)
     canvas.setLineWidth(stroke_fg)
     canvas.setLineCap(1)  # round caps for smoother arc ends
-    canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius,
-               startAng=start_angle, extent=-sweep)
+    if sweep > min_sweep:
+        canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius,
+                   startAng=start_angle, extent=-sweep)
 
     # Score number
     canvas.setFillColorRGB(0.1, 0.1, 0.18)
     canvas.setFont('Helvetica-Bold', score_font_size)
     
     if max_score == 100 and label == 'Financial Health':
-        canvas.drawCentredString(cx, cy + 4, str(int(score)))
+        canvas.drawCentredString(cx, cy + 4, str(int(score_val)))
         canvas.setFont('Helvetica', score_font_size * 0.35)
         canvas.setFillColorRGB(0.5, 0.5, 0.5)
         canvas.drawCentredString(cx, cy - 12, "/100")
     else:
-        canvas.drawCentredString(cx, cy + 8, str(int(score)))
+        canvas.drawCentredString(cx, cy + 8, str(int(score_val)))
         if label:
             canvas.setFillColorRGB(0.5, 0.5, 0.5)
             canvas.setFont('Helvetica', 9)
@@ -6068,6 +6075,7 @@ def draw_coverage_bar(canvas, x, y, width, coverage_pct, inner_text="", bar_colo
 
 
 def draw_equity_gauges(canvas, cx_left, cx_right, cy, radius, current_pct, target_pct, band_low, band_high):
+    min_sweep = 1e-6
     for cx, pct, is_current in [(cx_left, current_pct, True), (cx_right, target_pct, False)]:
         canvas.setStrokeColorRGB(0.87, 0.87, 0.87)
         canvas.setLineWidth(6)
@@ -6080,7 +6088,9 @@ def draw_equity_gauges(canvas, cx_left, cx_right, cy, radius, current_pct, targe
         canvas.setLineWidth(9)
         canvas.setLineCap(1)
         sweep = (_num(pct, 0) / 100.0) * 270
-        canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius, startAng=-45, extent=sweep)
+        sweep = max(0.0, min(270.0, float(sweep)))
+        if sweep > min_sweep:
+            canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius, startAng=-45, extent=sweep)
         canvas.setFillColorRGB(0.1, 0.1, 0.18)
         canvas.setFont("Helvetica-Bold", 18)
         canvas.drawCentredString(cx, cy + 4, f"{int(_num(pct, 0))}%")
