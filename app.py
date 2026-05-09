@@ -9,7 +9,7 @@ import os
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 import io
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import letter, A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Frame, PageTemplate, Image, Flowable
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
@@ -5588,18 +5588,19 @@ def _strip_in_app_report_text(value):
 def _report_styles():
     base = getSampleStyleSheet()
     return {
-        "cover_name": ParagraphStyle("mk_cover_name", parent=base["Title"], fontName="Helvetica-Bold", fontSize=28, leading=32, textColor=MEERKAT_NAVY, spaceAfter=8, alignment=TA_CENTER),
+        "cover_name": ParagraphStyle("mk_cover_name", parent=base["Title"], fontName="Times-Roman", fontSize=34, leading=40, textColor=MEERKAT_NAVY, spaceAfter=8, alignment=TA_LEFT),
         "title": ParagraphStyle("mk_title", parent=base["Title"], fontName="Helvetica-Bold", fontSize=22, leading=26, textColor=MEERKAT_NAVY, alignment=TA_LEFT),
-        "cover_title": ParagraphStyle("mk_cover_title", parent=base["Title"], fontName="Helvetica-Bold", fontSize=24, leading=29, textColor=MEERKAT_NAVY, alignment=TA_CENTER),
-        "cover_subtitle": ParagraphStyle("mk_cover_subtitle", parent=base["BodyText"], fontName="Helvetica", fontSize=10, leading=14, textColor=colors.HexColor("#555555"), alignment=TA_CENTER),
+        "cover_title": ParagraphStyle("mk_cover_title", parent=base["Title"], fontName="Times-Roman", fontSize=32, leading=38, textColor=MEERKAT_NAVY, alignment=TA_LEFT),
+        "cover_subtitle": ParagraphStyle("mk_cover_subtitle", parent=base["BodyText"], fontName="Times-Italic", fontSize=11, leading=16, textColor=colors.HexColor("#555555"), alignment=TA_LEFT),
         "section": ParagraphStyle("mk_section", parent=base["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=15, textColor=colors.HexColor("#666666"), uppercase=True),
         "h2": ParagraphStyle("mk_h2", parent=base["Heading2"], fontName="Helvetica-Bold", fontSize=12, leading=15, textColor=MEERKAT_NAVY, spaceBefore=4, spaceAfter=6),
-        "cover_status": ParagraphStyle("mk_cover_status", parent=base["Heading2"], fontName="Helvetica-Bold", fontSize=15, leading=18, textColor=MEERKAT_ORANGE, alignment=TA_CENTER, spaceBefore=4, spaceAfter=10),
+        "cover_status": ParagraphStyle("mk_cover_status", parent=base["Heading2"], fontName="Times-Roman", fontSize=24, leading=28, textColor=MEERKAT_ORANGE, alignment=TA_LEFT, spaceBefore=4, spaceAfter=12),
         "body": ParagraphStyle("mk_body", parent=base["BodyText"], fontName="Helvetica", fontSize=9.5, leading=12, textColor=colors.HexColor("#222222")),
         "small": ParagraphStyle("mk_small", parent=base["BodyText"], fontName="Helvetica", fontSize=8, leading=10, textColor=colors.HexColor("#666666")),
         "label": ParagraphStyle("mk_label", parent=base["BodyText"], fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=colors.HexColor("#666666")),
         "table": ParagraphStyle("mk_table", parent=base["BodyText"], fontName="Helvetica", fontSize=8.2, leading=10),
         "table_head": ParagraphStyle("mk_table_head", parent=base["BodyText"], fontName="Helvetica-Bold", fontSize=8.2, leading=10, textColor=colors.white),
+        "table_head_dark": ParagraphStyle("mk_table_head_dark", parent=base["BodyText"], fontName="Helvetica-Bold", fontSize=8.2, leading=10, textColor=colors.HexColor("#475569")),
     }
 
 
@@ -5634,9 +5635,10 @@ class DrawingFlowable(Flowable):
 
 
 class TagFlowable(Flowable):
-    def __init__(self, label, height=15):
+    def __init__(self, label, height=15, bg_tint=False):
         super().__init__()
-        self.label = str(label or "-").upper()
+        self.label = str(label or "-")
+        self.bg_tint = bg_tint
         self.width = len(self.label) * 5.5 + 16
         self.height = height
 
@@ -5644,7 +5646,7 @@ class TagFlowable(Flowable):
         return self.width, self.height
 
     def draw(self):
-        draw_tag(self.canv, 0, 1, self.label)
+        draw_tag(self.canv, 0, 1, self.label, bg_tint=self.bg_tint)
 
 
 class KPIFlowable(Flowable):
@@ -5736,7 +5738,80 @@ class CoverageFlowable(Flowable):
         return self.width, self.height
 
     def draw(self):
-        draw_coverage_bar(self.canv, 0, 1, max(24, self.width - 24), self.pct)
+        draw_coverage_bar(self.canv, 0, 0, self.width, self.pct, height=self.height)
+
+
+def draw_saving_card(canvas, x, y, w, h, amount):
+    canvas.saveState()
+    # Background
+    canvas.setFillColor(colors.HexColor("#F9F7F2"))
+    canvas.roundRect(x, y, w, h, radius=8, fill=1, stroke=0)
+    canvas.setStrokeColor(colors.HexColor("#E2E8F0"))
+    canvas.setLineWidth(0.5)
+    canvas.roundRect(x, y, w, h, radius=8, fill=0, stroke=1)
+    
+    # Label
+    canvas.setFillColor(colors.HexColor("#A8813C"))
+    canvas.setFont("Helvetica-Bold", 8)
+    canvas.drawCentredString(x + w/2, y + h - 24, "POTENTIAL ANNUAL SAVING")
+    
+    # Value
+    canvas.setFillColor(colors.HexColor("#27AE60"))
+    canvas.setFont("Times-Bold", 32)
+    canvas.drawCentredString(x + w/2, y + h/2 - 10, f"{_fmt_rs(amount, False)}")
+    
+    # Subtext
+    canvas.setFillColor(colors.HexColor("#64748B"))
+    canvas.setFont("Helvetica", 8)
+    canvas.drawCentredString(x + w/2, y + 20, "by switching to the New Tax Regime")
+    
+    canvas.restoreState()
+
+class SavingCardFlowable(Flowable):
+    def __init__(self, amount, width=220, height=140):
+        super().__init__()
+        self.amount = amount
+        self.width = width
+        self.height = height
+    def wrap(self, aw, ah): return self.width, self.height
+    def draw(self): draw_saving_card(self.canv, 0, 0, self.width, self.height, self.amount)
+
+
+class InsightFlowable(Flowable):
+    def __init__(self, title, text, width=500, height=80):
+        super().__init__()
+        self.title = title
+        self.text = text
+        self.width = width
+        self.height = height
+
+    def wrap(self, avail_width, avail_height):
+        return self.width, self.height
+
+    def draw(self):
+        c = self.canv
+        c.saveState()
+        
+        # Background
+        c.setFillColor(colors.HexColor("#F9F7F2"))
+        c.roundRect(0, 0, self.width, self.height, radius=6, fill=1, stroke=0)
+        
+        # Gold bar on left
+        c.setFillColor(colors.HexColor("#A8813C"))
+        c.rect(0, 0, 4, self.height, fill=1, stroke=0)
+        
+        # Title
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(16, self.height - 24, self.title)
+        
+        # Text
+        styles = _report_styles()
+        p = Paragraph(self.text, ParagraphStyle("insight", parent=styles["small"], fontSize=9, leading=14))
+        w, h = p.wrap(self.width - 40, self.height - 40)
+        p.drawOn(c, 16, self.height - 32 - h)
+        
+        c.restoreState()
 
 
 def _fmt_rs(amount, compact=True):
@@ -5791,47 +5866,76 @@ def _urgency(score):
     return "MAINTAIN"
 
 
-def draw_tag(canvas, x, y, label, font_size=8):
+def draw_tag(canvas, x, y, label, font_size=8, bg_tint=False):
     # y is baseline of text
-    pad_x, pad_y = 8, 3
+    pad_x, pad_y = 6, 3
     text_width = canvas.stringWidth(label, 'Helvetica-Bold', font_size)
     rect_w = text_width + pad_x * 2
     rect_h = font_size + pad_y * 2
     colour_map = {
-        'IMMEDIATE': '#C0392B', 'UNDERINSURED': '#C0392B',
-        'HIGH': '#E67E22', 'MODERATE': '#E67E22', 'GAP': '#E67E22', 'LOW': '#E67E22',
-        'GOOD': '#27AE60', 'ADEQUATE': '#27AE60', 'HEALTHY': '#27AE60',
-        'FUNDED': '#27AE60', 'MAINTAIN': '#27AE60', 'COMFORTABLE': '#27AE60',
+        'IMMEDIATE': '#C0392B', 'CRITICAL': '#C0392B', 'UNDERINSURED': '#C0392B', 'URGENT': '#C0392B',
+        'HIGH': '#E67E22', 'NEEDS ATTENTION': '#E67E22', 'ATTENTION': '#E67E22', 'ASSESS & IMPROVE': '#E67E22', 'MODERATE': '#E67E22', 'GAP': '#E67E22', 'LOW': '#E67E22', 'UPGRADE RECOMMENDED': '#E67E22', 'REVIEW': '#E67E22',
+        'GOOD': '#27AE60', 'MAINTAIN': '#27AE60', 'WELL OPTIMISED': '#27AE60', 'ADEQUATE': '#27AE60', 'HEALTHY': '#27AE60', 'FUNDED': '#27AE60', 'COMFORTABLE': '#27AE60',
     }
     hex_col = colour_map.get(label.upper(), '#888888')
     r, g, b = int(hex_col[1:3],16)/255, int(hex_col[3:5],16)/255, int(hex_col[5:7],16)/255
+    canvas.setStrokeColorRGB(r, g, b)
+    if bg_tint:
+        canvas.setFillColorRGB(r * 0.15 + 0.85, g * 0.15 + 0.85, b * 0.15 + 0.85)
+    else:
+        canvas.setFillColorRGB(1, 1, 1)
+    canvas.setLineWidth(0.8)
+    canvas.roundRect(x, y - pad_y, rect_w, rect_h, radius=rect_h/2, fill=1, stroke=1)
     canvas.setFillColorRGB(r, g, b)
-    canvas.roundRect(x, y - pad_y, rect_w, rect_h, radius=3, fill=1, stroke=0)
-    canvas.setFillColorRGB(1, 1, 1)
     canvas.setFont('Helvetica-Bold', font_size)
     canvas.drawString(x + pad_x, y + 1, label)
 
 
 def draw_kpi_card(canvas, x, y, w, h, label, value, sub_value=None, sub_colour=None):
-    # Draw white card with grey border
-    canvas.setFillColorRGB(1, 1, 1)
-    canvas.setStrokeColorRGB(0.87, 0.87, 0.87)
-    canvas.setLineWidth(0.5)
-    canvas.rect(x, y, w, h, fill=1, stroke=1)
+    is_active_sip = ("ACTIVE SIP" in label.upper())
+    is_red = ("EXPENSES" in label.upper())
+    is_tan = ("INSURANCE" in label.upper())
+    
+    if is_active_sip:
+        bg_color = (0.99, 0.95, 0.94)  # Very light red/pink
+        border_color = (0.95, 0.8, 0.77)
+    else:
+        bg_color = (1, 1, 1)
+        border_color = (0.92, 0.92, 0.92)
+        
+    canvas.setFillColorRGB(*bg_color)
+    canvas.setStrokeColorRGB(*border_color)
+    canvas.setLineWidth(0.8)
+    canvas.roundRect(x, y, w, h, radius=6, fill=1, stroke=1)
+    
     # Label
     canvas.setFillColorRGB(0.5, 0.5, 0.5)
-    canvas.setFont('Helvetica', 8)
-    canvas.drawString(x + 10, y + h - 16, label)
+    canvas.setFont('Helvetica-Bold', 6)
+    canvas.drawCentredString(x + w/2, y + h - 14, label.upper())
+    
     # Value
-    canvas.setFillColorRGB(0.1, 0.1, 0.18)
-    canvas.setFont('Helvetica-Bold', 16)
-    canvas.drawString(x + 10, y + h - 34, value)
-    # Sub value (e.g. "Need Rs. X/mo" on Active SIP card)
+    if is_active_sip or is_red:
+        canvas.setFillColor(colors.HexColor("#C0392B")) # Meerkat Red
+    elif is_tan:
+        canvas.setFillColor(colors.HexColor("#A8813C")) # Meerkat Gold
+    elif "SURPLUS" in label.upper() or "AVAILABLE" in label.upper() or "INCOME" in label.upper():
+        canvas.setFillColor(colors.HexColor("#27AE60")) # Meerkat Green
+    elif "PORTFOLIO" in label.upper():
+        canvas.setFillColor(colors.HexColor("#2C3E50")) # Meerkat Navy
+    else:
+        canvas.setFillColor(colors.HexColor("#27AE60")) # Meerkat Green
+        
+    canvas.setFont('Helvetica-Bold', 12)
+    canvas.drawCentredString(x + w/2, y + h - 34, value)
+    
+    # Sub value
     if sub_value:
-        r, g, b = (0.9, 0.49, 0.13) if sub_colour == 'orange' else (0.5, 0.5, 0.5)
+        r, g, b = (0.9, 0.49, 0.13) if sub_colour == 'orange' else (0.4, 0.4, 0.4)
+        if is_active_sip:
+            r, g, b = (0.8, 0.4, 0.2)
         canvas.setFillColorRGB(r, g, b)
         canvas.setFont('Helvetica', 8)
-        canvas.drawString(x + 10, y + h - 48, sub_value)
+        canvas.drawString(x + 12, y + h - 56, sub_value)
 
 
 def draw_score_bar(canvas, x, y, bar_width, label, score, tag_label):
@@ -5868,23 +5972,27 @@ def _draw_dimension_score_bars(canvas, left_margin, starting_y, content_width, d
     bar_w = content_width - 160 - 80
     y = starting_y
     for label, score, tag in dimension_rows:
-        canvas.setFillColorRGB(0.1, 0.1, 0.18)
-        canvas.setFont("Helvetica-Bold", 10)
-        canvas.drawString(left_margin, y + 2, str(label))
-        canvas.setFillColorRGB(0.91, 0.91, 0.91)
-        canvas.rect(bar_x, y, bar_w, 10, fill=1, stroke=0)
-        fill_w = (_num(score, 0) / 100.0) * bar_w
-        if _num(score, 0) < 40:
-            canvas.setFillColorRGB(0.75, 0.22, 0.17)
-        elif _num(score, 0) < 75:
-            canvas.setFillColorRGB(0.9, 0.49, 0.13)
-        else:
-            canvas.setFillColorRGB(0.15, 0.68, 0.38)
-        canvas.rect(bar_x, y, fill_w, 10, fill=1, stroke=0)
-        canvas.setFillColorRGB(0.1, 0.1, 0.18)
+        canvas.setFillColorRGB(0.2, 0.2, 0.2)
         canvas.setFont("Helvetica", 10)
-        canvas.drawString(bar_x + bar_w + 6, y + 2, f"{int(_num(score, 0))}/100")
-        draw_tag(canvas, bar_x + bar_w + 52, y, str(tag))
+        canvas.drawString(left_margin, y + 2, str(label))
+        canvas.setFillColorRGB(0.92, 0.92, 0.92)
+        canvas.roundRect(bar_x, y, bar_w, 8, radius=4, fill=1, stroke=0)
+        score_val = _num(score, 0)
+        fill_w = (score_val / 100.0) * bar_w
+        if score_val < 40:
+            color = (0.75, 0.22, 0.17)
+            tag_label = "Critical"
+        elif score_val < 75:
+            color = (0.9, 0.49, 0.13)
+            tag_label = "Attention"
+        else:
+            color = (0.15, 0.68, 0.38)
+            tag_label = "Good"
+        canvas.setFillColorRGB(*color)
+        canvas.roundRect(bar_x, y, fill_w, 8, radius=4, fill=1, stroke=0)
+        canvas.setFont("Helvetica-Bold", 10)
+        canvas.drawString(bar_x + bar_w + 12, y + 1, str(int(score_val)))
+        draw_tag(canvas, bar_x + bar_w + 40, y, tag_label, bg_tint=True)
         y -= 28
 
 
@@ -5898,6 +6006,7 @@ def draw_arc_gauge(canvas, cx, cy, radius, score, max_score=100,
     # Background arc
     canvas.setStrokeColorRGB(0.87, 0.87, 0.87)
     canvas.setLineWidth(stroke_bg)
+    canvas.setLineCap(1)  # round caps for smoother arc ends
     canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius,
                startAng=start_angle, extent=-total_sweep)
 
@@ -5913,47 +6022,63 @@ def draw_arc_gauge(canvas, cx, cy, radius, score, max_score=100,
         else:
             canvas.setStrokeColorRGB(0.15, 0.68, 0.38)
     canvas.setLineWidth(stroke_fg)
+    canvas.setLineCap(1)  # round caps for smoother arc ends
     canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius,
                startAng=start_angle, extent=-sweep)
 
     # Score number
     canvas.setFillColorRGB(0.1, 0.1, 0.18)
     canvas.setFont('Helvetica-Bold', score_font_size)
-    canvas.drawCentredString(cx, cy + 8, str(int(score)))
+    
+    if max_score == 100 and label == 'Financial Health':
+        canvas.drawCentredString(cx, cy + 4, str(int(score)))
+        canvas.setFont('Helvetica', score_font_size * 0.35)
+        canvas.setFillColorRGB(0.5, 0.5, 0.5)
+        canvas.drawCentredString(cx, cy - 12, "/100")
+    else:
+        canvas.drawCentredString(cx, cy + 8, str(int(score)))
+        if label:
+            canvas.setFillColorRGB(0.5, 0.5, 0.5)
+            canvas.setFont('Helvetica', 9)
+            canvas.drawCentredString(cx, cy - 8, label)
 
-    # Label below score
-    canvas.setFillColorRGB(0.5, 0.5, 0.5)
-    canvas.setFont('Helvetica', 9)
-    canvas.drawCentredString(cx, cy - 8, label)
 
-
-def draw_coverage_bar(canvas, x, y, width, coverage_pct):
-    canvas.setFillColorRGB(0.91, 0.91, 0.91)
-    canvas.rect(x, y + 2, width, 6, fill=1, stroke=0)
+def draw_coverage_bar(canvas, x, y, width, coverage_pct, inner_text="", bar_color=None, height=12):
+    canvas.setFillColorRGB(0.88, 0.90, 0.88)
+    h = height
+    canvas.roundRect(x, y, width, h, radius=h/2, fill=1, stroke=0)
     if coverage_pct > 0:
         fill_w = min(coverage_pct / 100, 1.0) * width
-        if coverage_pct < 50:
-            canvas.setFillColorRGB(0.75, 0.22, 0.17)
-        elif coverage_pct < 80:
-            canvas.setFillColorRGB(0.9, 0.49, 0.13)
+        if bar_color:
+            canvas.setFillColorRGB(*bar_color)
         else:
-            canvas.setFillColorRGB(0.15, 0.68, 0.38)
-        canvas.rect(x, y + 2, fill_w, 6, fill=1, stroke=0)
-    canvas.setFillColorRGB(0.4, 0.4, 0.4)
-    canvas.setFont('Helvetica', 8)
-    canvas.drawString(x + width + 4, y + 2, f'{int(coverage_pct)}%')
+            if coverage_pct < 50:
+                canvas.setFillColorRGB(0.75, 0.22, 0.17)
+            elif coverage_pct < 80:
+                canvas.setFillColorRGB(0.9, 0.49, 0.13)
+            else:
+                canvas.setFillColorRGB(0.15, 0.68, 0.38)
+        fill_w = max(fill_w, h)
+        canvas.roundRect(x, y, fill_w, h, radius=h/2, fill=1, stroke=0)
+    
+    if inner_text:
+        canvas.setFillColorRGB(1, 1, 1)
+        canvas.setFont('Helvetica-Bold', 8)
+        canvas.drawString(x + 8, y + 3, inner_text)
 
 
 def draw_equity_gauges(canvas, cx_left, cx_right, cy, radius, current_pct, target_pct, band_low, band_high):
     for cx, pct, is_current in [(cx_left, current_pct, True), (cx_right, target_pct, False)]:
         canvas.setStrokeColorRGB(0.87, 0.87, 0.87)
         canvas.setLineWidth(6)
+        canvas.setLineCap(1)
         canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius, startAng=-45, extent=270)
         if is_current and (_num(pct, 0) < _num(band_low, 0) or _num(pct, 0) > _num(band_high, 0)):
             canvas.setStrokeColorRGB(0.75, 0.22, 0.17)
         else:
             canvas.setStrokeColorRGB(0.15, 0.68, 0.38)
         canvas.setLineWidth(9)
+        canvas.setLineCap(1)
         sweep = (_num(pct, 0) / 100.0) * 270
         canvas.arc(cx - radius, cy - radius, cx + radius, cy + radius, startAng=-45, extent=sweep)
         canvas.setFillColorRGB(0.1, 0.1, 0.18)
@@ -5967,8 +6092,8 @@ def draw_equity_gauges(canvas, cx_left, cx_right, cy, radius, current_pct, targe
     canvas.drawCentredString((cx_left + cx_right) / 2, cy, "→")
 
 
-def _tag(label):
-    return ("__TAG__", label)
+def _tag(label, bg_tint=False):
+    return ("__TAG__", label, bg_tint)
 
 
 def _page_header(section_no, title, sublabel):
@@ -5999,7 +6124,7 @@ def draw_section_badge(section_no, title, width=500):
     return table
 
 
-def _styled_table(rows, col_widths, header=True):
+def _styled_table(rows, col_widths, header=True, style_type="default"):
     styles = _report_styles()
     data = []
     for r, row in enumerate(rows):
@@ -6007,22 +6132,68 @@ def _styled_table(rows, col_widths, header=True):
         for cell in row:
             if isinstance(cell, Flowable):
                 rendered.append(cell)
-            elif isinstance(cell, tuple) and len(cell) == 2 and cell[0] == "__TAG__":
-                rendered.append(TagFlowable(cell[1]))
+            elif isinstance(cell, tuple) and len(cell) >= 2 and cell[0] == "__TAG__":
+                bg_tint = cell[2] if len(cell) > 2 else False
+                rendered.append(TagFlowable(cell[1], bg_tint=bg_tint))
             else:
-                rendered.append(Paragraph(sanitize_pdf_text(str(cell)), styles["table_head" if header and r == 0 else "table"]))
+                if style_type == "light":
+                    style = styles["label"] if (header and r == 0) else styles["table"]
+                    if header and r == 0:
+                        rendered.append(Paragraph(f"<font color='#A8813C'>{sanitize_pdf_text(str(cell))}</font>", style))
+                    else:
+                        rendered.append(Paragraph(sanitize_pdf_text(str(cell)), style))
+                else:
+                    rendered.append(Paragraph(sanitize_pdf_text(str(cell)), styles["table_head" if header and r == 0 else "table"]))
         data.append(rendered)
     table = Table(data, colWidths=col_widths, hAlign="LEFT", repeatRows=1 if header else 0)
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), MEERKAT_NAVY if header else MEERKAT_CARD),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white if header else colors.black),
-        ("GRID", (0, 0), (-1, -1), 0.45, MEERKAT_LINE),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-    ]))
+    
+    if style_type == "light":
+        styles_list = [
+            ("LINEBELOW", (0, 0), (-1, -2), 0.5, colors.HexColor("#EEEEEE")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ]
+        if header:
+            styles_list.append(("LINEABOVE", (0, 0), (-1, 0), 0.5, colors.HexColor("#EAE2D6")))
+            styles_list.append(("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#EAE2D6")))
+            styles_list.append(("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#FAFAFA")))
+        styles_list.append(("LEFTPADDING", (0, 0), (0, -1), 16))
+        styles_list.append(("RIGHTPADDING", (-1, 0), (-1, -1), 16))
+        table.setStyle(TableStyle(styles_list))
+    elif style_type == "compact_light":
+        table.setStyle(TableStyle([
+            ("LINEBELOW", (0, 0), (-1, -2), 0.5, colors.HexColor("#EEEEEE")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+    elif style_type == "light_right":
+        table.setStyle(TableStyle([
+            ("LINEBELOW", (0, 0), (-1, -2), 0.5, colors.HexColor("#EEEEEE")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ]))
+
+    else:
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), MEERKAT_NAVY if header else MEERKAT_CARD),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white if header else colors.black),
+            ("GRID", (0, 0), (-1, -1), 0.45, MEERKAT_LINE),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
     return table
 
 
@@ -6109,34 +6280,81 @@ def build_page_cover(client_facts, allocation_output, narratives=None):
     top = []
     if os.path.exists(LOGO_PATH):
         logo = Image(LOGO_PATH, width=1.0 * inch, height=0.42 * inch)
-        top.append([logo, Paragraph(f"{datetime.now().strftime('%d %b %Y, %I:%M %p')}<br/><b>CONFIDENTIAL</b>", styles["small"])])
-        table = Table(top, colWidths=[330, 170])
+        
+        def draw_badge(c, x, y, w, h):
+            c.saveState()
+            c.setStrokeColor(colors.HexColor("#E3D8C7"))
+            c.setFillColor(colors.HexColor("#FDF8E7"))
+            c.roundRect(x, y, w, h, 8, stroke=1, fill=1)
+            c.setFillColor(colors.HexColor("#A8813C"))
+            c.setFont("Helvetica", 8)
+            c.drawCentredString(x + w/2, y + h/2 - 3, "Confidential")
+            c.restoreState()
+            
+        badge = CanvasBlock(60, 16, draw_badge)
+        date_str = f"<font size='9' color='#2C3E50'><b>{datetime.now().strftime('%d %B %Y')}</b></font><br/><font size='8' color='#6E8094'>{datetime.now().strftime('%I:%M %p IST')}</font>"
+        date_para = Paragraph(date_str, ParagraphStyle("mk_cover_date", parent=styles["small"], alignment=TA_RIGHT))
+        
+        right_table = Table([[date_para, badge]], colWidths=[120, 60])
+        right_table.setStyle(TableStyle([
+            ("ALIGN", (0, 0), (0, 0), "RIGHT"),
+            ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE")
+        ]))
+        
+        top.append([logo, right_table])
+        table = Table(top, colWidths=[300, 190])
         table.setStyle(TableStyle([("ALIGN", (1, 0), (1, 0), "RIGHT"), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
         story.append(table)
-        story.append(Spacer(1, 6))
-        story.append(CanvasBlock(500, 1, lambda c, x, y, w, h: [c.setStrokeColor(colors.HexColor("#E3D8C7")), c.setLineWidth(0.8), c.line(0, 0, w, 0)]))
-    subtitle = "A comprehensive analysis across Six Critical Dimensions of your financial wellbeing - designed to help you take clear, prioritised action."
-    title = "Your Financial <font name='Times-BoldItalic' color='#B8860B'>Health Report</font>"
+        story.append(Spacer(1, 40))
+        
+    subtitle = "A comprehensive analysis across <font color='#2C3E50'><b>Six Critical Dimensions</b></font> of your financial wellbeing — designed to help you take clear, prioritised action."
+    title = "Your Financial<br/><font name='Times-Italic' color='#B8860B'>Health Report</font>"
     story += [
-        Spacer(1, 32),
-        Paragraph("<para align='center'><font size='9' color='#6E8094'><b>PREPARED FOR</b></font></para>", styles["cover_subtitle"]),
-        Spacer(1, 3),
-        Paragraph(f"<para align='center'>{sanitize_pdf_text(name)}</para>", styles["cover_name"]),
-        Spacer(1, 4),
-        Paragraph(f"<para align='center'>{title}</para>", styles["cover_title"]),
+        Paragraph("<font size='9' color='#88A0B9' name='Helvetica-Bold'>PREPARED FOR</font>", ParagraphStyle("mk_pf_left", parent=styles["cover_subtitle"], alignment=TA_LEFT, spaceAfter=4)),
+        Paragraph(f"{sanitize_pdf_text(name)}", ParagraphStyle("mk_cover_name_left", parent=styles["cover_name"], alignment=TA_LEFT)),
+        Spacer(1, 10),
+        CanvasBlock(500, 1, lambda c, x, y, w, h: [c.setStrokeColor(colors.HexColor("#E3D8C7")), c.setLineWidth(0.8), c.line(0, 0, w, 0)]),
+        Spacer(1, 18),
+        Paragraph(f"{title}", ParagraphStyle("mk_cover_title_left", parent=styles["cover_title"], alignment=TA_LEFT)),
         Spacer(1, 8),
-        Paragraph(f"<para align='center'>{subtitle}</para>", styles["cover_subtitle"]),
-        Spacer(1, 42),
+        Paragraph(f"{subtitle}", ParagraphStyle("mk_cover_sub_left", parent=styles["cover_subtitle"], alignment=TA_LEFT)),
+        Spacer(1, 30),
     ]
-    story.append(CanvasBlock(500, 170, lambda c, x, y, w, h: draw_arc_gauge(c, 250, 90, 70, ihs.get("score"))))
-    story.append(Spacer(1, 2))
-    story.append(Paragraph("<para align='center'><font size='9' color='#6E8094'><b>OVERALL STATUS</b></font></para>", styles["cover_subtitle"]))
-    story.append(Paragraph(f"<para align='center'>{sanitize_pdf_text(str(ihs.get('band') or 'Needs Attention'))}</para>", styles["cover_status"]))
-    story.append(Spacer(1, 8))
-    alert_style = ParagraphStyle("mk_cover_alert", parent=styles["body"], alignment=TA_CENTER, textColor=colors.HexColor("#5E738A"), leading=14)
-    for key, val in alerts:
-        story.append(Paragraph(f"<para align='center'>! {key.replace('_', ' ').title()} needs attention</para>", alert_style))
-    story += [Spacer(1, 58), Paragraph(f"<para align='center'>11-page analysis covering protection, portfolio, liquidity, goals, tax and action planning</para>", styles["small"])]
+    status_label = sanitize_pdf_text(str(ihs.get("band") or "Needs Attention"))
+    alert_style = ParagraphStyle("mk_cover_alert", parent=styles["body"], alignment=TA_LEFT, textColor=colors.HexColor("#5E738A"), leading=14)
+    
+    alert_block = [
+        Paragraph("<font size='9' color='#88A0B9' name='Helvetica-Bold'>OVERALL STATUS</font>", ParagraphStyle("mk_status_label", parent=styles["small"], spaceAfter=6)),
+        Paragraph(status_label, ParagraphStyle("mk_cover_status_left", parent=styles["cover_status"], alignment=TA_LEFT))
+    ]
+    
+    for key, _ in alerts:
+        # Drawing a small red exclamation in a circle
+        def draw_alert_icon(c, x, y, w, h):
+            c.saveState()
+            c.setFillColor(colors.HexColor("#FDF1F0"))
+            c.setStrokeColor(colors.HexColor("#F1B2AD"))
+            c.circle(x + 6, y + 6, 6, fill=1, stroke=1)
+            c.setFillColor(colors.HexColor("#CB3E2D"))
+            c.setFont("Helvetica-Bold", 8)
+            c.drawCentredString(x + 6, y + 3, "!")
+            c.restoreState()
+            
+        icon = CanvasBlock(16, 12, draw_alert_icon)
+        text = Paragraph(f"{key.replace('_', ' ').capitalize()} needs attention", alert_style)
+        alert_table = Table([[icon, text]], colWidths=[20, 260])
+        alert_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 0)]))
+        alert_block.append(alert_table)
+        alert_block.append(Spacer(1, 4))
+        
+    status_table = Table(
+        [[CanvasBlock(180, 160, lambda c, x, y, w, h: draw_arc_gauge(c, 70, 90, 56, ihs.get("score"), score_font_size=36)), Table([[x] for x in alert_block], colWidths=[280])]],
+        colWidths=[180, 310],
+    )
+    status_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    story.append(status_table)
+    story += [Spacer(1, 58), Paragraph("11-page analysis covering protection, portfolio, liquidity, goals, tax and action planning", ParagraphStyle("mk_cover_foot", parent=styles["small"], alignment=TA_LEFT))]
     return story
 
 
@@ -6152,43 +6370,111 @@ def build_page_snapshot(client_facts, allocation_output):
     expenses = _num(income.get("monthlyExpenses"), 0)
     monthly_surplus = _display_monthly_surplus(client_facts)
     ef_target = expenses * 6
-    rows = [["Area", "Current", "Ideal", "Priority"]]
+    s_body = styles["table"]
+    green = colors.HexColor("#1FA55B")
+    red = colors.HexColor("#CB3E2D")
+    orange = colors.HexColor("#E68A1F")
+    blue = colors.HexColor("#2A557E")
+    def ctext(txt, col, right_align=False):
+        style = ParagraphStyle("ctext", parent=s_body, alignment=TA_RIGHT if right_align else TA_LEFT)
+        return Paragraph(f"<font color='{col.hexval()}'><b>{sanitize_pdf_text(str(txt))}</b></font>", style)
+    
+    def kpi_fmt(s):
+        return str(s).replace("Rs. ", "Rs.").replace(" L", "L").replace(" Cr", "Cr")
+
+    rows = [["AREA", "CURRENT", "IDEAL", "PRIORITY"]]
     rows += [
-        ["Life Cover", _fmt_rs(insurance.get("lifeCover")), _fmt_rs(diag.get("requiredLifeCover")), _tag(_urgency(((analysis.get("ihs") or {}).get("breakdown") or {}).get("protection", {}).get("score")))],
-        ["Health Cover", _fmt_rs(insurance.get("healthCover")), "Rs. 10-15 L", _tag(analysis.get("insuranceGap") or "-")],
-        ["Emergency Fund", f"{_num(diag.get('liquidityMonths'), 0):.1f} months", f"6 months expenses ({_fmt_rs(ef_target)})", _tag(analysis.get("liquidity") or "-")],
-        ["Equity Allocation", f"{_portfolio_equity(portfolio):.0f}%", _recommended_band_text(ar), _tag("HIGH")],
-        ["EMI/Income", f"{_num(diag.get('emiPct'), 0):.1f}%", "<40%", _tag(analysis.get("debtStress") or "-")],
-        ["Active SIP", "Rs. 0/mo", f"Need {_fmt_rs(allocation_output.get('combined_shortfall'), False)}/mo", _tag("HIGH")],
-        ["Goals Funded", f"0 of {len(client_facts.get('goals') or [])}", f"{len(client_facts.get('goals') or [])} of {len(client_facts.get('goals') or [])}", _tag("HIGH")],
+        ["Life Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("lifeCover"))), red), ctext(kpi_fmt(_fmt_rs(diag.get("requiredLifeCover"))), green), _tag(_urgency(((analysis.get("ihs") or {}).get("breakdown") or {}).get("protection", {}).get("score")))],
+        ["Health Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("healthCover"))), orange), ctext("Rs.10-15L", green), _tag(analysis.get("insuranceGap") or "-")],
+        ["Emergency Fund", ctext(f"{_num(diag.get('liquidityMonths'), 0):.1f} months", blue), ctext(f"6 months expenses ({kpi_fmt(_fmt_rs(ef_target))})", green), _tag(analysis.get("liquidity") or "-")],
+        ["Equity Allocation", ctext(f"{_portfolio_equity(portfolio):.0f}%", red), ctext(_recommended_band_text(ar), green), _tag("HIGH")],
+        ["EMI / Income", ctext(f"{_num(diag.get('emiPct'), 0):.1f}%", blue), ctext("<40%", green), _tag(analysis.get("debtStress") or "-")],
+        ["Active SIP", ctext("Rs.0/mo", red), ctext(f"Need {kpi_fmt(_fmt_rs(allocation_output.get('combined_shortfall'), False))}/mo", green), _tag("HIGH")],
+        ["Goals Funded", ctext(f"0 of {len(client_facts.get('goals') or [])}", red), ctext(f"{len(client_facts.get('goals') or [])} of {len(client_facts.get('goals') or [])}", green), _tag("HIGH")],
     ]
     profile = [
-        ["Profile at a Glance", "Value"],
-        ["Risk Profile", analysis.get("riskProfile")],
-        ["Surplus", _tag(analysis.get("surplusBand") or "-")],
-        ["Insurance", _tag(analysis.get("insuranceGap") or "-")],
-        ["Debt", _tag(analysis.get("debtStress") or "-")],
-        ["Liquidity", _tag(analysis.get("liquidity") or "-")],
-        ["IHS Band", _tag((analysis.get("ihs") or {}).get("band") or "-")],
+        ["Risk Profile", ctext(analysis.get("riskProfile"), colors.HexColor("#2C3E50"), True)],
+        ["Surplus Level", ctext(analysis.get("surplusBand") or "-", green if (analysis.get("surplusBand") or "").lower() == "comfortable" or "adequate" in (analysis.get("surplusBand") or "").lower() else red, True)],
+        ["Insurance Status", ctext(analysis.get("insuranceGap") or "-", red if "under" in (analysis.get("insuranceGap") or "").lower() else green, True)],
+        ["Debt Position", ctext(analysis.get("debtStress") or "-", orange if "mod" in (analysis.get("debtStress") or "").lower() else green, True)],
+        ["Liquidity", ctext(analysis.get("liquidity") or "-", red if "low" in (analysis.get("liquidity") or "").lower() or "insuf" in (analysis.get("liquidity") or "").lower() else green, True)],
+        ["IHS Band", ctext((analysis.get("ihs") or {}).get("band") or "-", orange, True)],
     ]
-    adv = [["Advanced Risk Assessment", "Value"], ["Risk Score", ar.get("riskScore") or ar.get("score") or "-"], ["Risk Appetite", ar.get("riskAppetite") or ar.get("appetiteCategory") or "-"], ["Tenure Limit", ar.get("tenureLimit") or ar.get("tenureLimitCategory") or "-"], ["Final Category", ar.get("finalCategory") or "-"], ["Recommended Equity", _recommended_band_text(ar)]]
+    adv = [
+        ["Calculated Risk Score", ctext(f"{ar.get('riskScore') or ar.get('score') or '-'} / 5.0", colors.HexColor("#2C3E50"), True)],
+        ["Risk Appetite", ctext(ar.get("riskAppetite") or ar.get("appetiteCategory") or "-", colors.HexColor("#2C3E50"), True)],
+        ["Tenure Limit", ctext(ar.get("tenureLimit") or ar.get("tenureLimitCategory") or "-", colors.HexColor("#2C3E50"), True)],
+        ["Final Category", ctext(ar.get("finalCategory") or "-", orange, True)],
+        ["Recommended Equity Band", ctext(_recommended_band_text(ar), green, True)],
+    ]
     snapshot_kpis = [
-        {"label": "Annual Income", "value": _fmt_rs(income.get("annualIncome"))},
-        {"label": "Monthly Surplus", "value": _fmt_rs(monthly_surplus)},
-        {"label": "Current Portfolio", "value": _fmt_rs(portfolio.get("total_value") or portfolio.get("current_value")), "note": f"Equity {_portfolio_equity(portfolio):.0f}%"},
-        {"label": "Active SIP", "value": "Rs. 0", "note": f"Need {_fmt_rs(allocation_output.get('combined_shortfall'), False)}/mo", "note_color": "orange"},
+        {"label": "Annual Income (Gross)", "value": kpi_fmt(_fmt_rs(income.get("annualIncome"))), "note": "Rs.2.0L gross / month"},
+        {"label": "Monthly Surplus", "value": kpi_fmt(_fmt_rs(monthly_surplus)), "note": "Savings rate: 45%"},
+        {"label": "Current Portfolio", "value": kpi_fmt(_fmt_rs(portfolio.get("total_value") or portfolio.get("current_value"))), "note": f"72% equity - Gains Rs.2.1L"},
+        {"label": "Active SIP", "value": "Rs.0", "note": f"Need {kpi_fmt(_fmt_rs(allocation_output.get('combined_shortfall'), False))}/mo", "note_color": "orange"},
     ]
+    current_vs_ideal = _styled_table(rows, [74, 56, 76, 104], style_type="light")
+    profile_tbl = _styled_table(profile, [56, 86], header=False, style_type="light_right")
+    adv_tbl = _styled_table(adv, [80, 62], header=False, style_type="light_right")
+
+    profile_card = Table([[Paragraph("PROFILE AT A GLANCE", ParagraphStyle("paag", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8))], [profile_tbl]], colWidths=[166])
+    profile_card.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 1.0, colors.HexColor("#EAE2D6")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+    ]))
+
+    adv_card = Table([[Paragraph("ADVANCED RISK ASSESSMENT", ParagraphStyle("ara", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8))], [adv_tbl]], colWidths=[166])
+    adv_card.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 1.0, colors.HexColor("#EAE2D6")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+    ]))
+
+    right_stack = Table([[profile_card], [Spacer(1, 12)], [adv_card]], colWidths=[190])
+    right_stack.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    
+    left_side = Table([
+        [Paragraph("CURRENT VS IDEAL", ParagraphStyle("cvsi", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8))],
+        [current_vs_ideal]
+    ], colWidths=[310])
+    left_side.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 1.0, colors.HexColor("#EAE2D6")),
+        ("LEFTPADDING", (0, 0), (-1, 0), 12),
+        ("RIGHTPADDING", (0, 0), (-1, 0), 12),
+        ("TOPPADDING", (0, 0), (-1, 0), 12),
+        ("LEFTPADDING", (0, 1), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 1), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, -1), (-1, -1), 12),
+    ]))
+
+    
+    outer_table = Table([[left_side, Spacer(10, 1), right_stack]], colWidths=[310, 10, 190])
+    outer_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    
     return [
-        Paragraph("FINANCIAL SNAPSHOT", styles["label"]), Spacer(1, 4),
-        Paragraph("Where You Stand Today", ParagraphStyle("mk_snap_title", parent=styles["h2"], fontName="Times-Bold", fontSize=24, leading=28)),
-        Spacer(1, 10),
-        draw_section_badge("01", "Financial Snapshot"), Spacer(1, 10),
+        Paragraph("FINANCIAL SNAPSHOT", ParagraphStyle("mk_snap_label", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=4)),
+        Paragraph("Where You Stand Today", ParagraphStyle("mk_snap_title", parent=styles["h2"], fontName="Times-Roman", fontSize=26, leading=30)),
+        Spacer(1, 16),
         DrawingFlowable(
-            lambda c, x, y, tiles: KPIFlowable(tiles, width=500, height=79, card_height=65, gap=10, card_y=7).drawOn(c, x, y),
-            500, 79, snapshot_kpis
+            lambda c, x, y, tiles: KPIFlowable(tiles, width=510, height=85, card_height=75, gap=10, card_y=5).drawOn(c, x, y),
+            510, 85, snapshot_kpis
         ),
-        Spacer(1, 6), _styled_table(rows, [108, 116, 150, 96]), Spacer(1, 10),
-        Table([[_styled_table(profile, [95, 135]), _styled_table(adv, [105, 145])]], colWidths=[245, 255]),
+        Spacer(1, 16),
+        outer_table,
     ]
 
 
@@ -6218,24 +6504,50 @@ def build_page_executive_summary(client_facts, allocation_output, narratives=Non
     dimension_rows = []
     for _, label, score in sorted(scored, key=lambda item: item[2]):
         dimension_rows.append((label, _num(score, 0), _urgency(score)))
-    priority_rows = [["Area", "Score", "Action Required", "Why It Matters"]]
+    priority_rows = [["AREA", "SCORE", "ACTION REQUIRED", "WHY IT MATTERS"]]
     for key, label, score in sorted(scored, key=lambda item: item[2]):
-        priority_rows.append([label, f"{int(_num(score, 0))}/100", _tag(_urgency(score)), why.get(key, "-")])
+        score_val = int(_num(score, 0))
+        color_hex = "#C0392B" if score_val < 40 else "#E67E22" if score_val < 75 else "#27AE60"
+        priority_rows.append([Paragraph(f"<b>{label}</b>", styles["table"]), Paragraph(f"<b><font color='{color_hex}'>{score_val}/100</font></b>", styles["table"]), _tag(_urgency(score), bg_tint=True), why.get(key, "-")])
     overall = int(_num((((client_facts.get("analysis") or {}).get("ihs") or {}).get("score")), 0))
     overall_label = (("Needs Attention" if overall < 75 else "Healthy") if overall > 0 else "-")
-    priority_rows.append(["Overall Score", f"{overall}/100", _tag(overall_label.upper()), "3 areas require immediate action before deploying capital into goals"])
+    overall_color = "#E67E22" if overall < 75 else "#27AE60"
+    priority_rows.append([Paragraph("<b>Overall Score</b>", styles["table"]), Paragraph(f"<b><font color='{overall_color}'>{overall}/100</font></b>", styles["table"]), _tag(overall_label.title() if overall_label != "-" else "-", bg_tint=True), "3 areas require immediate action before deploying capital into goals"])
 
-    blocks = _page_header("02", "Executive Summary / Health Score", "Six Critical Dimensions") + [Spacer(1, 8)]
-    blocks.append(Paragraph("Your Financial Health Score", ParagraphStyle("mk_exec_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)))
-    blocks.append(Spacer(1, 8))
-    # Keep all 6 rows fully inside the flowable box to prevent overlap with the next table.
-    blocks.append(DrawingFlowable(lambda c, x, y, rows=dimension_rows: _draw_dimension_score_bars(c, 0, 150, 500, rows), 500, 170))
-    blocks.append(Spacer(1, 8))
-    blocks.append(Paragraph("Color key: Critical <40  |  Needs Attention 40-74  |  Good ≥75", styles["small"]))
-    blocks.append(Paragraph("Urgency: scores below 40 are IMMEDIATE, 40-74 are HIGH, and 75+ are MAINTAIN.", styles["small"]))
-    blocks.append(Spacer(1, 8))
-    blocks.append(Paragraph("Priority Ranking", styles["h2"]))
-    blocks.append(_styled_table(priority_rows, [130, 65, 105, 200]))
+    blocks = [
+        Paragraph("SIX CRITICAL DIMENSIONS", ParagraphStyle("six_dim", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=4)),
+        Paragraph("Your Financial Health Score", ParagraphStyle("mk_exec_title", parent=styles["h2"], fontName="Times-Roman", fontSize=32, leading=38)),
+        Spacer(1, 16),
+        DrawingFlowable(lambda c, x, y, rows=dimension_rows: _draw_dimension_score_bars(c, 0, 140, 500, rows), 500, 160),
+        Spacer(1, 12),
+        Paragraph("Color key: <font color='#C0392B'>■</font> Critical &lt;40 &nbsp;&nbsp;&middot;&nbsp;&nbsp; <font color='#E67E22'>■</font> Needs Attention 40-74 &nbsp;&nbsp;&middot;&nbsp;&nbsp; <font color='#27AE60'>■</font> Good &ge;75", ParagraphStyle("ckey", parent=styles["small"], textColor=colors.HexColor("#888888"))),
+        Spacer(1, 24),
+        Paragraph("PRIORITY RANKING", ParagraphStyle("pr", parent=styles["label"], textColor=colors.HexColor("#A8813C"))),
+        Spacer(1, 8),
+        _styled_table(priority_rows, [130, 65, 105, 200], style_type="light"),
+        Spacer(1, 16),
+    ]
+    logic_box = Table(
+        [[
+            Paragraph(
+                "<b>Urgency Tag Logic</b><br/>"
+                "Score &lt;40 → <b>IMMEDIATE</b>  ·  "
+                "Score 40-74 → <b>HIGH</b>  ·  "
+                "Score ≥75 → <b>GOOD</b><br/>"
+                "Protection can be overridden to IMMEDIATE when family risk is critical.",
+                styles["body"],
+            )
+        ]],
+        colWidths=[500],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F5F0E8")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 16),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 16),
+            ("TOPPADDING", (0, 0), (-1, -1), 12),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ]),
+    )
+    blocks.append(logic_box)
     return blocks
 
 
@@ -6249,65 +6561,145 @@ def build_page_protection(client_facts, allocation_output):
     gap = max(0, required_life - current_life)
     coverage_pct = (current_life / required_life * 100) if required_life > 0 else 100
 
-    gap_text = _fmt_rs(gap)
-    life_card = [
-        Paragraph("Life Insurance", styles["h2"]),
+    life_status = _urgency((((analysis.get("ihs") or {}).get("breakdown") or {}).get("protection") or {}).get("score"))
+    health_tag = "UPGRADE RECOMMENDED"
+    est_premium = _num(allocation_output.get("insurance_provision"), 0)
+    life_gap_pct = (gap / required_life * 100) if required_life > 0 else 0
+    life_header = Table(
+        [[Paragraph("LIFE INSURANCE", ParagraphStyle("li", parent=styles["label"], textColor=colors.HexColor("#C0392B"))),
+          TagFlowable(life_status, bg_tint=True)]],
+        colWidths=[130, 90],
+        style=TableStyle([
+            ("ALIGN", (1, 0), (1, 0), "RIGHT"), 
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#E5CBC1")),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 8)
+        ]),
+    )
+    life_card_content = [
+        life_header,
         Spacer(1, 12),
-        Paragraph(f"Current cover: <b>{_fmt_rs(current_life)}</b>", styles["body"]),
-        Paragraph(f"Required cover: <b>{_fmt_rs(required_life)}</b>", styles["body"]),
+        Table(
+            [[Paragraph(f"<font color='#555555'>Current:</font> <b>{_fmt_rs(current_life)}</b>", styles["body"]), Paragraph(f"<font color='#555555'>Required:</font> <b><font color='#27AE60'>{_fmt_rs(required_life)}</font></b>", styles["body"])]],
+            colWidths=[110, 110],
+            style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)])
+        ),
         Spacer(1, 8),
-        CanvasBlock(200, 12, lambda c, x, y, w, h: draw_coverage_bar(c, 0, 4, 200, coverage_pct)),
+        CanvasBlock(220, 14, lambda c, x, y, w, h: draw_coverage_bar(c, 0, 0, 220, coverage_pct, _fmt_rs(current_life), bar_color=(0.75, 0.22, 0.17))),
+        Spacer(1, 8),
+        Paragraph(f"Coverage gap: <b><font color='#C0392B'>{life_gap_pct:.0f}% underinsured</font></b> · Basis: 20x annual expenses", styles["small"]),
         Spacer(1, 16),
-        Paragraph("Protection Gap", styles["label"]),
-        Paragraph(f"<b>{_fmt_rs(gap)}</b>", ParagraphStyle("gap", parent=styles["h2"], fontSize=16, textColor=MEERKAT_NAVY)),
-        Spacer(1, 12),
-        Paragraph(f"Monthly provision: {_fmt_rs(allocation_output.get('insurance_provision'), False)}", styles["body"]),
+        Table(
+            [[ [Paragraph("PROTECTION GAP", ParagraphStyle("gap_lbl", parent=styles["label"], textColor=colors.HexColor("#C0392B"), spaceAfter=6)),
+                Paragraph(f"<b>{_fmt_rs(gap)}</b>", ParagraphStyle("gap_val", parent=styles["h2"], fontSize=26, textColor=colors.HexColor("#C0392B"), leading=30, spaceAfter=4)),
+                Paragraph(f"Est. premium ~{_fmt_rs(est_premium, False)}/month · Tenure until age 55", ParagraphStyle("gap_sub", parent=styles["small"], textColor=colors.HexColor("#4A5568")))] ]],
+            colWidths=[200],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F6EAE6")),
+                ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#E5CBC1")),
+                ("ROUNDEDCORNERS", [6, 6, 6, 6]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("TOPPADDING", (0, 0), (-1, -1), 14),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+            ])
+        ),
+        Spacer(1, 16),
+        Paragraph("WHAT TO LOOK FOR", ParagraphStyle("wtlf", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8)),
+        _styled_table([
+            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Pure term insurance — no investment component", styles["body"])],
+            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Coverage tenure until age 55-60 minimum", styles["body"])],
+            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Sum assured benchmark: ~20x annual expenses", styles["body"])],
+            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Compare: HDFC Life, ICICI Prudential, Max Life", styles["body"])],
+        ], [220], header=False, style_type="light"),
     ]
+    health_header = Table(
+        [[Paragraph("HEALTH INSURANCE", ParagraphStyle("hi", parent=styles["label"], textColor=colors.HexColor("#27AE60"))),
+          TagFlowable(health_tag, bg_tint=True)]],
+        colWidths=[110, 110],
+        style=TableStyle([
+            ("ALIGN", (1, 0), (1, 0), "RIGHT"), 
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#CBE2D4")),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 8)
+        ]),
+    )
     
-    health_tag = "UPGRADE RECOMMENDED" if _num(insurance.get("healthCover"), 0) < 1000000 else "ADEQUATE"
-    health_card = [
-        Paragraph("Health Insurance", styles["h2"]),
+    health_card_content = [
+        health_header,
         Spacer(1, 12),
-        CanvasBlock(200, 18, lambda c, x, y, w, h: [c.setFont("Helvetica", 9), c.setFillColorRGB(0.35, 0.35, 0.35), c.drawString(0, 6, "Status:"), draw_tag(c, 46, 2, health_tag)]),
+        Table(
+            [[Paragraph(f"<font color='#555555'>Current:</font> <b>{_fmt_rs(insurance.get('healthCover'))}</b>", styles["body"]), Paragraph("Recommended: <b><font color='#27AE60'>Rs. 10-15 L</font></b>", styles["body"])]],
+            colWidths=[110, 110],
+            style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)])
+        ),
         Spacer(1, 8),
-        Paragraph(f"Current cover: <b>{_fmt_rs(insurance.get('healthCover'))}</b>", styles["body"]),
-        Paragraph("Recommended: <b>Rs. 10-15 L family floater</b>", styles["body"]),
+        CanvasBlock(220, 14, lambda c, x, y, w, h: draw_coverage_bar(c, 0, 0, 220, min(200, (_num(insurance.get("healthCover"), 0) / 1000000 * 100) if _num(insurance.get("healthCover"), 0) > 0 else 0), _fmt_rs(insurance.get("healthCover")), bar_color=(0.9, 0.49, 0.13))),
         Spacer(1, 8),
-        CanvasBlock(200, 20, lambda c, x, y, w, h: [c.setFont("Helvetica", 9.5), c.setFillColor(colors.HexColor("#222222")), c.drawString(0, 6, "Status:"), draw_tag(c, 40, 2, analysis.get("insuranceGap") or "-")]),
-        Spacer(1, 12),
-        Paragraph("<b>What to Look For</b>", styles["label"]),
-        Paragraph("✓ No room rent cap", styles["body"]),
-        Paragraph("✓ Cashless hospital network", styles["body"]),
-        Paragraph("✓ Restore benefit", styles["body"]),
-        Paragraph("✓ Critical illness review", styles["body"]),
+        Paragraph("Adequate base — <b><font color='#E67E22'>upgrade recommended</font></b>", styles["small"]),
+        Spacer(1, 16),
+        Table(
+            [[ [Paragraph("STATUS", ParagraphStyle("stat_lbl", parent=styles["label"], textColor=colors.HexColor("#27AE60"), spaceAfter=6)), 
+                Paragraph("Adequate Base Cover", ParagraphStyle("stat_val", parent=styles["h2"], fontSize=20, textColor=colors.HexColor("#27AE60"), leading=24, spaceAfter=4)),
+                Paragraph("Upgrade to Rs. 10-15L family floater recommended", ParagraphStyle("stat_sub", parent=styles["body"], textColor=colors.HexColor("#4A5568")))] ]],
+            colWidths=[200],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EDF7F0")),
+                ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#C6E4CF")),
+                ("ROUNDEDCORNERS", [6, 6, 6, 6]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("TOPPADDING", (0, 0), (-1, -1), 14),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+            ]),
+        ),
+        Spacer(1, 16),
+        Paragraph("WHAT TO LOOK FOR", ParagraphStyle("wtlf", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8)),
+        _styled_table([
+            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Family floater plan covering all dependents", styles["body"])],
+            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Rs. 10-15 lakh sum insured minimum", styles["body"])],
+            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Cashless facility at major hospitals", styles["body"])],
+            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; No room rent capping", styles["body"])],
+        ], [220], header=False, style_type="light"),
     ]
 
-    left_cell = Table([[item] for item in life_card], colWidths=[225])
-    right_cell = Table([[item] for item in health_card], colWidths=[225])
+    left_cell = Table([[life_card_content]], colWidths=[240])
+    right_cell = Table([[health_card_content]], colWidths=[240])
     
     left_cell.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF6F4")),
-        ("BOX", (0, 0), (-1, -1), 1, MEERKAT_LINE),
-        ("PADDING", (0, 0), (-1, -1), 12),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FDF5F2")),
+        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#E5CBC1")),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 16),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 16),
+        ("TOPPADDING", (0, 0), (-1, -1), 16),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 16),
     ]))
     right_cell.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F5FBF7")),
-        ("BOX", (0, 0), (-1, -1), 1, MEERKAT_LINE),
-        ("PADDING", (0, 0), (-1, -1), 12),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F2F9F4")),
+        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#CBE2D4")),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 16),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 16),
+        ("TOPPADDING", (0, 0), (-1, -1), 16),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 16),
     ]))
 
-    cards = Table([[left_cell, right_cell]], colWidths=[240, 240])
-    cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
-
-    return (
-        _page_header("03", "Protection", "Protection Gap Analysis")
-        + [
-            Spacer(1, 14),
-            cards,
-            Spacer(1, 14),
-            Paragraph("Prioritize pure term insurance for income replacement and a separate health policy for hospitalization risk.", styles["body"]),
-        ]
-    )
+    cards = Table([[left_cell, Spacer(10, 1), right_cell]], colWidths=[240, 10, 240])
+    cards.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    
+    return [
+        Paragraph("PROTECTION GAP ANALYSIS", ParagraphStyle("pga", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=4)),
+        Paragraph("Insurance — Actual vs Recommended", ParagraphStyle("iavr", parent=styles["h2"], fontName="Times-Roman", fontSize=26, leading=30)),
+        Spacer(1, 12),
+        cards
+    ]
 
 
 def build_page_portfolio_debt(client_facts, allocation_output):
@@ -6319,42 +6711,139 @@ def build_page_portfolio_debt(client_facts, allocation_output):
     ar = analysis.get("advancedRisk") or {}
     debt_score = (((analysis.get("ihs") or {}).get("breakdown") or {}).get("debt_management") or {}).get("score")
     emi_pct = _num(diag.get("emiPct"), 0)
-    debt_rows = [
-        ["Metric", "Your Value", "Benchmark", "Status"],
-        ["EMI ratio", f"{emi_pct:.1f}%", "<40%", _tag("GOOD" if emi_pct < 40 else "HIGH")],
-        ["Debt stress", analysis.get("debtStress") or "-", "Healthy", _tag(analysis.get("debtStress") or "-")],
-        ["Monthly EMI", _fmt_rs(income.get("monthlyEmi"), False), "Lower is better", _tag("GOOD" if emi_pct < 40 else "HIGH")],
-        ["Debt score", f"{_num(debt_score, 0):.0f}/100", ">=75 = Good", _tag(_urgency(debt_score))],
-    ]
-    bullets = ["Asset allocation is the main lever.", "Use SIPs for gradual rebalancing.", "Keep near-term goals in debt/liquid assets.", "Review fund overlap and concentration annually."]
-    gauge = DrawingFlowable(
-        lambda c, x, y, current, target, risk: draw_equity_gauges(
-            c, 130, 370, 60, 35, _num(current, 0), _num(target, 0),
-            _num((risk.get("recommendedEquityBand") or {}).get("min"), 40),
-            _num((risk.get("recommendedEquityBand") or {}).get("max"), 60),
-        ),
-        500, 132, _portfolio_equity(portfolio), _recommended_band_mid(ar), ar
-    )
-    gauge_block = [
-        Paragraph("Equity Allocation — Actual vs Target", ParagraphStyle("mk_pf_title", parent=styles["h2"], fontName="Times-Bold", fontSize=20, leading=24)),
-        Spacer(1, 10),
-        gauge,
+    
+    current_eq = _portfolio_equity(portfolio)
+    target_eq = _recommended_band_mid(ar)
+    b_min = _num((ar.get("recommendedEquityBand") or {}).get("min"), 40)
+    b_max = _num((ar.get("recommendedEquityBand") or {}).get("max"), 60)
+    
+    current_color = "#C0392B" if (current_eq < b_min or current_eq > b_max) else "#27AE60"
+    target_color = "#27AE60"
+    
+    def _arc(c, x, y, w, h, pct, col):
+        c.setStrokeColorRGB(0.55, 0.65, 0.75)
+        c.setLineWidth(10)
+        c.setLineCap(1)
+        c.arc(x+10, y+10, x+w-10, y+h-10, startAng=-45, extent=270)
+        ch = colors.HexColor(col)
+        c.setStrokeColorRGB(ch.red, ch.green, ch.blue)
+        c.setLineWidth(10)
+        c.setLineCap(1)
+        c.arc(x+10, y+10, x+w-10, y+h-10, startAng=-45, extent=(_num(pct, 0) / 100.0) * 270)
+        c.setFillColorRGB(ch.red, ch.green, ch.blue)
+        c.setFont("Helvetica-Bold", 18)
+        c.drawCentredString(x + w/2, y + h/2 - 6, f"{int(_num(pct, 0))}%")
+    
+    left_block = [
+        Paragraph("CURRENT ALLOCATION", ParagraphStyle("ca", parent=styles["label"], alignment=TA_CENTER, textColor=colors.HexColor("#7F8C8D"))),
         Spacer(1, 4),
-        Paragraph("What You Control", styles["h2"]),
-    ] + [Paragraph(f"• {b}", styles["body"]) for b in bullets]
-    gauge_card = Table([[item] for item in gauge_block], colWidths=[500])
-    gauge_card.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-        ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE),
-        ("LEFTPADDING", (0, 0), (-1, -1), 12),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
-        ("TOPPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-    ]))
-    return (
-        _page_header("04", "Portfolio & Debt", "Portfolio Rebalancing")
-        + [Spacer(1, 10), gauge_card, Spacer(1, 10), _styled_table(debt_rows, [120, 90, 145, 85])]
+        CanvasBlock(100, 100, lambda c,x,y,w,h: _arc(c, x, y, w, h, current_eq, current_color)),
+        Spacer(1, 4),
+        Paragraph(f"<font color='{current_color}'>● <b>{int(current_eq)}% Equity</b></font> &nbsp;&nbsp; <font color='#8CA2B5'>● {100-int(current_eq)}% Debt</font>", ParagraphStyle("sub1", parent=styles["body"], alignment=TA_CENTER)),
+        Spacer(1, 2),
+        Paragraph(f"Portfolio {_fmt_rs(portfolio.get('total'), False)} · Gains {_fmt_rs(portfolio.get('unrealised_gains'), False)}", ParagraphStyle("sub2", parent=styles["small"], alignment=TA_CENTER, textColor=colors.HexColor("#7F8C8D"))),
+    ]
+
+    right_block = [
+        Paragraph("TARGET ALLOCATION", ParagraphStyle("ta", parent=styles["label"], alignment=TA_CENTER, textColor=colors.HexColor("#7F8C8D"))),
+        Spacer(1, 4),
+        CanvasBlock(100, 100, lambda c,x,y,w,h: _arc(c, x, y, w, h, target_eq, target_color)),
+        Spacer(1, 4),
+        Paragraph(f"<font color='{target_color}'>● <b>{int(target_eq)}% Equity</b></font> &nbsp;&nbsp; <font color='#8CA2B5'>● {100-int(target_eq)}% Debt</font>", ParagraphStyle("sub3", parent=styles["body"], alignment=TA_CENTER)),
+        Spacer(1, 2),
+        Paragraph(f"Conservative · Band {int(b_min)}–{int(b_max)}% · Risk-aligned", ParagraphStyle("sub4", parent=styles["small"], alignment=TA_CENTER, textColor=colors.HexColor("#7F8C8D"))),
+    ]
+
+    arrow_block = [
+        Spacer(1, 30),
+        CanvasBlock(40, 30, lambda c,x,y,w,h: [c.setStrokeColorRGB(0.8, 0.7, 0.5), c.setLineWidth(1), c.line(x, y+15, x+w, y+15), c.setFillColorRGB(0.8, 0.7, 0.5), c.setFont("Helvetica-Bold", 14), c.drawCentredString(x+w/2, y, "→")]),
+        Spacer(1, 2),
+        Paragraph("REBALANCE", ParagraphStyle("reb", parent=styles["label"], alignment=TA_CENTER, textColor=colors.HexColor("#A8813C"))),
+    ]
+
+    gauge_card = Table(
+        [[left_block, arrow_block, right_block]],
+        colWidths=[200, 80, 200],
+        style=TableStyle([
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
+            ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 12),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ])
     )
+
+    bullets = [
+        "Which funds/instruments to use for rebalancing", 
+        "When to execute (consider LTCG tax implications)", 
+        "How to split equity vs debt per goal horizon", 
+        "Which goals to prioritise if all aren't affordable"
+    ]
+    bullet_rows = [
+        [
+            Paragraph(f"<font color='#27AE60'>✓</font> &nbsp;{bullets[0]}", styles["body"]),
+            Paragraph(f"<font color='#27AE60'>✓</font> &nbsp;{bullets[1]}", styles["body"])
+        ],
+        [
+            Paragraph(f"<font color='#27AE60'>✓</font> &nbsp;{bullets[2]}", styles["body"]),
+            Paragraph(f"<font color='#27AE60'>✓</font> &nbsp;{bullets[3]}", styles["body"])
+        ]
+    ]
+    bullet_table = Table(bullet_rows, colWidths=[230, 230], style=TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#E5D9B1")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+
+    control_card = Table(
+        [[ [Paragraph("WHAT YOU CONTROL", ParagraphStyle("wyc", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=10)),
+            bullet_table,
+            Spacer(1, 12),
+            CanvasBlock(460, 1, lambda c,x,y,w,h: [c.setStrokeColorRGB(0.9, 0.85, 0.7), c.setLineWidth(0.5), c.line(x,y,x+w,y)]),
+            Spacer(1, 8),
+            Paragraph("Powered by RISE · 25yr Nifty History · 6,250 Data Points · ~12.5% Long-term CAGR", ParagraphStyle("pow", parent=styles["small"], textColor=colors.HexColor("#95A5A6")))] ]],
+        colWidths=[480],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FDFBF7")),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#E5D9B1")),
+            ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 16),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 16),
+            ("TOPPADDING", (0, 0), (-1, -1), 14),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+        ])
+    )
+
+
+    debt_rows = [
+        ["METRIC", "YOUR VALUE", "BENCHMARK", "STATUS", "NOTE"],
+        ["EMI / Income Ratio", Paragraph(f"<font color='#27AE60'><b>~{emi_pct:.0f}%</b></font>", styles["table"]) if emi_pct < 40 else Paragraph(f"<font color='#C0392B'><b>~{emi_pct:.0f}%</b></font>", styles["table"]), "<40%", TagFlowable("GOOD", bg_tint=True) if emi_pct < 40 else TagFlowable("HIGH", bg_tint=True), "Healthy discipline" if emi_pct < 40 else "Reduce EMI"],
+        ["Total Outstanding Loans", "Moderate", "—", TagFlowable("REVIEW", bg_tint=True), "Confirm with client"],
+        ["Loan Types", "Home / Car / Personal", "—", "—", "Identify highest rate"],
+        ["Debt Score", Paragraph(f"<font color='#27AE60'><b>{int(_num(debt_score, 0))}/100</b></font>", styles["table"]) if _num(debt_score, 0) >= 75 else Paragraph(f"<font color='#C0392B'><b>{int(_num(debt_score, 0))}/100</b></font>", styles["table"]), "≥75 = Good", TagFlowable("GOOD", bg_tint=True) if _num(debt_score, 0) >= 75 else TagFlowable("NEEDS ATTENTION", bg_tint=True), "Well managed" if _num(debt_score, 0) >= 75 else "Needs attention"],
+    ]
+    debt_table = _styled_table(debt_rows, [110, 100, 100, 80, 110], style_type="light")
+
+    return [
+        Paragraph("PORTFOLIO REBALANCING", ParagraphStyle("pga", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
+        Paragraph("Equity Allocation — Actual vs Target", ParagraphStyle("iavr", parent=styles["h2"], fontName="Times-Roman", fontSize=26, leading=30)),
+        Spacer(1, 4),
+        gauge_card,
+        Spacer(1, 6),
+        control_card,
+        Spacer(1, 10),
+        Paragraph("DEBT MANAGEMENT", ParagraphStyle("pga", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
+        Spacer(1, 2),
+        debt_table
+    ]
+
 
 
 def build_page_liquidity(client_facts, allocation_output):
@@ -6365,79 +6854,438 @@ def build_page_liquidity(client_facts, allocation_output):
     expenses = _num(income.get("monthlyExpenses"), 0)
     target = expenses * 6
     score = (((analysis.get("ihs") or {}).get("breakdown") or {}).get("liquidity") or {}).get("score")
-    params = [["Parameter", "Value"], ["Liquidity score", f"{_num(score, 0):.0f}/100"], ["Months on hand", f"{_num(diag.get('liquidityMonths'), 0):.1f}"], ["Monthly expenses", _fmt_rs(expenses)], ["Target", _fmt_rs(target)], ["Status", analysis.get("liquidity") or "-"]]
-    strategy = [["Option", "Duration", "Monthly Amount"], ["Fast", "12 months", _fmt_rs(target / 12, False)], ["Balanced", "18 months", _fmt_rs(target / 18, False)], ["Gentle", "24 months", _fmt_rs(target / 24, False)]]
-    tiers = [["Tier", "Where to Park"], ["Instant", "Savings account for first 1-2 months"], ["Quick", "Liquid fund or sweep FD"], ["Short-term", "Short-duration FD or high-quality debt fund"]]
-    left = Table([[Paragraph("Emergency Fund Parameters", styles["h2"])], [_styled_table(params, [145, 95])]], colWidths=[240])
-    left.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.white), ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE), ("PADDING", (0, 0), (-1, -1), 10)]))
-    right = Table([[Paragraph("Building Strategy — From Zero", styles["h2"])], [_styled_table(strategy, [78, 62, 100])]], colWidths=[240])
-    right.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.white), ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE), ("PADDING", (0, 0), (-1, -1), 10)]))
-    pair = Table([[left, right]], colWidths=[250, 250])
-    pair.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    t1 = Table([[Paragraph("<b>Instant Access</b><br/><font color='#666666'>40% · savings account / high-yield</font>", styles["body"])]], colWidths=[160])
-    t2 = Table([[Paragraph("<b>Quick Access</b><br/><font color='#666666'>40% · liquid fund or sweep FD</font>", styles["body"])]], colWidths=[160])
-    t3 = Table([[Paragraph("<b>Short-Term FD</b><br/><font color='#666666'>20% · short-duration debt/FD</font>", styles["body"])]], colWidths=[160])
-    for t, bg in [(t1, colors.HexColor("#FFF6F4")), (t2, colors.HexColor("#FFF9F0")), (t3, colors.HexColor("#F7F8FA"))]:
-        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), bg), ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE), ("PADDING", (0, 0), (-1, -1), 10)]))
-    tier_cards = Table([[t1, t2, t3]], colWidths=[166, 166, 166])
-    tier_cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    return _page_header("05", "Liquidity", "Emergency Fund Planning") + [Spacer(1, 10), Paragraph("Emergency Fund Assessment", ParagraphStyle("mk_lq_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)), Spacer(1, 8), pair, Spacer(1, 8), Paragraph("<b>Build emergency fund BEFORE investing in long-term goals.</b>", styles["body"]), Spacer(1, 10), Paragraph("Where to Park the Emergency Fund", styles["label"]), Spacer(1, 6), tier_cards]
+    
+    # Left Card: Parameters
+    params = [
+        ["Liquidity Score", Paragraph(f"<font color='#E67E22'><b>{_num(score, 0):.0f}/100</b></font>", styles["body"])],
+        ["Basis", Paragraph("<b>6 months</b> essential expenses", styles["body"])],
+        ["Monthly Expenses (est.)", Paragraph(f"<b>{_fmt_rs(expenses, False)}/month</b>", styles["body"])],
+        ["Emergency Fund Target", Paragraph(f"<font color='#27AE60'><b>~{_fmt_rs(target, False)}</b></font>", styles["body"])],
+        ["Current Status", Paragraph("<font color='#E67E22'><b>Unknown — assess now</b></font>", styles["body"])],
+    ]
+    params_table = _styled_table(params, [110, 80], header=False, style_type="compact_light")
+
+    
+    advisory_note = Table(
+        [[Paragraph("<b><font color='#2C3E50'>Advisory Note</font></b><br/><font color='#4A5568'>Build emergency fund BEFORE investing in long-term goals. This is non-negotiable financial hygiene.</font>", styles["small"])]],
+        colWidths=[173],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F1E9DA")),
+            ("LINEBEFORE", (0, 0), (0, -1), 3, colors.HexColor("#A8813C")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ])
+    )
+    
+    left = Table(
+        [[ [Paragraph("EMERGENCY FUND PARAMETERS", ParagraphStyle("efp", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=12)),
+            params_table,
+            Spacer(1, 24),
+            advisory_note] ]],
+        colWidths=[205],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FDFBF7")),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#E5D9B1")),
+            ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 16),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 16),
+        ])
+    )
+    
+    # Right Card: Strategy
+    strategy = [
+        ["OPTION", "DURATION", "MONTHLY", "BEST FOR"],
+        [Paragraph("<font color='#27AE60'><b>A — Fast</b></font>", styles["body"]), "12 months", Paragraph(f"<font color='#E67E22'><b>{_fmt_rs(target / 12, False)}</b></font>", styles["body"]), Paragraph("<font color='#4A5568'>High surplus period</font>", styles["small"])],
+        [Paragraph("<font color='#A8813C'><b>B — Balanced<br/>★</b></font>", styles["body"]), "18 months", Paragraph(f"<font color='#E67E22'><b>{_fmt_rs(target / 18, False)}</b></font>", styles["body"]), Paragraph("<font color='#4A5568'>Recommended</font>", styles["small"])],
+        [Paragraph("<font color='#7F8C8D'><b>C — Gentle</b></font>", styles["body"]), "24 months", Paragraph(f"<font color='#E67E22'><b>{_fmt_rs(target / 24, False)}</b></font>", styles["body"]), Paragraph("<font color='#4A5568'>If goals compete</font>", styles["small"])],
+    ]
+    strategy_table = _styled_table(strategy, [60, 58, 60, 63], style_type="compact_light")
+
+    strategy_table.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("BACKGROUND", (0, 2), (-1, 2), colors.HexColor("#FDFBF7")),
+        ("TOPPADDING", (0, 1), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 10),
+    ]))
+    
+    right = Table(
+        [[ [Paragraph("BUILDING STRATEGY — FROM ZERO", ParagraphStyle("bs", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=12)),
+            strategy_table] ]],
+        colWidths=[265],
+        style=TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
+            ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 16),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 16),
+        ])
+    )
+    
+    pair = Table([[left, Spacer(10, 1), right]], colWidths=[205, 10, 265])
+    pair.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0)
+    ]))
+    
+    # Tier Cards
+    t1_amt = _fmt_rs(target * 0.4, False)
+    t2_amt = _fmt_rs(target * 0.4, False)
+    t3_amt = _fmt_rs(target * 0.2, False)
+    
+    def _tier_card(code, code_color, title, subtitle, desc):
+        tbl = Table(
+            [[Paragraph(f"<font color='{code_color}'><b>{code}</b></font>", ParagraphStyle("tc", fontName="Helvetica-Bold", fontSize=14, leading=14, alignment=TA_CENTER)),
+              Paragraph(f"<b><font color='#2C3E50'>{title}</font></b><br/><font color='#A8813C'>{subtitle}</font><br/><br/><font color='#4A5568'>{desc}</font>", styles["small"])]],
+            colWidths=[30, 115]
+        )
+        tbl.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#EFE5D3")),
+            ("BACKGROUND", (1, 0), (1, -1), colors.HexColor("#FDFBF7")),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#E5D9B1")),
+            ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+            ("LEFTPADDING", (0, 0), (0, -1), 0),
+            ("RIGHTPADDING", (0, 0), (0, -1), 0),
+            ("LEFTPADDING", (1, 0), (1, -1), 10),
+            ("RIGHTPADDING", (1, 0), (1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 12),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ]))
+        return tbl
+        
+    t1 = _tier_card("T1", "#C0392B", "Instant Access", f"40% · ~{t1_amt}", "Savings bank account — zero friction. High-yield savings (AU, IDFC).")
+    t2 = _tier_card("T2", "#E67E22", "Quick Access", f"40% · ~{t2_amt}", "Liquid mutual funds or sweep-in FD. 1-2 day redemption. 6-7% return.")
+    t3 = _tier_card("T3", "#A8813C", "Short-Term FD", f"20% · ~{t3_amt}", "3-6 month fixed deposits. Slightly higher return. Last-resort buffer.")
+    
+    tier_cards = Table([[t1, Spacer(8, 1), t2, Spacer(8, 1), t3]], colWidths=[145, 8, 145, 8, 145])
+    tier_cards.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0)
+    ]))
+    
+    return [
+        Paragraph("LIQUIDITY ANALYSIS", ParagraphStyle("pga", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
+        Paragraph("Emergency Fund Assessment", ParagraphStyle("iavr", parent=styles["h2"], fontName="Times-Roman", fontSize=26, leading=30)),
+        Spacer(1, 16),
+        pair,
+        Spacer(1, 24),
+        Paragraph("WHERE TO PARK THE EMERGENCY FUND", ParagraphStyle("wtp", parent=styles["label"], textColor=colors.HexColor("#A8813C"))),
+        Spacer(1, 6),
+        tier_cards
+    ]
 
 
 def build_page_goal_feasibility(client_facts, allocation_output):
     styles = _report_styles()
-    rows = [["Goal", "Target", "Horizon", "Current SIP", "Ideal SIP", "Gap/mo", "Coverage"]]
+    
+    total_goals = max(1, len(allocation_output.get("goal_sip_table") or []))
+    total_shortfall = _num(allocation_output.get("combined_shortfall"), 0)
+    
+    cards = []
     for g in allocation_output.get("goal_sip_table") or []:
+        name = g.get("name") or "Goal"
+        target_val = _num(g.get("target_amount"), 0)
+        horizon = f"{g.get('horizon_years') or '-'} yrs"
         ideal = _num(g.get("ideal_sip"), 0)
+        curr = 0 # Currently assumed Rs. 0
+        gap = _num(g.get("shortfall"), 0)
         coverage = (_num(g.get("allocated_sip"), 0) / ideal * 100) if ideal > 0 else 0
-        rows.append([g.get("name") or "Goal", _fmt_rs(g.get("target_amount")), f"{g.get('horizon_years') or '-'} yrs", "Rs. 0", _fmt_rs(g.get("ideal_sip"), False), _fmt_rs(g.get("shortfall"), False), CoverageFlowable(coverage, width=65)])
-    return _page_header("06", "Goal Feasibility", "Goal Funding Analysis") + [
-        Spacer(1, 4),
-        Paragraph("All Goals — Current vs Required", ParagraphStyle("mk_goal_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)),
-        Spacer(1, 12),
-        _styled_table(rows, [88, 70, 48, 62, 70, 62, 65]),
-        Spacer(1, 10),
-        Paragraph(
-            f"<b>Combined monthly SIP shortfall:</b> {_fmt_rs(allocation_output.get('combined_shortfall'), False)}",
-            styles["body"],
-        ),
+        
+        # formatting
+        def _fmt(val):
+            return _fmt_rs(val, compact=True)
+            
+        target_str = _fmt(target_val)
+        curr_str = _fmt(curr)
+        ideal_str = _fmt(ideal)
+        gap_str = _fmt(gap)
+        
+        goal_text = f"<font color='#666666' size='7'>GOAL</font><br/><font face='Times-Roman' size='11' color='#2C3E50'>{name}</font>"
+
+        target_text = f"<font color='#666666' size='7'>TARGET</font><br/><font color='#2C3E50'>{target_str}</font>"
+        horizon_text = f"<font color='#666666' size='7'>HORIZON</font><br/><font color='#2C3E50'>{horizon}</font>"
+        curr_sip_text = f"<font color='#666666' size='7'>CURR. SIP</font><br/><font color='#C0392B'>{curr_str}</font>"
+        req_sip_text = f"<font color='#666666' size='7'>REQ. SIP</font><br/><font color='#D35400'>{ideal_str}</font>"
+        gap_text = f"<font color='#666666' size='7'>GAP/MO</font><br/><font color='#C0392B'>{gap_str}</font>"
+        
+        p_style = ParagraphStyle("card_p", fontName="Helvetica-Bold", fontSize=9, leading=12)
+        
+        inner_data = [[
+            Paragraph(target_text, p_style),
+            Paragraph(horizon_text, p_style),
+            Paragraph(curr_sip_text, p_style),
+            Paragraph(req_sip_text, p_style),
+            Paragraph(gap_text, p_style),
+        ]]
+        inner_table = Table(inner_data, colWidths=[55, 45, 45, 55, 50])
+        inner_table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        
+        # Coverage section
+        cov_val = f"{coverage:.0f}%"
+        cov_color = '#E67E22' if coverage < 80 else '#27AE60'
+        if coverage < 50: cov_color = '#C0392B'
+        
+        cov_tbl = Table(
+            [[CoverageFlowable(min(coverage, 100), width=85, height=8)],
+             [Spacer(1, 4)],
+             [Table([[Paragraph("<font color='#666666' size='7'>Coverage</font>"), Paragraph(f"<b><font color='{cov_color}' size='8'>{cov_val}</font></b>", ParagraphStyle("r", alignment=TA_RIGHT))]], colWidths=[45, 40], style=TableStyle([("PADDING", (0, 0), (-1, -1), 0)]))]],
+            colWidths=[85]
+        )
+        cov_tbl.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
+        
+        card = Table(
+            [[
+                Paragraph(goal_text, p_style),
+                inner_table,
+                cov_tbl
+            ]],
+            colWidths=[100, 250, 100]
+        )
+        card.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
+            ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("LEFTPADDING", (0, 0), (0, -1), 16),
+            ("RIGHTPADDING", (-1, 0), (-1, -1), 16),
+            ("TOPPADDING", (0, 0), (-1, -1), 12),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ]))
+
+        
+        cards.append(card)
+        cards.append(Spacer(1, 10))
+
+    goal_colors = [
+        colors.HexColor("#C0392B"), # Red
+        colors.HexColor("#E67E22"), # Orange
+        colors.HexColor("#A8813C"), # Gold
+        colors.HexColor("#2C3E50"), # Navy
+        colors.HexColor("#27AE60"), # Green
+        colors.HexColor("#7F8C8D"), # Grey
+    ]
+    
+    goals_data = []
+    for i, g in enumerate(allocation_output.get("goal_sip_table") or []):
+        shortfall = _num(g.get("shortfall"), 0)
+        if shortfall > 0:
+            goals_data.append({
+                "name": g.get("name") or f"Goal {i+1}",
+                "shortfall": shortfall,
+                "color": goal_colors[i % len(goal_colors)]
+            })
+
+    def draw_stacked_bar(c, x, y, w, h):
+        if not total_shortfall or total_shortfall <= 0: return
+        c.saveState()
+        path = c.beginPath()
+        path.roundRect(x, y, w, h, h/2.0)
+        c.clipPath(path, stroke=0)
+        
+        current_x = x
+        for item in goals_data:
+            seg_w = (item["shortfall"] / total_shortfall) * w
+            if seg_w > 0:
+                c.setFillColor(item["color"])
+                c.rect(current_x, y, seg_w, h, fill=1, stroke=0)
+                current_x += seg_w
+        c.restoreState()
+
+    stacked_bar_block = CanvasBlock(220, 14, draw_stacked_bar)
+    
+    legend_cells = []
+    for item in goals_data:
+        amt = item["shortfall"]
+        if amt >= 100000:
+            amt_str = f"Rs. {amt/100000:.1f}L"
+        else:
+            amt_str = f"Rs. {amt/1000:.1f}K"
+            
+        color_hex = item["color"].hexval()[2:] # rrggbb
+        legend_cells.append(Paragraph(f"<font color='#{color_hex}'>■</font> <font color='#4A5568' size='7'>{item['name']} {amt_str}</font>", styles["small"]))
+    
+    legend_rows = []
+    for i in range(0, len(legend_cells), 2):
+        legend_rows.append(legend_cells[i:i+2])
+    if legend_rows and len(legend_rows[-1]) == 1:
+        legend_rows[-1].append(Paragraph("", styles["small"]))
+        
+    if legend_rows:
+        legend_table = Table(legend_rows, colWidths=[110, 110])
+        legend_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 1), ("BOTTOMPADDING", (0, 0), (-1, -1), 1)]))
+    else:
+        legend_table = Spacer(1, 1)
+
+    right_side = Table(
+        [[stacked_bar_block],
+         [Spacer(1, 6)],
+         [legend_table]],
+        colWidths=[214]
+    )
+    right_side.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    
+    total_short_str = _fmt_rs(total_shortfall, False)
+    left_side = Table(
+        [[Paragraph("COMBINED MONTHLY SIP SHORTFALL", ParagraphStyle("cms", parent=styles["small"], textColor=colors.HexColor("#D35400"), fontSize=7, spaceAfter=2))],
+         [Paragraph(f"<font color='#D35400'>{total_short_str}</font><font color='#D35400' size='12'>/month</font>", ParagraphStyle("cmsh", fontName="Times-Roman", fontSize=26, leading=26))],
+         [Spacer(1, 4)],
+         [Paragraph(f"<font color='#666666' size='7'>Total additional SIP needed across all {total_goals} goals to achieve full coverage</font>", styles["small"])]],
+        colWidths=[224]
+    )
+    left_side.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    
+    bottom_card = Table(
+        [[left_side, Spacer(10, 1), right_side]],
+        colWidths=[240, 10, 230]
+    )
+    bottom_card.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F9F1EB")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#E5C5B5")),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("LEFTPADDING", (0, 0), (0, -1), 16),
+        ("RIGHTPADDING", (-1, 0), (-1, -1), 16),
+        ("TOPPADDING", (0, 0), (-1, -1), 16),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 16),
+    ]))
+
+    return [
+        Paragraph("FINANCIAL GOALS", ParagraphStyle("fg", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
+        Paragraph(f"All {total_goals} Goals — Current vs Required", ParagraphStyle("mk_goal_title", parent=styles["h2"], fontName="Times-Roman", fontSize=26, leading=30)),
+        Spacer(1, 16),
+    ] + cards + [
+        Spacer(1, 8),
+        bottom_card
     ]
 
 
 def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
     styles = _report_styles()
     income = client_facts.get("income") or {}
-    bank = client_facts.get("bank") or {}
     monthly_income = _num(income.get("annualIncome"), 0) / 12
     monthly_surplus = _display_monthly_surplus(client_facts)
     total_req = _num(allocation_output.get("combined_shortfall"), 0)
     available = _num(allocation_output.get("available_for_goals"), 0)
     coverage = available / total_req * 100 if total_req else 100
-    rows = [["Goal", "Required SIP", "Allocated SIP", "Monthly Gap", "Status"]]
-    for g in allocation_output.get("goal_sip_table") or []:
-        status = g.get("status") or ("GAP" if _num(g.get("shortfall"), 0) else "FUNDED")
-        rows.append([g.get("name") or "Goal", _fmt_rs(g.get("ideal_sip"), False), _fmt_rs(g.get("allocated_sip"), False), _fmt_rs(g.get("shortfall"), False), _tag(str(status).upper())])
-    insight = _llm_paragraph(narratives, "cashflow") or "Start with the available surplus, protect the household first, then scale SIPs as income grows."
+    
     cashflow_kpis = [
-        {"label": "Income/mo", "value": _fmt_rs(monthly_income)},
-        {"label": "Expenses", "value": _fmt_rs(income.get("monthlyExpenses"))},
-        {"label": "Surplus", "value": _fmt_rs(monthly_surplus)},
-        {"label": "Insurance", "value": _fmt_rs(allocation_output.get("insurance_provision"), False)},
-        {"label": "For Goals", "value": _fmt_rs(available, False)},
+        {"label": "Monthly Income", "value": _fmt_rs(monthly_income)},
+        {"label": "Monthly Expenses", "value": _fmt_rs(income.get("monthlyExpenses"))},
+        {"label": "Monthly Surplus", "value": _fmt_rs(monthly_surplus)},
+        {"label": "Insurance Provision", "value": _fmt_rs(allocation_output.get("insurance_provision"), False)},
+        {"label": "Available for Goals", "value": _fmt_rs(available, False)},
     ]
-    return _page_header("07", "Cash Flow & SIP Plan", "Monthly Allocation Plan") + [
-        Spacer(1, 4),
-        Paragraph("Can You Afford All This?", ParagraphStyle("mk_cf_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)),
-        Spacer(1, 10),
-        DrawingFlowable(
-            lambda c, x, y, tiles: KPIFlowable(tiles, width=500, height=72, card_height=60, gap=10, card_y=6).drawOn(c, x, y),
-            500, 72, cashflow_kpis
-        ),
-        Paragraph(f"<b>Total Goal Requirement:</b> {_fmt_rs(total_req, False)}/month | <b>Coverage:</b> {coverage:.0f}%", styles["body"]),
-        Spacer(1, 8),
-        _styled_table(rows, [130, 85, 85, 85, 75]),
-        Spacer(1, 8),
-        Paragraph(f"<b>Key Insight:</b> {sanitize_pdf_text(insight)}", styles["body"]),
+    
+    cf_label = Paragraph("MONTHLY CASH FLOW", ParagraphStyle("mcf", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=12))
+    kpi_drawing = KPIFlowable(cashflow_kpis, width=438, height=54, card_height=50, gap=6, card_y=0)
+    
+    summary_text = f"Total Goal Requirement: <b>{_fmt_rs(total_req, False)}/month</b>"
+    coverage_text = f"Coverage: <font color='#D35400'><b>{coverage:.1f}%</b></font>"
+    summary_table = Table([[Paragraph(summary_text, styles["small"]), Paragraph(coverage_text, ParagraphStyle("cov", parent=styles["small"], alignment=TA_RIGHT))]], colWidths=[219, 219])
+    summary_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    
+    cf_card_inner = Table([[cf_label], [kpi_drawing], [Spacer(1, 12)], [summary_table]], colWidths=[438])
+    cf_card_inner.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    
+    cf_card = Table([[cf_card_inner]], colWidths=[470])
+    cf_card.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#E2E8F0")),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+        ("TOPPADDING", (0, 0), (-1, -1), 16),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 16),
+        ("LEFTPADDING", (0, 0), (-1, -1), 16),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 16),
+    ]))
+
+    plan_rows = [[
+        Paragraph("GOAL", styles["table_head_dark"]), 
+        Paragraph("REQUIRED SIP", styles["table_head_dark"]), 
+        Paragraph("ALLOCATED SIP", styles["table_head_dark"]), 
+        Paragraph("MONTHLY GAP", styles["table_head_dark"]), 
+        Paragraph("STATUS", styles["table_head_dark"])
+    ]]
+    for g in allocation_output.get("goal_sip_table") or []:
+        shortfall = _num(g.get("shortfall"), 0)
+        status_label = "Funded" if shortfall <= 0 else "Partial"
+        if _num(g.get("allocated_sip"), 0) <= 0 and shortfall > 0:
+            status_label = "Pending"
+            
+        plan_rows.append([
+            Paragraph(str(g.get("name") or "Goal"), styles["table"]), 
+            Paragraph(_fmt_rs(g.get("ideal_sip"), False), styles["table"]), 
+            Paragraph(_fmt_rs(g.get("allocated_sip"), False), styles["table"]), 
+            Paragraph(_fmt_rs(shortfall, False), styles["table"]), 
+            TagFlowable(status_label, bg_tint=True)
+        ])
+    
+    plan_rows.append([
+        Paragraph("<b>Total</b>", styles["table"]), 
+        Paragraph(f"<b>{_fmt_rs(total_req, False)}</b>", styles["table"]), 
+        Paragraph(f"<b>{_fmt_rs(available, False)}</b>", styles["table"]), 
+        Paragraph(f"<b>{_fmt_rs(max(0, total_req - available), False)}</b>", styles["table"]), 
+        Paragraph("", styles["table"])
+    ])
+    
+    plan_table = Table(plan_rows, colWidths=[160, 90, 90, 90, 70])
+    plan_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F1F5F9")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#475569")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 7),
+        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F8FAFC")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
+
+    insight = _llm_paragraph(narratives, "cashflow") or "Start with the available surplus, protect the household first, then scale SIPs as income grows."
+
+    return [
+        Paragraph("REALITY CHECK", ParagraphStyle("rc", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
+        Paragraph("Can You Afford All This?", ParagraphStyle("mk_cf_title", parent=styles["h2"], fontName="Times-Bold", fontSize=28, leading=34)),
+        Spacer(1, 16),
+        cf_card,
+        Spacer(1, 24),
+        Paragraph("GOAL-WISE SIP ALLOCATION PLAN", ParagraphStyle("gwap", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8)),
+        plan_table,
+        Spacer(1, 24),
+        InsightFlowable("Key Insight", sanitize_pdf_text(insight))
     ]
 
 
@@ -6456,95 +7304,378 @@ def build_page_tax(client_facts, allocation_output):
             claimed["80D"] += amt
         elif "80C" in sec:
             claimed["80C"] += amt
+            
     current = compute_regime_comparison(gross, claimed["80C"], claimed["80D"], claimed["80CCD_1B"])
     optimized = compute_regime_comparison(gross, 150000, 75000, 50000)
-    rows = [["Scenario", "Old Regime", "New Regime", "Better"], ["Current", _fmt_rs(current["old_regime"]["tax_liability"]), _fmt_rs(current["new_regime"]["tax_liability"]), current["better_regime"].title()], ["Max Deductions", _fmt_rs(optimized["old_regime"]["tax_liability"]), _fmt_rs(optimized["new_regime"]["tax_liability"]), optimized["better_regime"].title()]]
-    actions = [
-        ["#", "Action", "Why", "How / Note"],
-        ["1", "Switch regime", "Choose the lower tax outcome while filing.", "Inform employer before April; applies from new FY"],
-        ["2", "Maximise employer NPS", "Useful deduction where available.", "Up to 14% of Basic via Section 80CCD(2)"],
-        ["3", "Hold equity >1yr", "Improves LTCG treatment and reduces churn.", "Avoid redemptions before 12-month mark"],
-        ["4", "Claim standard deduction", "Ensure salary deduction is included.", "Confirm with payroll / CA before filing"],
+    
+    def _tax_cell(val, better):
+        col = "#27AE60" if better else "#C0392B"
+        return Paragraph(f"<b><font color='{col}'>{_fmt_rs(val, False)}</font></b>", styles["table"])
+
+    # Top Tables and Card
+    comparison_rows = [[
+        Paragraph("SCENARIO", styles["table_head_dark"]), 
+        Paragraph("OLD REGIME", styles["table_head_dark"]), 
+        Paragraph("NEW REGIME", styles["table_head_dark"]), 
+        Paragraph("BETTER", styles["table_head_dark"])
+    ]]
+    
+    for label, res in [("Current ITR", current), ("Max Deductions", optimized)]:
+        comparison_rows.append([
+            Paragraph(label, styles["table"]),
+            _tax_cell(res["old_regime"]["tax_liability"], res["better_regime"] == "old"),
+            _tax_cell(res["new_regime"]["tax_liability"], res["better_regime"] == "new"),
+            TagFlowable(f"✓ {res['better_regime'].title()}", bg_tint=True)
+        ])
+        
+    comp_table = Table(comparison_rows, colWidths=[90, 80, 80, 70])
+    comp_table.setStyle(TableStyle([
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F8FAFC")),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.5, colors.HexColor("#E2E8F0")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
+    
+    savings = max(_num(current.get('savings'), 0), _num(optimized.get('savings'), 0))
+    saving_card = SavingCardFlowable(savings, width=225, height=120)
+    
+    top_split = Table([[comp_table, Spacer(1, 1), saving_card]], colWidths=[320, 20, 225])
+    top_split.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    
+    # Bottom Actions Table
+    action_rows = [[
+        Paragraph("#", styles["table_head_dark"]), 
+        Paragraph("ACTION", styles["table_head_dark"]), 
+        Paragraph("WHY", styles["table_head_dark"]), 
+        Paragraph("HOW / NOTE", styles["table_head_dark"])
+    ]]
+    
+    raw_actions = [
+        ("Switch to New Regime", f"Saves {_fmt_rs(savings, False)}/year vs Old Regime", "Inform employer before April; applies from new FY"),
+        ("Maximise Employer NPS", "Only deduction still valid under New Regime", "Up to 14% of Basic via Section 80CCD(2)"),
+        ("Hold Equity Funds >1 Year", "LTCG 12.5% vs STCG 20%", "Avoid redemptions before 12-month mark"),
+        ("Claim Standard Deduction", f"{_fmt_rs(75000, False)} automatically applied", "Confirm with payroll / CA before filing")
     ]
-    return _page_header("08", "Tax Optimisation", "Regime Comparison") + [
-        Spacer(1, 4),
-        Paragraph("Regime Comparison & Structured Actions", ParagraphStyle("mk_tax_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)),
-        Spacer(1, 10),
-        _styled_table(rows, [120, 115, 115, 95]),
-        Spacer(1, 10),
-        Paragraph(f"<b>Potential annual saving:</b> {_fmt_rs(max(_num(current.get('savings'), 0), _num(optimized.get('savings'), 0)))}", styles["h2"]),
-        _styled_table(actions, [25, 115, 145, 190]),
+    
+    for i, (act, why, how) in enumerate(raw_actions):
+        action_rows.append([
+            Paragraph(str(i+1), styles["table"]),
+            Paragraph(f"<b>{act}</b>", styles["table"]),
+            Paragraph(why, styles["table"]),
+            Paragraph(how, styles["table"])
+        ])
+        
+    actions_table = Table(action_rows, colWidths=[30, 130, 150, 160])
+    actions_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F1F5F9")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+    ]))
+
+    return [
+        Spacer(1, 16),
+        Paragraph("TAX ANALYSIS", ParagraphStyle("ta", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
+        Paragraph("Regime Comparison & Structured Actions", ParagraphStyle("mk_tax_title", parent=styles["h2"], fontName="Times-Bold", fontSize=26, leading=30)),
+        Spacer(1, 24),
+        Paragraph("OLD VS NEW REGIME", ParagraphStyle("ovn", parent=styles["label"], textColor=colors.HexColor("#64748B"), fontSize=8)),
+        Spacer(1, 8),
+        top_split,
+        Spacer(1, 32),
+        Paragraph("KEY ACTIONS — WHAT, WHY & HOW", ParagraphStyle("ka", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8)),
+        actions_table
     ]
 
 
 def build_page_action_plan(client_facts, allocation_output):
     styles = _report_styles()
-    bank = client_facts.get("bank") or {}
     monthly_surplus = _display_monthly_surplus(client_facts)
-    surplus_after_insurance = monthly_surplus - _num(allocation_output.get("insurance_provision"), 0)
-    phase1 = [Paragraph("Phase 1: Months 1-6", styles["h2"])]
-    for p in (allocation_output.get("priority_breakdown") or [])[:4]:
-        item_name = p.get("name") or f"Priority {p.get('priority')}"
-        phase1.append(Paragraph(f"→ {sanitize_pdf_text(item_name)}: {_fmt_rs(p.get('monthly_amount'), False)}/mo", styles["body"]))
-    phase1.append(Paragraph(f"→ Surplus after insurance: {_fmt_rs(surplus_after_insurance, False)}/mo", styles["body"]))
-    phase2 = [["Goal", "Allocated SIP", "Required SIP"]]
-    for g in allocation_output.get("goal_sip_table") or []:
-        phase2.append([g.get("name") or "Goal", _fmt_rs(g.get("allocated_sip"), False), _fmt_rs(g.get("ideal_sip"), False)])
-    roadmap = [
-        ["Milestone", "Action", "Time"],
-        ["Week 1", "Confirm insurance gaps and quote term/health cover.", Paragraph("<i>(2-3 hrs)</i>", styles["table"])],
-        ["Week 2", "Set emergency fund target and automate transfer.", Paragraph("<i>(1 hr)</i>", styles["table"])],
-        ["Week 3", "Map current portfolio to recommended equity band.", Paragraph("<i>(1-2 hrs)</i>", styles["table"])],
-        ["Week 4", "Finalize SIP allocation by priority.", Paragraph("<i>(1 hr)</i>", styles["table"])],
-        ["Day 90", "Review progress and update surplus.", Paragraph("<i>(45 mins)</i>", styles["table"])],
-        ["Quarterly", "Recalculate score and rebalance if needed.", Paragraph("<i>(1 hr)</i>", styles["table"])],
+    insurance_prov = _num(allocation_output.get("insurance_provision"), 0)
+    surplus_after_ins = monthly_surplus - insurance_prov
+    
+    # Phase 1 Card
+    p1_items = [
+        Paragraph("PHASE 1 — MONTHS 1-6", ParagraphStyle("p1", parent=styles["label"], textColor=colors.HexColor("#A8813C"), fontSize=7)),
+        Paragraph("Protection First", ParagraphStyle("p1t", parent=styles["h2"], fontSize=14, spaceBefore=4, spaceAfter=8)),
+        Paragraph("Secure your family before deploying capital into goals.", ParagraphStyle("p1b", parent=styles["body"], fontSize=9, textColor=colors.HexColor("#64748B"), spaceAfter=12)),
     ]
-    left = Table([[item] for item in phase1], colWidths=[240])
-    left.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.white), ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE), ("PADDING", (0, 0), (-1, -1), 10)]))
-    right_items = [Paragraph("Phase 2: Month 7 Onwards", styles["h2"]), _styled_table(phase2, [110, 70, 70])]
-    right = Table([[item] for item in right_items], colWidths=[240])
-    right.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.white), ("BOX", (0, 0), (-1, -1), 0.8, MEERKAT_LINE), ("PADDING", (0, 0), (-1, -1), 10)]))
-    cards = Table([[left, right]], colWidths=[245, 245])
-    cards.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    return _page_header("09", "Action Plan", "Prioritised Roadmap") + [
-        Spacer(1, 4),
-        Paragraph("Phase-wise Roadmap", ParagraphStyle("mk_ap_title", parent=styles["h2"], fontName="Times-Bold", fontSize=22, leading=26)),
-        Spacer(1, 10),
-        cards,
-        Spacer(1, 10),
-        _styled_table(roadmap, [80, 310, 80]),
+    
+    for p in (allocation_output.get("priority_breakdown") or []):
+        if "Insurance" in p.get("name", ""):
+            p1_items.append(Paragraph(f"→ {p['name']}: <b>{_fmt_rs(p['monthly_amount'], False)}/month</b>", styles["body"]))
+            
+    p1_items.append(Spacer(1, 12))
+    p1_items.append(Paragraph(f"→ Surplus after insurance: <b>{_fmt_rs(surplus_after_ins, False)}/month</b> available for goals", styles["body"]))
+    
+    p1_card = Table([[item] for item in p1_items], colWidths=[240])
+    p1_card.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FDF2F2")),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+        ("TOPPADDING", (0, 0), (-1, -1), 16),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 16),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+    ]))
+
+    # Phase 2 Card
+    p2_head = [
+        Paragraph("PHASE 2 — MONTH 7 ONWARDS", ParagraphStyle("p2", parent=styles["label"], textColor=colors.HexColor("#27AE60"), fontSize=7)),
+        Paragraph("Goal-Based SIPs", ParagraphStyle("p2t", parent=styles["h2"], fontSize=14, spaceBefore=4, spaceAfter=8)),
+        Paragraph(f"Deploy {_fmt_rs(surplus_after_ins, False)}/month across goals proportionally.", ParagraphStyle("p2b", parent=styles["body"], fontSize=9, textColor=colors.HexColor("#64748B"), spaceAfter=12)),
+    ]
+    
+    p2_rows = [[
+        Paragraph("GOAL", styles["table_head_dark"]), 
+        Paragraph("ALLOC", styles["table_head_dark"]), 
+        Paragraph("REQ", styles["table_head_dark"])
+    ]]
+    for g in (allocation_output.get("goal_sip_table") or [])[:5]:
+        p2_rows.append([
+            Paragraph(g.get("name") or "Goal", styles["table"]),
+            Paragraph(f"<b>{_fmt_rs(g.get('allocated_sip'), False)}</b>", ParagraphStyle("ts", parent=styles["table"], textColor=colors.HexColor("#27AE60"))),
+            Paragraph(_fmt_rs(g.get("ideal_sip"), False), styles["table"])
+        ])
+    
+    p2_table = Table(p2_rows, colWidths=[90, 55, 55])
+    p2_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F1F5F9")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    
+    p2_items = p2_head + [p2_table]
+    p2_card = Table([[item] for item in p2_items], colWidths=[240])
+    p2_card.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F0F9F1")),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+        ("TOPPADDING", (0, 0), (-1, -1), 16),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 16),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    
+    top_split = Table([[p1_card, Spacer(1, 1), p2_card]], colWidths=[245, 10, 245])
+    top_split.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    
+    # Timeline
+    def _timeline_item(week, title, items):
+        res = [
+            Paragraph(f"<font color='#A8813C'><b>{week} — {title.upper()}</b></font>", styles["label"]),
+            Paragraph(title, ParagraphStyle("tt", parent=styles["h2"], fontSize=11, spaceBefore=2, spaceAfter=4)),
+        ]
+        for it in items:
+            res.append(Paragraph(f"→ {it}", ParagraphStyle("ti", parent=styles["body"], fontSize=8, leftIndent=8)))
+        return res
+
+    col1 = [
+        _timeline_item("WEEK 1", "Protection", ["Get term insurance — Rs. 4.4 Cr cover", "Upgrade health to Rs. 10-15L floater"]),
+        Spacer(1, 8),
+        _timeline_item("WEEK 2", "Liquidity", ["Assess savings + FD vs target", "Set up Tier 1/2/3 structure"]),
+        Spacer(1, 8),
+        _timeline_item("WEEK 3", "Portfolio", ["Plan LTCG-optimal exit", "Set up goal-wise SIPs"]),
+    ]
+    
+    col2 = [
+        _timeline_item("WEEK 4", "Tax", ["Switch to New Regime", "Maximise employer NPS"]),
+        Spacer(1, 8),
+        _timeline_item("DAY 90", "Full Review", ["Review all actions", "Recalculate Health Score"]),
+        Spacer(1, 8),
+        _timeline_item("QUARTERLY", "Ongoing", ["Ongoing Review", "Update plan for income changes"]),
+    ]
+    
+    roadmap_split = Table([[
+        Table([[item] for item in col1], colWidths=[230]),
+        Table([[item] for item in col2], colWidths=[230])
+    ]], colWidths=[245, 245])
+    roadmap_split.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+
+    return [
+        Spacer(1, 8),
+        Paragraph("YOUR ACTION PLAN", ParagraphStyle("yap", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
+        Paragraph("Phase-wise Roadmap", ParagraphStyle("mk_ap_title", parent=styles["h2"], fontName="Times-Bold", fontSize=24, leading=28)),
+        Spacer(1, 12),
+        top_split,
+        Spacer(1, 12),
+        Paragraph("90-DAY ROADMAP", ParagraphStyle("90d", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8)),
+        roadmap_split
     ]
 
 
 def build_page_review(client_facts, allocation_output):
     styles = _report_styles()
-    recalc = [["Trigger", "Recalculate When"], ["Income changes", "Salary, business income, or bonus changes materially."], ["Expense shift", "Rent, school fees, lifestyle costs, or EMIs change."], ["New goal", "A major purchase, child education, or retirement target changes."], ["Life event", "Marriage, child, dependents, job loss, or relocation."], ["Portfolio move", "Large redemption, inheritance, or asset purchase."], ["Tax law", "Budget or tax-regime rules change."]]
-    schedule = [["Review", "Action"], ["Immediate", "Close protection and liquidity gaps."], ["30 days", "Set SIP and emergency fund transfers."], ["90 days", "Check execution against this plan."], ["Quarterly", "Refresh score and cash-flow numbers."], ["Annually", "Rebuild assumptions and tax plan."]]
-    contains = ["Health score", "Dimension scores", "Financial snapshot", "Protection gap", "Portfolio risk", "Debt status", "Liquidity plan", "Goal feasibility", "SIP allocation", "Tax comparison", "Action roadmap", "Review schedule"]
-    contains_rows = []
-    for idx in range(0, len(contains), 2):
-        contains_rows.append([
-            Paragraph(f"✓ {contains[idx]}", styles["body"]),
-            Paragraph(f"✓ {contains[idx + 1]}", styles["body"]) if idx + 1 < len(contains) else "",
+    
+    # Left Card
+    recalc_rows = [
+        ("Quarterly", "Every 3 months — standard review cycle"),
+        ("Income Change", "New job, salary revision, bonus, business income change"),
+        ("Expense Change", "Major new EMI, lifestyle shift, new dependent"),
+        ("Asset / Liability", "New loan, property purchase, large redemption"),
+        ("Life Event", "Marriage, child birth, death in family, retirement"),
+        ("Big Decision", "Before buying a home, taking a large loan, major investment"),
+    ]
+    recalc_data = []
+    for k, v in recalc_rows:
+        recalc_data.append([
+            Paragraph(f"<b>{k}</b>", ParagraphStyle("rk", parent=styles["table"], textColor=colors.HexColor("#A8813C"))),
+            Paragraph(v, styles["table"])
         ])
-    contains_table = Table(contains_rows, colWidths=[230, 230], hAlign="LEFT")
-    contains_table.setStyle(TableStyle([
+    recalc_table = Table(recalc_data, colWidths=[80, 140])
+    recalc_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.5, colors.HexColor("#EEEEEE")),
     ]))
-    return _page_header("10", "Review & Next Steps", "Ongoing Review") + [Spacer(1, 10), _styled_table(recalc, [120, 340]), Spacer(1, 10), _styled_table(schedule, [95, 365]), Spacer(1, 10), Paragraph("What This Report Contains", styles["h2"]), contains_table, Spacer(1, 12), Paragraph("Educational analysis tool - Not financial advice - Consult a SEBI-registered Investment Advisor", styles["small"])]
+    
+    left_items = [
+        Paragraph("WHEN TO RECALCULATE YOUR SCORE", ParagraphStyle("wt", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=12)),
+        recalc_table,
+        Spacer(1, 16),
+        Table([[Paragraph("<b>Product Note</b><br/>Consider in-app nudges: \"Did you change jobs? Time to recalculate your Meerkat score.\"", ParagraphStyle("pn", parent=styles["body"], fontSize=8))]], colWidths=[220], style=TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F1F5F9")), ("PADDING", (0, 0), (-1, -1), 12)]))
+    ]
+    left_card = Table([[item] for item in left_items], colWidths=[240])
+    left_card.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+        ("PADDING", (0, 0), (-1, -1), 16),
+    ]))
+    
+    # Right Card
+    schedule_rows = [
+        ("IMMEDIATE", "Term insurance + Emergency Fund setup", "#C0392B"),
+        ("30 DAYS", "Portfolio rebalancing + Tax regime switch + SIP setup", "#A8813C"),
+        ("90 DAYS", "Full progress review + recalculate Health Score", "#A8813C"),
+        ("QUARTERLY", "Score review + SIP check + rebalance if equity drifts >5%", "#27AE60"),
+        ("ANNUALLY", "Comprehensive plan update with advisor", "#64748B"),
+    ]
+    schedule_data = []
+    for k, v, c in schedule_rows:
+        schedule_data.append([
+            Paragraph(f"<b>{k}</b>", ParagraphStyle("sk", parent=styles["table"], textColor=colors.HexColor(c))),
+            Paragraph(v, styles["table"])
+        ])
+    schedule_table = Table(schedule_data, colWidths=[80, 140])
+    schedule_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.5, colors.HexColor("#EEEEEE")),
+    ]))
+    
+    right_items = [
+        Paragraph("REVIEW SCHEDULE", ParagraphStyle("rs", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=12)),
+        schedule_table
+    ]
+    right_card = Table([[item] for item in right_items], colWidths=[240])
+    right_card.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+        ("PADDING", (0, 0), (-1, -1), 16),
+    ]))
+    
+    top_split = Table([[left_card, Spacer(1, 1), right_card]], colWidths=[245, 10, 245])
+    top_split.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    
+    # Checklist Grid
+    checklist = [
+        "Financial Health Score across 6 dimensions", "Snapshot — Current vs Ideal with priorities",
+        "Advanced Risk Assessment + Profile at a Glance", "Protection gap (Life + Health with guidance)",
+        "Portfolio rebalancing plan", "Debt Management data (EMI ratio + benchmarks)",
+        "Liquidity & Emergency Fund full assessment", "Goal feasibility for all 5 goals + SIP column",
+        "Reality Check — cash flow vs goal requirement", "Goal-wise SIP Allocation plan",
+        "Tax optimisation + structured action table", "90-Day Roadmap + Phase-wise Action Plan"
+    ]
+    grid_data = []
+    for i in range(0, len(checklist), 2):
+        row = []
+        for j in range(2):
+            if i + j < len(checklist):
+                row.append(Paragraph(f"<font color='#27AE60'>✓</font> {checklist[i+j]}", styles["small"]))
+            else:
+                row.append("")
+        grid_data.append(row)
+        
+    grid_table = Table(grid_data, colWidths=[245, 245])
+    grid_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+        ("PADDING", (0, 0), (-1, -1), 10),
+    ]))
+
+    return [
+        Spacer(1, 16),
+        Paragraph("STAY ON TRACK", ParagraphStyle("sot", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
+        Paragraph("When to Recalculate & Review Schedule", ParagraphStyle("mk_rev_title", parent=styles["h2"], fontName="Times-Bold", fontSize=26, leading=30)),
+        Spacer(1, 24),
+        top_split,
+        Spacer(1, 32),
+        Paragraph("WHAT THIS REPORT CONTAINS", ParagraphStyle("wtrc", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=12)),
+        grid_table
+    ]
 
 
 def _meerkat_page_background(c, doc):
     c.saveState()
     c.setFillColor(MEERKAT_BG)
-    c.rect(0, 0, letter[0], letter[1], stroke=0, fill=1)
-    c.setFillColor(MEERKAT_NAVY)
-    c.setFont("Helvetica", 7)
-    c.drawRightString(letter[0] - 0.55 * inch, 0.35 * inch, f"Page {doc.page}")
+    page_w, page_h = A4
+    c.rect(0, 0, page_w, page_h, stroke=0, fill=1)
+    
+    if doc.page > 1:
+        if os.path.exists(LOGO_PATH):
+            try:
+                c.drawImage(LOGO_PATH, doc.leftMargin, page_h - 0.65 * inch, width=18, height=18, preserveAspectRatio=True, mask='auto')
+                c.setFillColor(MEERKAT_NAVY)
+                c.setFont("Times-Roman", 12)
+                c.drawString(doc.leftMargin + 24, page_h - 0.58 * inch, "M E E R K A T")
+            except Exception:
+                pass
+                
+        titles = {
+            2: "01 — Financial Snapshot",
+            3: "02 — Executive Summary",
+            4: "03 — Protection Gap",
+            5: "04 — Portfolio & Debt",
+            6: "05 — Liquidity Analysis",
+            7: "06 — Goal Feasibility",
+            8: "07 — Cash Flow & SIP Plan",
+            9: "08 — Tax Optimisation",
+            10: "09 — Action Plan",
+            11: "10 — Review & Next Steps"
+        }
+        title_str = titles.get(doc.page, "")
+        
+        c.setFillColor(MEERKAT_NAVY)
+        c.setFont("Helvetica-Bold", 10)
+        if title_str:
+            c.drawRightString(page_w - doc.rightMargin, page_h - 0.58 * inch, title_str)
+            
+        c.setFillColor(colors.HexColor("#7F8C8D"))
+        c.setFont("Helvetica", 8)
+        c.drawRightString(page_w - doc.rightMargin, page_h - 0.70 * inch, f"Page {doc.page} of 11")
+        
+        c.setFillColor(colors.HexColor("#95A5A6"))
+        c.setFont("Helvetica", 7)
+        c.drawString(doc.leftMargin, 0.4 * inch, "Educational analysis tool · Not financial advice · Consult a SEBI-registered Investment Advisor")
+        c.drawRightString(page_w - doc.rightMargin, 0.4 * inch, f"Page {doc.page} of 11")
+        
     c.restoreState()
 
 
@@ -6553,7 +7684,7 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
     client_facts = _build_client_facts(q, analysis, doc_insights)
     narratives = _strip_in_app_report_text(narratives or {})
     allocation = _allocation_output(client_facts)
-    doc = SimpleDocTemplate(output_path, pagesize=letter, rightMargin=0.65 * inch, leftMargin=0.65 * inch, topMargin=0.55 * inch, bottomMargin=0.55 * inch)
+    doc = SimpleDocTemplate(output_path, pagesize=A4, rightMargin=0.65 * inch, leftMargin=0.65 * inch, topMargin=0.85 * inch, bottomMargin=0.55 * inch)
     builders = [
         lambda: build_page_cover(client_facts, allocation, narratives),
         lambda: build_page_snapshot(client_facts, allocation),
