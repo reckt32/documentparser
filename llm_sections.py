@@ -49,14 +49,14 @@ LLM_OUTPUT_BLOCKLIST = ("in-app", "nudge", "push notification", "mobile alert")
 
 # ------------------------ Financial Assumptions (Configurable) ------------------------ #
 # These assumptions are used for SIP calculations and are displayed in reports
-ASSUMED_INFLATION_RATE = 0.06  # 6% annual inflation
+ASSUMED_INFLATION_RATE = 0.07  # 7% annual inflation (founder requested)
 ASSUMED_RETURNS = {
     "aggressive": {"annual": 0.14, "monthly": 0.011, "label": "14% p.a. (Aggressive Equity)"},
     "growth": {"annual": 0.114, "monthly": 0.009, "label": "11.4% p.a. (Growth/Balanced)"},
     "moderate": {"annual": 0.114, "monthly": 0.009, "label": "11.4% p.a. (Moderate)"},
     "conservative": {"annual": 0.074, "monthly": 0.006, "label": "7.4% p.a. (Conservative/Debt)"},
 }
-WITHDRAWAL_RATE_RETIREMENT = 0.07  # 7% safe withdrawal rate for retirement corpus
+WITHDRAWAL_RATE_RETIREMENT = 0.05  # 5% safe withdrawal rate (founder requested)
 
 
 def _ensure_dir(path: str):
@@ -344,7 +344,17 @@ def compute_goal_priority(
     return (base_score, tier)
 
 
-def compute_goal_sip(target_amount: float, horizon_years: Optional[float], final_category: Optional[str]) -> Optional[float]:
+def compute_goal_sip(
+    target_amount: float, 
+    horizon_years: Optional[float], 
+    final_category: Optional[str],
+    use_step_up: bool = False,
+    step_up_rate: float = 0.10
+) -> Optional[float]:
+    """
+    Calculate required SIP for a target. 
+    If use_step_up is True, uses geometric series formula for 10% annual increase.
+    """
     try:
         target = _coerce_float(target_amount, 0.0)
         if target <= 0:
@@ -352,6 +362,13 @@ def compute_goal_sip(target_amount: float, horizon_years: Optional[float], final
         n_years = float(horizon_years) if horizon_years not in (None, "") else None
         if n_years is None or n_years <= 0:
             return None
+            
+        if use_step_up:
+            # Import from financial_calculators to use the standardized formula
+            from financial_calculators import compute_step_up_sip
+            # Step-up SIP uses a fixed 10% return assumption as per founder's chat
+            return compute_step_up_sip(target, n_years, annual_return=0.10, step_up_rate=step_up_rate)
+            
         n = int(round(n_years * 12))
         r = _choose_monthly_rate(final_category, n_years)
         denom = (math.pow(1.0 + r, n) - 1.0)
@@ -568,6 +585,9 @@ class PriorityAllocationEngine:
         # Manual overrides (when CAS data is absent)
         manual_sip: float = 0.0,
         manual_corpus: float = 0.0,
+        # [FOUNDER LOGIC] New parameters for derived retirement target
+        expected_pension: float = 0.0,
+        monthly_expenses: float = 0.0,
     ) -> Dict[str, Any]:
         """
         Compute priority-based allocation of monthly surplus with enhanced logic.
@@ -729,10 +749,19 @@ class PriorityAllocationEngine:
         # Regular Goals with equal SIP allocation
         for g in goals:
             goal_name = g.get("name") or "Goal"
-            ideal_sip = _coerce_float(g.get("ideal_sip"), 0.0)
             risk_cat = g.get("risk_category") or "Moderate"
             horizon = g.get("horizon_years")
             target_amount = _coerce_float(g.get("target_amount"), 0.0)
+            ideal_sip = _coerce_float(g.get("ideal_sip"), 0.0)
+            
+            # [FOUNDER LOGIC] Double check retirement target derivation in engine
+            if "retirement" in goal_name.lower() and monthly_expenses > 0:
+                net_expense = max(0.0, monthly_expenses - expected_pension)
+                years = horizon if horizon and horizon > 0 else 25.0
+                inflated_monthly = net_expense * (math.pow(1.0 + ASSUMED_INFLATION_RATE, years))
+                target_amount = (inflated_monthly * 12) / WITHDRAWAL_RATE_RETIREMENT
+                # Re-calculate ideal SIP with step-up if it was derived incorrectly elsewhere
+                ideal_sip = compute_goal_sip(target_amount, years, risk_cat, use_step_up=True)
             
             allocated_sip = per_bucket_sip
             shortfall = max(0, ideal_sip - allocated_sip)
@@ -1092,6 +1121,8 @@ class GoalsStrategyRunner(SectionRunner):
         income_info = facts.get("income") or {}
         bank_info = facts.get("bank") or {}
         portfolio_info = facts.get("portfolio") or {}
+        lifestyle = facts.get("lifestyle") or {}
+        expected_pension = _coerce_float(lifestyle.get("expected_pension"), 0.0)
         
         final_cat = ((analysis.get("advancedRisk") or {}).get("finalCategory")) or analysis.get("riskProfile")
         
@@ -1143,6 +1174,16 @@ class GoalsStrategyRunner(SectionRunner):
                 hzv = float(hz) if hz not in (None, "", "N/A") else None
             except Exception:
                 hzv = None
+
+            # [FOUNDER LOGIC] Override Retirement Goal target automatically
+            if "retirement" in nm.lower():
+                # Target Corpus = (Current Monthly Expense - Expected Pension) * 12 * (1.07 ^ Years_to_Retire) / 0.05
+                net_expense = max(0.0, monthly_expenses - expected_pension)
+                years = hzv if hzv and hzv > 0 else 25.0 # default to 25 if unknown
+                inflated_monthly = net_expense * (math.pow(1.0 + ASSUMED_INFLATION_RATE, years))
+                tgt = (inflated_monthly * 12) / WITHDRAWAL_RATE_RETIREMENT
+                # Update hzv if it was None
+                if not hzv: hzv = years
             
             # Get per-goal risk settings (fall back to defaults if not specified)
             goal_risk_tolerance = g.get("risk_tolerance") or "medium"
@@ -1160,7 +1201,8 @@ class GoalsStrategyRunner(SectionRunner):
             )
             
             # Calculate ideal SIP using per-goal risk category
-            ideal_sip = compute_goal_sip(tgt, hzv, goal_risk_cat)
+            # [FOUNDER LOGIC] Use Step-Up SIP (10% annual) for all goals
+            ideal_sip = compute_goal_sip(tgt, hzv, goal_risk_cat, use_step_up=True)
             if ideal_sip:
                 total_ideal_sip += ideal_sip
             
@@ -1286,6 +1328,9 @@ class GoalsStrategyRunner(SectionRunner):
             emergency_fund_current=emergency_fund_current,
             existing_investments=existing_investments,
             existing_sip_commitments=existing_sip,  # Pass existing SIP for proper tracking
+            # [FOUNDER LOGIC] Pass expenses and pension for retirement target derivation
+            expected_pension=expected_pension,
+            monthly_expenses=monthly_expenses,
         )
         
         # --- Affordability Summary ---

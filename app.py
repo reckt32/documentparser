@@ -8460,10 +8460,67 @@ def admin_set_credits(firebase_uid):
     }), 200
 
 
+def _autosave_free_tool_to_questionnaire(user_id, data: Dict[str, Any], tool_type: str):
+    """
+    Helper to sync free tool inputs to the user's latest questionnaire lifestyle/goals sections.
+    tool_type: 'spend-right' or 'retirement'
+    """
+    try:
+        qid = get_latest_questionnaire_for_user(user_id)
+        if not qid:
+            qid = create_questionnaire(user_id)
+        
+        # Fetch current questionnaire state to merge
+        q_data = get_questionnaire(qid)
+        lifestyle = q_data.get("lifestyle") or {}
+        goals = q_data.get("goals") or {}
+        
+        if tool_type == 'spend-right':
+            lifestyle.update({
+                "annual_income": str(float(data.get("income", 0)) * 12),
+                "monthly_expenses": str(data.get("rent", 0) + data.get("basic_spends", 0) + data.get("comfort_spends", 0)),
+            })
+        elif tool_type == 'retirement':
+            lifestyle.update({
+                "monthly_expenses": str(data.get("monthly_expense", 0)),
+                "expected_pension": str(data.get("expected_pension", 0)),
+                "manual_corpus": str(data.get("existing_corpus", 0)),
+                "manual_sip": str(data.get("ongoing_sip", 0)),
+            })
+            # Also set wants_retirement_planning in goals
+            goals.update({
+                "wants_retirement_planning": True,
+                "expected_pension": str(data.get("expected_pension", 0))
+            })
+            save_goals(qid, goals)
+            
+        save_lifestyle(qid, lifestyle)
+        logger.info(f"Autosaved {tool_type} data to questionnaire {qid} for user {user_id}")
+    except Exception as e:
+        logger.error(f"Failed to autosave {tool_type} data: {e}")
+
+
+@app.route("/api/questionnaire/latest", methods=["GET"])
+@optional_auth
+def get_latest_questionnaire():
+    """Fetch the latest questionnaire for the logged-in user to pre-fill the form."""
+    user_id = g.user_id
+    if not user_id:
+        return jsonify({"error": "Authentication required"}), 401
+        
+    qid = get_latest_questionnaire_for_user(user_id)
+    if not qid:
+        return jsonify({"message": "No questionnaire found", "data": None}), 200
+        
+    data = get_questionnaire(qid)
+    return jsonify({"questionnaire_id": qid, "data": data}), 200
+
+
 # ─── Free-Tier Financial Calculator Endpoints ────────────────────────────────
 from financial_calculators import compute_spend_right, compute_retirement_gap, format_indian_compact
 
 @app.route("/api/free/spend-right", methods=["POST"])
+@optional_auth
 def free_spend_right():
     """
     Free-tier Spend Right calculator.
@@ -8493,14 +8550,19 @@ def free_spend_right():
     result["golden_number_formatted"] = format_indian_compact(result["golden_number"])
     result["surplus_formatted"] = format_indian_compact(result["surplus"])
 
+    # Autosave if user is logged in
+    if g.user_id:
+        _autosave_free_tool_to_questionnaire(g.user_id, data, 'spend-right')
+
     return jsonify(result), 200
 
 
 @app.route("/api/free/retirement-calc", methods=["POST"])
+@optional_auth
 def free_retirement_calc():
     """
     Free-tier Retirement Gap calculator.
-    Accepts: {monthly_expense, years_to_retire, existing_corpus?, ongoing_sip?}
+    Accepts: {monthly_expense, years_to_retire, existing_corpus?, ongoing_sip?, expected_pension?}
     Returns: Target corpus, FV of existing, FV of SIP, gap, required step-up SIP.
     No authentication required.
     """
@@ -8517,6 +8579,7 @@ def free_retirement_calc():
         years_to_retire = float(data["years_to_retire"])
         existing_corpus = float(data.get("existing_corpus", 0))
         ongoing_sip = float(data.get("ongoing_sip", 0))
+        expected_pension = float(data.get("expected_pension", 0))
     except (ValueError, TypeError) as e:
         return jsonify({"error": f"All values must be numeric: {e}"}), 400
 
@@ -8530,6 +8593,7 @@ def free_retirement_calc():
         years_to_retire=years_to_retire,
         existing_corpus=existing_corpus,
         ongoing_sip=ongoing_sip,
+        expected_pension=expected_pension,
     )
 
     # Add formatted values for display convenience
@@ -8538,6 +8602,10 @@ def free_retirement_calc():
     result["fv_sip_formatted"] = format_indian_compact(result["fv_ongoing_sip"])
     result["gap_formatted"] = format_indian_compact(result["gap"])
     result["required_sip_formatted"] = format_indian_compact(result["required_step_up_sip"])
+
+    # Autosave if user is logged in
+    if g.user_id:
+        _autosave_free_tool_to_questionnaire(g.user_id, data, 'retirement')
 
     return jsonify(result), 200
 

@@ -166,6 +166,7 @@ def compute_retirement_gap(
     years_to_retire: float,
     existing_corpus: float = 0.0,
     ongoing_sip: float = 0.0,
+    expected_pension: float = 0.0,
     inflation: float = DEFAULT_INFLATION_RATE,
     annual_return: float = DEFAULT_ANNUAL_RETURN,
     withdrawal_rate: float = DEFAULT_WITHDRAWAL_RATE,
@@ -174,7 +175,8 @@ def compute_retirement_gap(
     Compute the retirement corpus gap analysis.
 
     Formulas:
-        Target Corpus = (monthly_expense * (1 + inflation)^years * 12) / withdrawal_rate
+        Net Monthly Expense = max(0, monthly_expense - expected_pension)
+        Target Corpus = (Net Monthly Expense * (1 + inflation)^years * 12) / withdrawal_rate
         FV of Existing Corpus = existing_corpus * (1 + annual_return)^years
         FV of Ongoing SIP = ongoing_sip * [((1 + r_monthly)^(years*12) - 1) / r_monthly]
         Gap = max(0, Target Corpus - FV_existing - FV_sip)
@@ -185,6 +187,7 @@ def compute_retirement_gap(
         years_to_retire: Number of years until retirement.
         existing_corpus: Current investment corpus value.
         ongoing_sip: Current monthly SIP amount.
+        expected_pension: Expected monthly pension (policy, govt, NPS).
         inflation: Annual inflation rate (decimal).
         annual_return: Expected annual return rate (decimal).
         withdrawal_rate: Safe annual withdrawal rate in retirement (decimal).
@@ -203,8 +206,9 @@ def compute_retirement_gap(
             "error": "Monthly expense and years to retire must be positive.",
         }
 
-    # 1. Target Corpus
-    inflated_monthly = monthly_expense * ((1 + inflation) ** years_to_retire)
+    # 1. Target Corpus (Net of Pension)
+    net_monthly_expense = max(0.0, monthly_expense - expected_pension)
+    inflated_monthly = net_monthly_expense * ((1 + inflation) ** years_to_retire)
     target_corpus = (inflated_monthly * 12) / withdrawal_rate
 
     # 2. FV of Existing Corpus (lump-sum compounding)
@@ -238,6 +242,7 @@ def compute_retirement_gap(
         "fv_ongoing_sip": round(fv_sip, 2),
         "gap": round(gap, 2),
         "required_step_up_sip": round(required_sip, 2) if required_sip else 0,
+        "net_monthly_expense": round(net_monthly_expense, 2),
         "assumptions": {
             "inflation_pct": round(inflation * 100, 1),
             "return_pct": round(annual_return * 100, 1),
