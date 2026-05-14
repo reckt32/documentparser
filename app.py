@@ -3068,6 +3068,9 @@ def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
             "allocation": lifestyle.get("allocation") or {},
         },
         "emergencyFundAmount": lifestyle.get("emergency_fund"),
+        # Manual overrides (used when CAS data is absent)
+        "manual_sip": lifestyle.get("manual_sip"),
+        "manual_corpus": lifestyle.get("manual_corpus"),
     }
 
     # Merge document-derived signals if questionnaire fields are missing
@@ -8455,6 +8458,88 @@ def admin_set_credits(firebase_uid):
         "message": f"Credits {'added' if mode == 'add' else 'set'} successfully",
         "report_credits": updated_user.get("report_credits", 0),
     }), 200
+
+
+# ─── Free-Tier Financial Calculator Endpoints ────────────────────────────────
+from financial_calculators import compute_spend_right, compute_retirement_gap, format_indian_compact
+
+@app.route("/api/free/spend-right", methods=["POST"])
+def free_spend_right():
+    """
+    Free-tier Spend Right calculator.
+    Accepts: {income, rent, basic_spends, comfort_spends} (all monthly, in Rs.)
+    Returns: Golden Number, surplus %, and Status Badge.
+    No authentication required.
+    """
+    data = request.get_json(force=True) or {}
+
+    # Validate required fields
+    required = ["income", "rent", "basic_spends", "comfort_spends"]
+    missing = [f for f in required if f not in data]
+    if missing:
+        return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
+
+    try:
+        income = float(data["income"])
+        rent = float(data["rent"])
+        basic_spends = float(data["basic_spends"])
+        comfort_spends = float(data["comfort_spends"])
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": f"All values must be numeric: {e}"}), 400
+
+    result = compute_spend_right(income, rent, basic_spends, comfort_spends)
+
+    # Add formatted values for display convenience
+    result["golden_number_formatted"] = format_indian_compact(result["golden_number"])
+    result["surplus_formatted"] = format_indian_compact(result["surplus"])
+
+    return jsonify(result), 200
+
+
+@app.route("/api/free/retirement-calc", methods=["POST"])
+def free_retirement_calc():
+    """
+    Free-tier Retirement Gap calculator.
+    Accepts: {monthly_expense, years_to_retire, existing_corpus?, ongoing_sip?}
+    Returns: Target corpus, FV of existing, FV of SIP, gap, required step-up SIP.
+    No authentication required.
+    """
+    data = request.get_json(force=True) or {}
+
+    # Validate required fields
+    required = ["monthly_expense", "years_to_retire"]
+    missing = [f for f in required if f not in data]
+    if missing:
+        return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
+
+    try:
+        monthly_expense = float(data["monthly_expense"])
+        years_to_retire = float(data["years_to_retire"])
+        existing_corpus = float(data.get("existing_corpus", 0))
+        ongoing_sip = float(data.get("ongoing_sip", 0))
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": f"All values must be numeric: {e}"}), 400
+
+    if monthly_expense <= 0:
+        return jsonify({"error": "Monthly expense must be greater than zero."}), 400
+    if years_to_retire <= 0 or years_to_retire > 60:
+        return jsonify({"error": "Years to retire must be between 1 and 60."}), 400
+
+    result = compute_retirement_gap(
+        monthly_expense=monthly_expense,
+        years_to_retire=years_to_retire,
+        existing_corpus=existing_corpus,
+        ongoing_sip=ongoing_sip,
+    )
+
+    # Add formatted values for display convenience
+    result["target_corpus_formatted"] = format_indian_compact(result["target_corpus"])
+    result["fv_existing_formatted"] = format_indian_compact(result["fv_existing_corpus"])
+    result["fv_sip_formatted"] = format_indian_compact(result["fv_ongoing_sip"])
+    result["gap_formatted"] = format_indian_compact(result["gap"])
+    result["required_sip_formatted"] = format_indian_compact(result["required_step_up_sip"])
+
+    return jsonify(result), 200
 
 
 if __name__ == '__main__':

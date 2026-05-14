@@ -565,6 +565,9 @@ class PriorityAllocationEngine:
         emergency_fund_current: float = 0.0,
         existing_investments: float = 0.0,
         existing_sip_commitments: float = 0.0,  # Already running SIP (counts towards total investing)
+        # Manual overrides (when CAS data is absent)
+        manual_sip: float = 0.0,
+        manual_corpus: float = 0.0,
     ) -> Dict[str, Any]:
         """
         Compute priority-based allocation of monthly surplus with enhanced logic.
@@ -591,10 +594,18 @@ class PriorityAllocationEngine:
             emergency_fund_current: Current emergency fund amount (NEW)
             existing_investments: Total current investment value that can be allocated to goals (NEW)
             existing_sip_commitments: Already running SIPs that count towards total investing (NEW)
+            manual_sip: User-entered monthly SIP when CAS is unavailable (NEW - manual override)
+            manual_corpus: User-entered total corpus when CAS is unavailable (NEW - manual override)
         
         Returns:
             Dict with priority breakdown, per-goal table, achievement %, and bridge recommendations
         """
+        # --- Manual override fallback: use manual values when CAS data is absent ---
+        if existing_sip_commitments == 0 and manual_sip > 0:
+            existing_sip_commitments = manual_sip
+        if existing_investments == 0 and manual_corpus > 0:
+            existing_investments = manual_corpus
+
         priority_items = []
         
         # --- Step 1: Handle insurance with tickmark logic ---
