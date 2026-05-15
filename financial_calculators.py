@@ -92,6 +92,101 @@ def compute_spend_right(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Golden Number Calculator (4-Question Version)
+# ──────────────────────────────────────────────────────────────────────────────
+
+GOLDEN_NUMBER_WANTS_PCT = 0.38  # Wants should be ~38% of ideal income
+GADGET_AMORTIZATION_MONTHS = 36  # 3-year replacement cycle
+
+def compute_golden_number(
+    annual_clothing: float,
+    annual_travel: float,
+    monthly_lifestyle: float,
+    total_gadget_value: float,
+    actual_income: float = 0.0,
+) -> Dict[str, Any]:
+    """
+    Compute the Golden Number (ideal monthly take-home income) from 4 spending inputs.
+
+    The methodology: users tell us how much they SPEND on wants/lifestyle across
+    4 categories. We convert everything to monthly equivalents, sum them up, and
+    reverse-engineer the ideal income at which these wants would represent 38% of
+    income.
+
+    Formula:
+        clothing_monthly  = annual_clothing / 12
+        travel_monthly    = annual_travel / 12
+        lifestyle_monthly = monthly_lifestyle  (already monthly)
+        gadgets_monthly   = total_gadget_value / 36  (3-year amortization)
+        total_monthly_wants = sum of above
+        golden_number = round(total_monthly_wants / 0.38, -3)  # nearest ₹1,000
+
+    If actual_income is provided (> 0), also computes:
+        surplus_deficit = actual_income - total_monthly_wants
+        status:
+            actual >= golden_number        → "GOLDEN SPENDER"
+            actual >= 80% golden_number    → "ON TRACK"
+            actual <  80% golden_number    → "ADVENTURE SPENDER"
+
+    Args:
+        annual_clothing: Annual spend on clothing (jeans, T-shirts, shoes, blazer).
+        annual_travel: Annual travel / vacation cost.
+        monthly_lifestyle: Monthly lifestyle spend (entertainment, Netflix, dining, parties).
+        total_gadget_value: Total current gadget value (phone + laptop + headphones).
+        actual_income: Optional actual monthly take-home income for status check.
+
+    Returns:
+        Dict with golden_number, total_monthly_wants, category breakdown,
+        and optional status/surplus info if actual_income provided.
+    """
+    # Monthly equivalents
+    clothing_monthly = annual_clothing / 12.0 if annual_clothing > 0 else 0.0
+    travel_monthly = annual_travel / 12.0 if annual_travel > 0 else 0.0
+    lifestyle_monthly = max(0.0, monthly_lifestyle)
+    gadgets_monthly = total_gadget_value / GADGET_AMORTIZATION_MONTHS if total_gadget_value > 0 else 0.0
+
+    total_monthly_wants = clothing_monthly + travel_monthly + lifestyle_monthly + gadgets_monthly
+
+    # Golden Number: ideal income where wants = 38%
+    if total_monthly_wants > 0:
+        raw_golden = total_monthly_wants / GOLDEN_NUMBER_WANTS_PCT
+        golden_number = round(raw_golden / 1000) * 1000  # round to nearest ₹1,000
+    else:
+        golden_number = 0
+
+    result = {
+        "golden_number": golden_number,
+        "total_monthly_wants": round(total_monthly_wants, 2),
+        "breakdown": {
+            "clothing_monthly": round(clothing_monthly, 2),
+            "travel_monthly": round(travel_monthly, 2),
+            "lifestyle_monthly": round(lifestyle_monthly, 2),
+            "gadgets_monthly": round(gadgets_monthly, 2),
+        },
+        "methodology": {
+            "wants_pct_assumed": round(GOLDEN_NUMBER_WANTS_PCT * 100, 1),
+            "gadget_amortization_years": GADGET_AMORTIZATION_MONTHS // 12,
+        },
+    }
+
+    # Optional: status classification if actual income provided
+    if actual_income > 0 and golden_number > 0:
+        surplus_deficit = actual_income - total_monthly_wants
+        if actual_income >= golden_number:
+            status = "GOLDEN SPENDER"
+        elif actual_income >= golden_number * 0.8:
+            status = "ON TRACK"
+        else:
+            status = "ADVENTURE SPENDER"
+
+        result["actual_income"] = actual_income
+        result["surplus_deficit"] = round(surplus_deficit, 2)
+        result["status"] = status
+
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Step-Up SIP Formula
 # ──────────────────────────────────────────────────────────────────────────────
 

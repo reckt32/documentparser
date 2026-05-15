@@ -8480,6 +8480,21 @@ def _autosave_free_tool_to_questionnaire(user_id, data: Dict[str, Any], tool_typ
                 "annual_income": str(float(data.get("income", 0)) * 12),
                 "monthly_expenses": str(data.get("rent", 0) + data.get("basic_spends", 0) + data.get("comfort_spends", 0)),
             })
+        elif tool_type == 'golden-number':
+            # New 4-question Golden Number format
+            from financial_calculators import compute_golden_number
+            result = compute_golden_number(
+                annual_clothing=float(data.get("annual_clothing", 0)),
+                annual_travel=float(data.get("annual_travel", 0)),
+                monthly_lifestyle=float(data.get("monthly_lifestyle", 0)),
+                total_gadget_value=float(data.get("total_gadget_value", 0)),
+            )
+            lifestyle.update({
+                "recommended_monthly_income": str(result["golden_number"]),
+                "monthly_expenses": str(result["total_monthly_wants"]),
+            })
+            if data.get("actual_income"):
+                lifestyle["annual_income"] = str(float(data["actual_income"]) * 12)
         elif tool_type == 'retirement':
             lifestyle.update({
                 "monthly_expenses": str(data.get("monthly_expense", 0)),
@@ -8504,7 +8519,7 @@ def _autosave_free_tool_to_questionnaire(user_id, data: Dict[str, Any], tool_typ
 @optional_auth
 def get_latest_questionnaire():
     """Fetch the latest questionnaire for the logged-in user to pre-fill the form."""
-    user_id = g.user_id
+    user_id = getattr(g, 'user_id', None)
     if not user_id:
         return jsonify({"error": "Authentication required"}), 401
         
@@ -8517,42 +8532,74 @@ def get_latest_questionnaire():
 
 
 # ─── Free-Tier Financial Calculator Endpoints ────────────────────────────────
-from financial_calculators import compute_spend_right, compute_retirement_gap, format_indian_compact
+from financial_calculators import compute_spend_right, compute_golden_number, compute_retirement_gap, format_indian_compact
 
 @app.route("/api/free/spend-right", methods=["POST"])
 @optional_auth
 def free_spend_right():
     """
-    Free-tier Spend Right calculator.
-    Accepts: {income, rent, basic_spends, comfort_spends} (all monthly, in Rs.)
-    Returns: Golden Number, surplus %, and Status Badge.
-    No authentication required.
+    Free-tier Golden Number calculator (4-question version).
+    Accepts: {annual_clothing, annual_travel, monthly_lifestyle, total_gadget_value, actual_income?}
+    Returns: Golden Number (ideal monthly income), monthly wants breakdown, and optional status badge.
+
+    Backward compatible: if old fields (income, rent, basic_spends, comfort_spends) are sent,
+    routes to the legacy compute_spend_right function.
     """
     data = request.get_json(force=True) or {}
 
-    # Validate required fields
-    required = ["income", "rent", "basic_spends", "comfort_spends"]
-    missing = [f for f in required if f not in data]
+    # ── Backward compatibility: detect old-format request ──
+    old_fields = ["income", "rent", "basic_spends", "comfort_spends"]
+    if all(f in data for f in old_fields):
+        try:
+            income = float(data["income"])
+            rent = float(data["rent"])
+            basic_spends = float(data["basic_spends"])
+            comfort_spends = float(data["comfort_spends"])
+        except (ValueError, TypeError) as e:
+            return jsonify({"error": f"All values must be numeric: {e}"}), 400
+
+        result = compute_spend_right(income, rent, basic_spends, comfort_spends)
+        result["golden_number_formatted"] = format_indian_compact(result["golden_number"])
+        result["surplus_formatted"] = format_indian_compact(result["surplus"])
+
+        user_id = getattr(g, 'user_id', None)
+        if user_id:
+            _autosave_free_tool_to_questionnaire(user_id, data, 'spend-right')
+        return jsonify(result), 200
+
+    # ── New 4-question Golden Number format ──
+    new_required = ["annual_clothing", "annual_travel", "monthly_lifestyle", "total_gadget_value"]
+    missing = [f for f in new_required if f not in data]
     if missing:
         return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
 
     try:
-        income = float(data["income"])
-        rent = float(data["rent"])
-        basic_spends = float(data["basic_spends"])
-        comfort_spends = float(data["comfort_spends"])
+        annual_clothing = float(data["annual_clothing"])
+        annual_travel = float(data["annual_travel"])
+        monthly_lifestyle = float(data["monthly_lifestyle"])
+        total_gadget_value = float(data["total_gadget_value"])
+        actual_income = float(data.get("actual_income", 0))
     except (ValueError, TypeError) as e:
         return jsonify({"error": f"All values must be numeric: {e}"}), 400
 
-    result = compute_spend_right(income, rent, basic_spends, comfort_spends)
+    result = compute_golden_number(
+        annual_clothing=annual_clothing,
+        annual_travel=annual_travel,
+        monthly_lifestyle=monthly_lifestyle,
+        total_gadget_value=total_gadget_value,
+        actual_income=actual_income,
+    )
 
     # Add formatted values for display convenience
     result["golden_number_formatted"] = format_indian_compact(result["golden_number"])
-    result["surplus_formatted"] = format_indian_compact(result["surplus"])
+    result["total_wants_formatted"] = format_indian_compact(result["total_monthly_wants"])
+    if "surplus_deficit" in result:
+        result["surplus_deficit_formatted"] = format_indian_compact(result["surplus_deficit"])
 
     # Autosave if user is logged in
-    if g.user_id:
-        _autosave_free_tool_to_questionnaire(g.user_id, data, 'spend-right')
+    user_id = getattr(g, 'user_id', None)
+    if user_id:
+        _autosave_free_tool_to_questionnaire(user_id, data, 'golden-number')
 
     return jsonify(result), 200
 
@@ -8604,8 +8651,9 @@ def free_retirement_calc():
     result["required_sip_formatted"] = format_indian_compact(result["required_step_up_sip"])
 
     # Autosave if user is logged in
-    if g.user_id:
-        _autosave_free_tool_to_questionnaire(g.user_id, data, 'retirement')
+    user_id = getattr(g, 'user_id', None)
+    if user_id:
+        _autosave_free_tool_to_questionnaire(user_id, data, 'retirement')
 
     return jsonify(result), 200
 

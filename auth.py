@@ -148,6 +148,7 @@ def require_auth(f):
         # Store user in Flask's g context for use in route handlers
         g.current_user = user
         g.firebase_token = decoded
+        g.user_id = firebase_uid
 
         return f(*args, **kwargs)
     return decorated_function
@@ -250,6 +251,7 @@ def optional_auth(f):
                 if user:
                     g.current_user = user
                     g.firebase_token = decoded
+                    g.user_id = firebase_uid
 
         return f(*args, **kwargs)
     return decorated_function
