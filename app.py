@@ -2976,6 +2976,21 @@ def _validate_risk_payload(payload: dict):
             errs.append(f"{k}:invalid_value")
     return errs
 
+def _validate_personal_info_payload(payload: dict):
+    errs = []
+    if not isinstance(payload, dict):
+        return ["invalid_payload_type"]
+    
+    pan = payload.get("pan")
+    if not pan:
+        errs.append("pan:mandatory")
+    else:
+        pan = str(pan).strip().upper()
+        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', pan):
+            errs.append("pan:invalid_format")
+            
+    return errs
+
 @app.route("/questionnaire/start", methods=["POST"])
 def questionnaire_start():
     data = request.get_json(force=True) or {}
@@ -2994,6 +3009,10 @@ def questionnaire_save_section(qid: int, section: str):
     if section == "risk_profile":
         payload = _normalize_risk_payload(payload)
         errors = _validate_risk_payload(payload)
+        if errors:
+            return jsonify({"error": "validation_failed", "fields": errors}), 400
+    elif section == "personal_info":
+        errors = _validate_personal_info_payload(payload)
         if errors:
             return jsonify({"error": "validation_failed", "fields": errors}), 400
 
