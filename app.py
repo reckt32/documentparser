@@ -17,6 +17,7 @@ from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from datetime import datetime
+from typing import Any, Dict
 from reportlab.pdfgen import canvas
 from extractors import index_and_extract, extract_and_store_from_indexed
 from llm_sections import run_report_sections, compute_goal_sip, compute_regime_comparison, PriorityAllocationEngine
@@ -3160,7 +3161,7 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     lifestyle = q.get("lifestyle") or {}
     insurance = q.get("insurance") or {}
     goals_data = q.get("goals") or {}
-    goals = goals_data.get("items") or []
+    goals = goals_data.get("items") if isinstance(goals_data.get("items"), list) else []
 
     # Calculate dependents - children automatically count as financial dependents
     children = family.get("children") or []
@@ -3244,6 +3245,13 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
         "savings": {
             "savingsPercent": lifestyle.get("savings_percent"),
         },
+        "lifestyle": {
+            "expected_pension": lifestyle.get("expected_pension"),
+            "manual_sip": lifestyle.get("manual_sip"),
+            "manual_corpus": lifestyle.get("manual_corpus"),
+            "emergency_fund": lifestyle.get("emergency_fund"),
+            "available_savings": lifestyle.get("available_savings"),
+        },
         "goals": [
             {
                 "name": (g.get("name") or g.get("goal")),
@@ -3255,6 +3263,7 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
                 "behavior": g.get("behavior", "hold"),
             }
             for g in goals
+            if isinstance(g, dict)
         ],
         "bank": {
             "total_inflows": bank.get("total_inflows"),
@@ -5853,6 +5862,36 @@ def _num(value, default=0.0):
     return _safe_float(value, default)
 
 
+def _as_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value):
+    return value if isinstance(value, list) else []
+
+
+def _score_value(value, default=0.0):
+    if isinstance(value, dict):
+        return _num(value.get("score"), default)
+    return _num(value, default)
+
+
+def _ihs_breakdown(analysis):
+    ihs = _as_dict(_as_dict(analysis).get("ihs"))
+    return _as_dict(ihs.get("breakdown"))
+
+
+def _ihs_component_score(analysis, key, default=0.0):
+    return _score_value(_ihs_breakdown(analysis).get(key), default)
+
+
+def _recommended_equity_band(advanced_risk):
+    band = _as_dict(advanced_risk).get("recommendedEquityBand")
+    if isinstance(band, dict):
+        return _num(band.get("min"), 40), _num(band.get("max"), 60)
+    return 40, 60
+
+
 def _safe_canvas_arc(canvas_obj, x1, y1, x2, y2, start_ang, extent, min_extent=1e-6):
     """Draw arc only when geometry and extent are valid to avoid ReportLab runtime failures."""
     try:
@@ -5886,19 +5925,19 @@ def _display_monthly_surplus(client_facts):
 
 
 def _recommended_band_text(advanced_risk):
-    band = (advanced_risk or {}).get("recommendedEquityBand") or {}
+    band = _as_dict(advanced_risk).get("recommendedEquityBand") or {}
     if isinstance(band, dict):
-        return f"{_num(band.get('min'), 40):.0f}-{_num(band.get('max'), 60):.0f}%"
+        b_min, b_max = _recommended_equity_band(advanced_risk)
+        return f"{b_min:.0f}-{b_max:.0f}%"
     return str(band or "40-60%")
 
 
 def _recommended_band_mid(advanced_risk):
-    if (advanced_risk or {}).get("recommendedEquityMid") is not None:
+    advanced_risk = _as_dict(advanced_risk)
+    if advanced_risk.get("recommendedEquityMid") is not None:
         return _num(advanced_risk.get("recommendedEquityMid"), 50)
-    band = (advanced_risk or {}).get("recommendedEquityBand") or {}
-    if isinstance(band, dict):
-        return (_num(band.get("min"), 40) + _num(band.get("max"), 60)) / 2
-    return 50
+    b_min, b_max = _recommended_equity_band(advanced_risk)
+    return (b_min + b_max) / 2
 
 
 def _urgency(score):
@@ -6269,6 +6308,7 @@ def _llm_paragraph(narratives, key):
 
 def _allocation_output(client_facts):
     analysis = client_facts.get("analysis") or {}
+    advanced_risk = _as_dict(analysis.get("advancedRisk"))
     income = client_facts.get("income") or {}
     insurance = client_facts.get("insurance") or {}
     personal = client_facts.get("personal") or {}
@@ -6280,8 +6320,9 @@ def _allocation_output(client_facts):
     current_health = _num(insurance.get("healthCover"), 0)
     recommended_health = 1500000 if _num(personal.get("dependents_count"), 0) > 0 else 1000000
     goals = []
-    for g in client_facts.get("goals") or []:
-        ideal = compute_goal_sip(g.get("target_amount"), g.get("horizon_years"), g.get("risk_tolerance") or (analysis.get("advancedRisk") or {}).get("finalCategory") or "moderate") or 0
+    for g in _as_list(client_facts.get("goals")):
+        g = _as_dict(g)
+        ideal = compute_goal_sip(g.get("target_amount"), g.get("horizon_years"), g.get("risk_tolerance") or advanced_risk.get("finalCategory") or "moderate") or 0
         goals.append({
             "name": g.get("name") or "Goal",
             "target_amount": _num(g.get("target_amount"), 0),
@@ -6299,6 +6340,10 @@ def _allocation_output(client_facts):
             has_dependents=_num(personal.get("dependents_count"), 0) > 0,
             emergency_fund_target=_num(income.get("monthlyExpenses"), 0) * 6,
             existing_sip_commitments=_num(portfolio.get("total_monthly_sip") or portfolio.get("monthly_sip"), 0),
+            manual_sip=_num((client_facts.get("lifestyle") or {}).get("manual_sip"), 0),
+            manual_corpus=_num((client_facts.get("lifestyle") or {}).get("manual_corpus"), 0),
+            expected_pension=_num((client_facts.get("lifestyle") or {}).get("expected_pension"), 0),
+            monthly_expenses=_num(income.get("monthlyExpenses"), 0),
         )
     except Exception:
         out = {}
@@ -6334,9 +6379,9 @@ def build_page_cover(client_facts, allocation_output, narratives=None):
     styles = _report_styles()
     analysis = client_facts.get("analysis") or {}
     ihs = analysis.get("ihs") or {}
-    breakdown = ihs.get("breakdown") or {}
+    breakdown = _ihs_breakdown(analysis)
     name = (client_facts.get("personal") or {}).get("name") or "Client"
-    alerts = sorted(breakdown.items(), key=lambda kv: _num((kv[1] or {}).get("score"), 0))[:3]
+    alerts = sorted(breakdown.items(), key=lambda kv: _score_value(kv[1], 0))[:3]
     story = []
     top = []
     if os.path.exists(LOGO_PATH):
@@ -6427,7 +6472,7 @@ def build_page_snapshot(client_facts, allocation_output):
     bank = client_facts.get("bank") or {}
     portfolio = client_facts.get("portfolio") or {}
     diag = analysis.get("_diagnostics") or {}
-    ar = analysis.get("advancedRisk") or {}
+    ar = _as_dict(analysis.get("advancedRisk"))
     expenses = _num(income.get("monthlyExpenses"), 0)
     monthly_surplus = _display_monthly_surplus(client_facts)
     ef_target = expenses * 6
@@ -6445,7 +6490,7 @@ def build_page_snapshot(client_facts, allocation_output):
 
     rows = [["AREA", "CURRENT", "IDEAL", "PRIORITY"]]
     rows += [
-        ["Life Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("lifeCover"))), red), ctext(kpi_fmt(_fmt_rs(diag.get("requiredLifeCover"))), green), _tag(_urgency(((analysis.get("ihs") or {}).get("breakdown") or {}).get("protection", {}).get("score")))],
+        ["Life Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("lifeCover"))), red), ctext(kpi_fmt(_fmt_rs(diag.get("requiredLifeCover"))), green), _tag(_urgency(_ihs_component_score(analysis, "protection")))],
         ["Health Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("healthCover"))), orange), ctext("Rs.10-15L", green), _tag(analysis.get("insuranceGap") or "-")],
         ["Emergency Fund", ctext(f"{_num(diag.get('liquidityMonths'), 0):.1f} months", blue), ctext(f"6 months expenses ({kpi_fmt(_fmt_rs(ef_target))})", green), _tag(analysis.get("liquidity") or "-")],
         ["Equity Allocation", ctext(f"{_portfolio_equity(portfolio):.0f}%", red), ctext(_recommended_band_text(ar), green), _tag("HIGH")],
@@ -6541,7 +6586,8 @@ def build_page_snapshot(client_facts, allocation_output):
 
 def build_page_executive_summary(client_facts, allocation_output, narratives=None):
     styles = _report_styles()
-    breakdown = (((client_facts.get("analysis") or {}).get("ihs") or {}).get("breakdown") or {})
+    analysis = client_facts.get("analysis") or {}
+    breakdown = _ihs_breakdown(analysis)
     why = {
         "portfolio_health": "Equity allocation far outside your risk band",
         "goal_readiness": "SIP shortfall across all financial goals",
@@ -6560,8 +6606,7 @@ def build_page_executive_summary(client_facts, allocation_output, narratives=Non
     ]
     scored = []
     for key, label in canonical:
-        item = breakdown.get(key) or {}
-        scored.append((key, label, _num(item.get("score"), 0)))
+        scored.append((key, label, _score_value(breakdown.get(key), 0)))
     dimension_rows = []
     for _, label, score in sorted(scored, key=lambda item: item[2]):
         dimension_rows.append((label, _num(score, 0), _urgency(score)))
@@ -6622,7 +6667,7 @@ def build_page_protection(client_facts, allocation_output):
     gap = max(0, required_life - current_life)
     coverage_pct = (current_life / required_life * 100) if required_life > 0 else 100
 
-    life_status = _urgency((((analysis.get("ihs") or {}).get("breakdown") or {}).get("protection") or {}).get("score"))
+    life_status = _urgency(_ihs_component_score(analysis, "protection"))
     health_tag = "UPGRADE RECOMMENDED"
     est_premium = _num(allocation_output.get("insurance_provision"), 0)
     life_gap_pct = (gap / required_life * 100) if required_life > 0 else 0
@@ -6769,14 +6814,13 @@ def build_page_portfolio_debt(client_facts, allocation_output):
     portfolio = client_facts.get("portfolio") or {}
     income = client_facts.get("income") or {}
     diag = analysis.get("_diagnostics") or {}
-    ar = analysis.get("advancedRisk") or {}
-    debt_score = (((analysis.get("ihs") or {}).get("breakdown") or {}).get("debt_management") or {}).get("score")
+    ar = _as_dict(analysis.get("advancedRisk"))
+    debt_score = _ihs_component_score(analysis, "debt_management")
     emi_pct = _num(diag.get("emiPct"), 0)
     
     current_eq = _portfolio_equity(portfolio)
     target_eq = _recommended_band_mid(ar)
-    b_min = _num((ar.get("recommendedEquityBand") or {}).get("min"), 40)
-    b_max = _num((ar.get("recommendedEquityBand") or {}).get("max"), 60)
+    b_min, b_max = _recommended_equity_band(ar)
     
     current_color = "#C0392B" if (current_eq < b_min or current_eq > b_max) else "#27AE60"
     target_color = "#27AE60"
@@ -6915,7 +6959,7 @@ def build_page_liquidity(client_facts, allocation_output):
     diag = analysis.get("_diagnostics") or {}
     expenses = _num(income.get("monthlyExpenses"), 0)
     target = expenses * 6
-    score = (((analysis.get("ihs") or {}).get("breakdown") or {}).get("liquidity") or {}).get("score")
+    score = _ihs_component_score(analysis, "liquidity")
     
     # Left Card: Parameters
     params = [
@@ -7054,11 +7098,13 @@ def build_page_liquidity(client_facts, allocation_output):
 def build_page_goal_feasibility(client_facts, allocation_output):
     styles = _report_styles()
     
-    total_goals = max(1, len(allocation_output.get("goal_sip_table") or []))
+    goal_sip_rows = _as_list(allocation_output.get("goal_sip_table"))
+    total_goals = max(1, len(goal_sip_rows))
     total_shortfall = _num(allocation_output.get("combined_shortfall"), 0)
     
     cards = []
-    for g in allocation_output.get("goal_sip_table") or []:
+    for g in goal_sip_rows:
+        g = _as_dict(g)
         name = g.get("name") or "Goal"
         target_val = _num(g.get("target_amount"), 0)
         horizon = f"{g.get('horizon_years') or '-'} yrs"
@@ -7296,7 +7342,8 @@ def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
         Paragraph("MONTHLY GAP", styles["table_head_dark"]), 
         Paragraph("STATUS", styles["table_head_dark"])
     ]]
-    for g in allocation_output.get("goal_sip_table") or []:
+    for g in _as_list(allocation_output.get("goal_sip_table")):
+        g = _as_dict(g)
         shortfall = _num(g.get("shortfall"), 0)
         status_label = "Funded" if shortfall <= 0 else "Partial"
         if _num(g.get("allocated_sip"), 0) <= 0 and shortfall > 0:
@@ -7355,9 +7402,10 @@ def build_page_tax(client_facts, allocation_output):
     styles = _report_styles()
     itr = client_facts.get("itr") or {}
     gross = _num(itr.get("gross_total_income") or (client_facts.get("income") or {}).get("annualIncome"), 0)
-    deductions = itr.get("deductions_claimed") or []
+    deductions = _as_list(itr.get("deductions_claimed"))
     claimed = {"80C": 0, "80D": 0, "80CCD_1B": 0}
     for d in deductions:
+        d = _as_dict(d)
         sec = str(d.get("section") or "").upper()
         amt = _num(d.get("amount"), 0)
         if "80CCD" in sec or "NPS" in sec:
@@ -7469,9 +7517,10 @@ def build_page_action_plan(client_facts, allocation_output):
         Paragraph("Secure your family before deploying capital into goals.", ParagraphStyle("p1b", parent=styles["body"], fontSize=9, textColor=colors.HexColor("#64748B"), spaceAfter=12)),
     ]
     
-    for p in (allocation_output.get("priority_breakdown") or []):
+    for p in _as_list(allocation_output.get("priority_breakdown")):
+        p = _as_dict(p)
         if "Insurance" in p.get("name", ""):
-            p1_items.append(Paragraph(f"→ {p['name']}: <b>{_fmt_rs(p['monthly_amount'], False)}/month</b>", styles["body"]))
+            p1_items.append(Paragraph(f"→ {p.get('name')}: <b>{_fmt_rs(p.get('monthly_amount'), False)}/month</b>", styles["body"]))
             
     p1_items.append(Spacer(1, 12))
     p1_items.append(Paragraph(f"→ Surplus after insurance: <b>{_fmt_rs(surplus_after_ins, False)}/month</b> available for goals", styles["body"]))
@@ -7498,7 +7547,8 @@ def build_page_action_plan(client_facts, allocation_output):
         Paragraph("ALLOC", styles["table_head_dark"]), 
         Paragraph("REQ", styles["table_head_dark"])
     ]]
-    for g in (allocation_output.get("goal_sip_table") or [])[:5]:
+    for g in _as_list(allocation_output.get("goal_sip_table"))[:5]:
+        g = _as_dict(g)
         p2_rows.append([
             Paragraph(g.get("name") or "Goal", styles["table"]),
             Paragraph(f"<b>{_fmt_rs(g.get('allocated_sip'), False)}</b>", ParagraphStyle("ts", parent=styles["table"], textColor=colors.HexColor("#27AE60"))),

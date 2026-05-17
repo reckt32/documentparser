@@ -757,7 +757,9 @@ class PriorityAllocationEngine:
             # [FOUNDER LOGIC] Double check retirement target derivation in engine
             if "retirement" in goal_name.lower() and monthly_expenses > 0:
                 net_expense = max(0.0, monthly_expenses - expected_pension)
-                years = horizon if horizon and horizon > 0 else 25.0
+                years = _coerce_float(horizon, 25.0)
+                if years <= 0:
+                    years = 25.0
                 inflated_monthly = net_expense * (math.pow(1.0 + ASSUMED_INFLATION_RATE, years))
                 target_amount = (inflated_monthly * 12) / WITHDRAWAL_RATE_RETIREMENT
                 # Re-calculate ideal SIP with step-up if it was derived incorrectly elsewhere
