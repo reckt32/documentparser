@@ -5703,7 +5703,7 @@ class DrawingFlowable(Flowable):
 class TagFlowable(Flowable):
     def __init__(self, label, height=15, bg_tint=False):
         super().__init__()
-        self.label = str(label or "-")
+        self.label = str(label or "-").upper()
         self.bg_tint = bg_tint
         self.width = len(self.label) * 5.5 + 16
         self.height = height
@@ -5713,6 +5713,13 @@ class TagFlowable(Flowable):
 
     def draw(self):
         draw_tag(self.canv, 0, 1, self.label, bg_tint=self.bg_tint)
+
+
+def _format_status(value) -> str:
+    """Render any status / band / category label in STRICTLY CAPS for the PDF report."""
+    if value is None:
+        return "-"
+    return str(value).upper()
 
 
 class KPIFlowable(Flowable):
@@ -5986,9 +5993,9 @@ def draw_tag(canvas, x, y, label, font_size=8, bg_tint=False):
     rect_w = text_width + pad_x * 2
     rect_h = font_size + pad_y * 2
     colour_map = {
-        'IMMEDIATE': '#C0392B', 'CRITICAL': '#C0392B', 'UNDERINSURED': '#C0392B', 'URGENT': '#C0392B',
-        'HIGH': '#E67E22', 'NEEDS ATTENTION': '#E67E22', 'ATTENTION': '#E67E22', 'ASSESS & IMPROVE': '#E67E22', 'MODERATE': '#E67E22', 'GAP': '#E67E22', 'LOW': '#E67E22', 'UPGRADE RECOMMENDED': '#E67E22', 'REVIEW': '#E67E22',
-        'GOOD': '#27AE60', 'MAINTAIN': '#27AE60', 'WELL OPTIMISED': '#27AE60', 'ADEQUATE': '#27AE60', 'HEALTHY': '#27AE60', 'FUNDED': '#27AE60', 'COMFORTABLE': '#27AE60',
+        'IMMEDIATE': '#C0392B', 'CRITICAL': '#C0392B', 'UNDERINSURED': '#C0392B', 'URGENT': '#C0392B', 'INSUFFICIENT': '#C0392B',
+        'STRESSED': '#E67E22', 'NEEDS ATTENTION': '#E67E22', 'ATTENTION': '#E67E22', 'ASSESS & IMPROVE': '#E67E22', 'MODERATE': '#E67E22', 'GAP': '#E67E22', 'LOW': '#E67E22', 'UPGRADE RECOMMENDED': '#E67E22', 'REVIEW': '#E67E22', 'AVERAGE': '#E67E22', 'POOR': '#E67E22',
+        'GOOD': '#27AE60', 'MAINTAIN': '#27AE60', 'WELL OPTIMISED': '#27AE60', 'ADEQUATE': '#27AE60', 'HEALTHY': '#27AE60', 'FUNDED': '#27AE60', 'COMFORTABLE': '#27AE60', 'EXCELLENT': '#27AE60',
     }
     hex_col = colour_map.get(label.upper(), '#888888')
     r, g, b = int(hex_col[1:3],16)/255, int(hex_col[3:5],16)/255, int(hex_col[5:7],16)/255
@@ -6457,7 +6464,7 @@ def build_page_cover(client_facts, allocation_output, narratives=None):
         Paragraph(f"{subtitle}", ParagraphStyle("mk_cover_sub_left", parent=styles["cover_subtitle"], alignment=TA_LEFT)),
         Spacer(1, 30),
     ]
-    status_label = sanitize_pdf_text(str(ihs.get("band") or "Needs Attention"))
+    status_label = sanitize_pdf_text(_format_status(ihs.get("band") or "Needs Attention"))
     alert_style = ParagraphStyle("mk_cover_alert", parent=styles["body"], alignment=TA_LEFT, textColor=colors.HexColor("#5E738A"), leading=14)
     
     alert_block = [
@@ -6490,7 +6497,32 @@ def build_page_cover(client_facts, allocation_output, narratives=None):
     )
     status_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
     story.append(status_table)
-    story += [Spacer(1, 58), Paragraph("11-page analysis covering protection, portfolio, liquidity, goals, tax and action planning", ParagraphStyle("mk_cover_foot", parent=styles["small"], alignment=TA_LEFT))]
+    story += [Spacer(1, 20), Paragraph("11-page analysis covering protection, portfolio, liquidity, goals, tax and action planning", ParagraphStyle("mk_cover_foot", parent=styles["small"], alignment=TA_LEFT))]
+    # Prominent disclaimer block on the cover page
+    disclaimer_block = Table(
+        [[Paragraph(
+            "<b><font color='#A8813C'>IMPORTANT DISCLAIMERS</font></b><br/>"
+            "<font color='#4A5568' size='8'>"
+            "• This is an <b>educational financial analysis tool</b>, not personalised investment advice.<br/>"
+            "• All recommendations are <b>indicative</b> and based on the data and assumptions you provided.<br/>"
+            "• Calculations use <b>standard benchmarks</b> (6-month emergency fund, 20× term cover, &lt;40% EMI/income, 12% long-term equity CAGR).<br/>"
+            "• <b>Market and regulatory conditions change</b>; revisit this plan at least annually or after major life events.<br/>"
+            "• <b>Product selection and execution are your responsibility.</b> Consult a SEBI-registered Investment Advisor before acting.<br/>"
+            "• We do <b>not recommend specific securities or products</b> and do not earn commissions from any provider."
+            "</font>",
+            styles["small"],
+        )]],
+        colWidths=[490],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FDF8E7")),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#E3D8C7")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 14),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+            ("TOPPADDING", (0, 0), (-1, -1), 12),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ]),
+    )
+    story.append(disclaimer_block)
     return story
 
 
@@ -6529,18 +6561,18 @@ def build_page_snapshot(client_facts, allocation_output):
         ["Goals Funded", ctext(f"0 of {len(client_facts.get('goals') or [])}", red), ctext(f"{len(client_facts.get('goals') or [])} of {len(client_facts.get('goals') or [])}", green), _tag("HIGH")],
     ]
     profile = [
-        ["Risk Profile", ctext(analysis.get("riskProfile"), colors.HexColor("#2C3E50"), True)],
-        ["Surplus Level", ctext(analysis.get("surplusBand") or "-", green if (analysis.get("surplusBand") or "").lower() == "comfortable" or "adequate" in (analysis.get("surplusBand") or "").lower() else red, True)],
-        ["Insurance Status", ctext(analysis.get("insuranceGap") or "-", red if "under" in (analysis.get("insuranceGap") or "").lower() else green, True)],
-        ["Debt Position", ctext(analysis.get("debtStress") or "-", orange if "mod" in (analysis.get("debtStress") or "").lower() else green, True)],
-        ["Liquidity", ctext(analysis.get("liquidity") or "-", red if "low" in (analysis.get("liquidity") or "").lower() or "insuf" in (analysis.get("liquidity") or "").lower() else green, True)],
-        ["IHS Band", ctext((analysis.get("ihs") or {}).get("band") or "-", orange, True)],
+        ["Risk Profile", ctext(_format_status(analysis.get("riskProfile")), colors.HexColor("#2C3E50"), True)],
+        ["Surplus Level", ctext(_format_status(analysis.get("surplusBand") or "-"), green if (analysis.get("surplusBand") or "").lower() == "comfortable" or "adequate" in (analysis.get("surplusBand") or "").lower() else red, True)],
+        ["Insurance Status", ctext(_format_status(analysis.get("insuranceGap") or "-"), red if "under" in (analysis.get("insuranceGap") or "").lower() else green, True)],
+        ["Debt Position", ctext(_format_status(analysis.get("debtStress") or "-"), orange if "mod" in (analysis.get("debtStress") or "").lower() else green, True)],
+        ["Liquidity", ctext(_format_status(analysis.get("liquidity") or "-"), red if "low" in (analysis.get("liquidity") or "").lower() or "insuf" in (analysis.get("liquidity") or "").lower() else green, True)],
+        ["IHS Band", ctext(_format_status((analysis.get("ihs") or {}).get("band") or "-"), orange, True)],
     ]
     adv = [
         ["Calculated Risk Score", ctext(f"{ar.get('riskScore') or ar.get('score') or '-'} / 5.0", colors.HexColor("#2C3E50"), True)],
-        ["Risk Appetite", ctext(ar.get("riskAppetite") or ar.get("appetiteCategory") or "-", colors.HexColor("#2C3E50"), True)],
-        ["Tenure Limit", ctext(ar.get("tenureLimit") or ar.get("tenureLimitCategory") or "-", colors.HexColor("#2C3E50"), True)],
-        ["Final Category", ctext(ar.get("finalCategory") or "-", orange, True)],
+        ["Risk Appetite", ctext(_format_status(ar.get("riskAppetite") or ar.get("appetiteCategory") or "-"), colors.HexColor("#2C3E50"), True)],
+        ["Tenure Limit", ctext(_format_status(ar.get("tenureLimit") or ar.get("tenureLimitCategory") or "-"), colors.HexColor("#2C3E50"), True)],
+        ["Final Category", ctext(_format_status(ar.get("finalCategory") or "-"), orange, True)],
         ["Recommended Equity Band", ctext(_recommended_band_text(ar), green, True)],
     ]
     snapshot_kpis = [
