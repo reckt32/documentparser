@@ -1276,15 +1276,18 @@ class GoalsStrategyRunner(SectionRunner):
         has_dependents = personal.get("has_financial_dependents", False) or (_coerce_float(personal.get("dependents_count"), 0) > 0)
         
         # Calculate term insurance gap
-        term_gap = _coerce_float(term_insurance_info.get("gap"), 0.0)
-        if term_gap <= 0:
-            # Fallback: compute from required vs current
-            required_cover = _coerce_float(
-                (analysis.get("_diagnostics") or {}).get("requiredLifeCover"), 
-                monthly_income * 12 * 15 * 1.3  # Default: 15x annual income with 1.3x inflation buffer
-            )
-            current_life_cover = _coerce_float(insurance.get("lifeCover"), 0.0)
-            term_gap = max(0, required_cover - current_life_cover)
+        if not has_dependents:
+            term_gap = 0
+        else:
+            term_gap = _coerce_float(term_insurance_info.get("gap"), 0.0)
+            if term_gap <= 0:
+                # Fallback: compute from required vs current
+                required_cover = _coerce_float(
+                    (analysis.get("_diagnostics") or {}).get("requiredLifeCover"), 
+                    monthly_income * 12 * 15 * 1.3  # Default: 15x annual income with 1.3x inflation buffer
+                )
+                current_life_cover = _coerce_float(insurance.get("lifeCover"), 0.0)
+                term_gap = max(0, required_cover - current_life_cover)
         
         # Calculate health insurance gap (recommend Rs. 10-15 lakh family floater)
         current_health_cover = _coerce_float(insurance.get("healthCover"), 0.0)
@@ -1333,6 +1336,9 @@ class GoalsStrategyRunner(SectionRunner):
             # [FOUNDER LOGIC] Pass expenses and pension for retirement target derivation
             expected_pension=expected_pension,
             monthly_expenses=monthly_expenses,
+            # Manual investment overrides (used when CAS data is absent)
+            manual_sip=_coerce_float(lifestyle.get("manual_sip"), 0.0),
+            manual_corpus=_coerce_float(lifestyle.get("manual_corpus"), 0.0),
         )
         
         # --- Affordability Summary ---

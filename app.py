@@ -34,6 +34,7 @@ from db import (
     save_insurance,
     save_estate,
     save_lifestyle,
+    save_tax_info,
     get_questionnaire,
     get_latest_questionnaire_for_user,
     link_questionnaire_upload,
@@ -2115,7 +2116,13 @@ def analyze_financial_health(payload: dict):
         advanced_risk = compute_advanced_risk(payload, age)
     except Exception:
         advanced_risk = None
-    insurance_gap, required_cover = compute_insurance_gap(income.get("annualIncome"), insurance.get("lifeCover"))
+    
+    has_financial_dependents = personal.get("has_financial_dependents", True)
+    if not has_financial_dependents:
+        insurance_gap = "Adequate"
+        required_cover = 0.0
+    else:
+        insurance_gap, required_cover = compute_insurance_gap(income.get("annualIncome"), insurance.get("lifeCover"))
     debt_stress, emi_ratio_pct = compute_debt_stress(income.get("monthlyEmi"), income.get("annualIncome"))
     liquidity, liquidity_months = compute_liquidity(income.get("monthlyExpenses"), emergency_fund_amount)
     ihs = compute_ihs(savings_percent, current_products, allocation)
@@ -2883,6 +2890,7 @@ def _questionnaire_section_saver(section: str):
         "insurance": save_insurance,
         "estate": save_estate,
         "lifestyle": save_lifestyle,
+        "tax_info": save_tax_info,
     }
     return mapping.get(section)
 
@@ -3160,6 +3168,7 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     family = q.get("family_info") or {}
     lifestyle = q.get("lifestyle") or {}
     insurance = q.get("insurance") or {}
+    tax_info = q.get("tax_info") or {}
     goals_data = q.get("goals") or {}
     goals = goals_data.get("items") if isinstance(goals_data.get("items"), list) else []
 
@@ -3176,6 +3185,26 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     di = doc_insights or {}
     bank = di.get("bank") or {}
     portfolio = di.get("portfolio") or {}
+    itr = di.get("itr") or {}
+    
+    # ITR fallback if tax_info is missing
+    if not itr and tax_info:
+        deductions_claimed = []
+        if tax_info.get("deductions_80c"):
+            deductions_claimed.append({"section": "80C", "amount": _safe_float(tax_info["deductions_80c"], 0)})
+        if tax_info.get("deductions_80d"):
+            deductions_claimed.append({"section": "80D", "amount": _safe_float(tax_info["deductions_80d"], 0)})
+        if tax_info.get("deductions_24c"):
+            deductions_claimed.append({"section": "24C", "amount": _safe_float(tax_info["deductions_24c"], 0)})
+        if tax_info.get("deductions_80dd"):
+            deductions_claimed.append({"section": "80DD", "amount": _safe_float(tax_info["deductions_80dd"], 0)})
+            
+        itr = {
+            "gross_total_income": _safe_float((q.get("lifestyle") or {}).get("annual_income"), 0),
+            "total_tax_paid": _safe_float(tax_info.get("total_tax_paid"), 0),
+            "deductions_claimed": deductions_claimed,
+            "tax_regime": tax_info.get("tax_regime", "old").lower(),
+        }
     
     # Get CAS data for SIP commitments
     qid = q.get("id")
@@ -3277,7 +3306,8 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
         "analysis": analysis,
         "retirement_planning": retirement_planning,
         "term_insurance": term_insurance,
-        "itr": di.get("itr"),  # Full ITR data for tax optimization section
+        "tax": tax_info,
+        "itr": itr,  # Full ITR data for tax optimization section
     }
     return facts
 
@@ -7070,7 +7100,7 @@ def build_page_liquidity(client_facts, allocation_output):
         ]))
         return tbl
         
-    t1 = _tier_card("T1", "#C0392B", "Instant Access", f"40% · ~{t1_amt}", "Savings bank account — zero friction. High-yield savings (AU, IDFC).")
+    t1 = _tier_card("T1", "#C0392B", "Instant Access", f"40% · ~{t1_amt}", "Savings bank account — zero friction. High-yield savings accounts.")
     t2 = _tier_card("T2", "#E67E22", "Quick Access", f"40% · ~{t2_amt}", "Liquid mutual funds or sweep-in FD. 1-2 day redemption. 6-7% return.")
     t3 = _tier_card("T3", "#A8813C", "Short-Term FD", f"20% · ~{t3_amt}", "3-6 month fixed deposits. Slightly higher return. Last-resort buffer.")
     

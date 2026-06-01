@@ -185,6 +185,15 @@ def init_db():
         )
         """
     )
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS tax_info (
+          questionnaire_id INTEGER PRIMARY KEY,
+          data_json TEXT NOT NULL,
+          FOREIGN KEY(questionnaire_id) REFERENCES questionnaires(id) ON DELETE CASCADE
+        )
+        """
+    )
 
     # Link uploaded docs to questionnaire
     _exec(
@@ -388,6 +397,7 @@ def save_risk_profile(qid: int, data: Dict[str, Any]): _upsert_section("risk_pro
 def save_insurance(qid: int, data: Dict[str, Any]): _upsert_section("insurance", qid, data)
 def save_estate(qid: int, data: Dict[str, Any]): _upsert_section("estate", qid, data)
 def save_lifestyle(qid: int, data: Dict[str, Any]): _upsert_section("lifestyle", qid, data)
+def save_tax_info(qid: int, data: Dict[str, Any]): _upsert_section("tax_info", qid, data)
 
 def get_questionnaire(qid: int) -> Dict[str, Any]:
     # base row
@@ -418,6 +428,7 @@ def get_questionnaire(qid: int) -> Dict[str, Any]:
         "insurance": _fetch_section("insurance"),
         "estate": _fetch_section("estate"),
         "lifestyle": _fetch_section("lifestyle"),
+        "tax_info": _fetch_section("tax_info"),
     }
 
 def get_latest_questionnaire_for_user(user_id: str) -> Optional[int]:
