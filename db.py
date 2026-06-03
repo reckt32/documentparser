@@ -815,6 +815,11 @@ def get_active_dashboard_report_by_pan(mfd_firebase_uid: str, client_pan: str) -
     return dict(rows[0])
 
 
+def get_aggregate_action_statuses(report_id: int) -> dict:
+    rows = _query("SELECT item_id, final_status FROM aggregate_actions WHERE report_id = ?", (report_id,))
+    return {r["item_id"]: r["final_status"] for r in rows}
+
+
 def mark_dashboard_report_status(report_id: int, status: str) -> bool:
     """Update a dashboard report's status (e.g., ACTIVE -> SUPERSEDED)."""
     result = _exec(

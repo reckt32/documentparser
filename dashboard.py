@@ -42,6 +42,7 @@ from db import (
     get_aggregate_metrics_overview,
     list_active_dashboard_reports,
     update_aggregate_action_status_for_mfd,
+    get_aggregate_action_statuses,
 )
 
 logger = logging.getLogger(__name__)
@@ -267,6 +268,15 @@ def client_detail(pan: str):
             "message": "No active report found for this PAN.",
         }), 404
 
+    action_items = _parse_json_field(report.get("action_items_json")) or []
+    
+    status_map = get_aggregate_action_statuses(report.get("id"))
+    for item in action_items:
+        iid = item.get("item_id")
+        if iid in status_map:
+            item["final_status"] = status_map[iid]
+            item["is_converted"] = (status_map[iid] == "CONVERTED")
+
     return jsonify({
         "report_id": report.get("id"),
         "client_pan": report.get("client_pan"),
@@ -276,7 +286,7 @@ def client_detail(pan: str):
         "pdf_filename": report.get("pdf_filename"),
         "status": report.get("status"),
         "snapshot": _parse_json_field(report.get("snapshot_json")),
-        "action_items": _parse_json_field(report.get("action_items_json")),
+        "action_items": action_items,
     }), 200
 
 
