@@ -7729,9 +7729,7 @@ def build_page_review(client_facts, allocation_output):
     
     left_items = [
         Paragraph("WHEN TO RECALCULATE YOUR SCORE", ParagraphStyle("wt", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=12)),
-        recalc_table,
-        Spacer(1, 16),
-        Table([[Paragraph("<b>Product Note</b><br/>Consider in-app nudges: \"Did you change jobs? Time to recalculate your Meerkat score.\"", ParagraphStyle("pn", parent=styles["body"], fontSize=8))]], colWidths=[220], style=TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F1F5F9")), ("PADDING", (0, 0), (-1, -1), 12)]))
+        recalc_table
     ]
     left_card = Table([[item] for item in left_items], colWidths=[240])
     left_card.setStyle(TableStyle([
@@ -7864,6 +7862,20 @@ def _meerkat_page_background(c, doc):
 def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_insights=None, narratives=None):
     """Generate the 11-page Meerkat Financial Health Report."""
     client_facts = _build_client_facts(q, analysis, doc_insights)
+    try:
+        hs = compute_financial_health_score(analysis, client_facts)
+        if "ihs" not in analysis:
+            analysis["ihs"] = {}
+        analysis["ihs"]["score"] = hs.get("overall", 0)
+        analysis["ihs"]["band"] = hs.get("overall_label", "")
+        if "analysis" not in client_facts:
+            client_facts["analysis"] = {}
+        if "ihs" not in client_facts["analysis"]:
+            client_facts["analysis"]["ihs"] = {}
+        client_facts["analysis"]["ihs"]["score"] = hs.get("overall", 0)
+        client_facts["analysis"]["ihs"]["band"] = hs.get("overall_label", "")
+    except Exception:
+        pass
     narratives = _strip_in_app_report_text(narratives or {})
     allocation = _allocation_output(client_facts)
     doc = SimpleDocTemplate(output_path, pagesize=A4, rightMargin=0.65 * inch, leftMargin=0.65 * inch, topMargin=0.85 * inch, bottomMargin=0.55 * inch)
