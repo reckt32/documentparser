@@ -16,7 +16,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict
 from reportlab.pdfgen import canvas
 from extractors import index_and_extract, extract_and_store_from_indexed
@@ -49,6 +49,13 @@ from db import (
     set_user_credits,
     get_user_count,
     get_payment_history,
+    get_user_credits,
+    consume_user_credit,
+    insert_dashboard_report,
+    insert_aggregate_action,
+    get_active_dashboard_report_by_pan,
+    mark_dashboard_report_status,
+    mark_aggregate_actions_status_by_report,
 )
 
 # Auth and Payment modules
@@ -61,6 +68,8 @@ from payment import (
     get_payment_status,
     get_report_price_paise,
 )
+# Dashboard API Blueprint
+from dashboard import dashboard_bp
 # --- Logging Configuration ---
 import logging
 import uuid
@@ -2566,7 +2575,6 @@ def build_prefill_from_insights(qid: int) -> dict:
                     metadata = json.loads(metadata_json)
                     dob = metadata.get("date_of_birth")
                     if dob and dob != "N/A":
-                        from datetime import datetime
                         for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"]:
                             try:
                                 birth_date = datetime.strptime(dob, fmt)
@@ -5703,9 +5711,9 @@ class DrawingFlowable(Flowable):
 class TagFlowable(Flowable):
     def __init__(self, label, height=15, bg_tint=False):
         super().__init__()
-        self.label = str(label or "-").upper()
+        self.label = str(label or "-").upper().strip()
         self.bg_tint = bg_tint
-        self.width = len(self.label) * 5.5 + 16
+        self.width = len(self.label) * 6.0 + 20
         self.height = height
 
     def wrap(self, avail_width, avail_height):
@@ -5988,9 +5996,9 @@ def _urgency(score):
 
 def draw_tag(canvas, x, y, label, font_size=8, bg_tint=False):
     # y is baseline of text
-    pad_x, pad_y = 6, 3
+    pad_x, pad_y = 8, 3
     text_width = canvas.stringWidth(label, 'Helvetica-Bold', font_size)
-    rect_w = text_width + pad_x * 2
+    rect_w = text_width + pad_x * 2 + 2
     rect_h = font_size + pad_y * 2
     colour_map = {
         'IMMEDIATE': '#C0392B', 'CRITICAL': '#C0392B', 'UNDERINSURED': '#C0392B', 'URGENT': '#C0392B', 'INSUFFICIENT': '#C0392B',
@@ -6582,10 +6590,10 @@ def build_page_snapshot(client_facts, allocation_output):
         {"label": "Active SIP", "value": "Rs.0", "note": f"Need {kpi_fmt(_fmt_rs(allocation_output.get('combined_shortfall'), False))}/mo", "note_color": "orange"},
     ]
     current_vs_ideal = _styled_table(rows, [74, 56, 76, 104], style_type="light")
-    profile_tbl = _styled_table(profile, [56, 86], header=False, style_type="light_right")
-    adv_tbl = _styled_table(adv, [80, 62], header=False, style_type="light_right")
+    profile_tbl = _styled_table(profile, [64, 96], header=False, style_type="light_right")
+    adv_tbl = _styled_table(adv, [85, 75], header=False, style_type="light_right")
 
-    profile_card = Table([[Paragraph("PROFILE AT A GLANCE", ParagraphStyle("paag", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8))], [profile_tbl]], colWidths=[166])
+    profile_card = Table([[Paragraph("PROFILE AT A GLANCE", ParagraphStyle("paag", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8))], [profile_tbl]], colWidths=[184])
     profile_card.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.white),
         ("BOX", (0, 0), (-1, -1), 1.0, colors.HexColor("#EAE2D6")),
@@ -6595,7 +6603,7 @@ def build_page_snapshot(client_facts, allocation_output):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
     ]))
 
-    adv_card = Table([[Paragraph("ADVANCED RISK ASSESSMENT", ParagraphStyle("ara", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8))], [adv_tbl]], colWidths=[166])
+    adv_card = Table([[Paragraph("ADVANCED RISK ASSESSMENT", ParagraphStyle("ara", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8))], [adv_tbl]], colWidths=[184])
     adv_card.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.white),
         ("BOX", (0, 0), (-1, -1), 1.0, colors.HexColor("#EAE2D6")),
@@ -6997,7 +7005,7 @@ def build_page_portfolio_debt(client_facts, allocation_output):
         ["Loan Types", "Home / Car / Personal", "—", "—", "Identify highest rate"],
         ["Debt Score", Paragraph(f"<font color='#27AE60'><b>{int(_num(debt_score, 0))}/100</b></font>", styles["table"]) if _num(debt_score, 0) >= 75 else Paragraph(f"<font color='#C0392B'><b>{int(_num(debt_score, 0))}/100</b></font>", styles["table"]), "≥75 = Good", TagFlowable("GOOD", bg_tint=True) if _num(debt_score, 0) >= 75 else TagFlowable("NEEDS ATTENTION", bg_tint=True), "Well managed" if _num(debt_score, 0) >= 75 else "Needs attention"],
     ]
-    debt_table = _styled_table(debt_rows, [110, 100, 100, 80, 110], style_type="light")
+    debt_table = _styled_table(debt_rows, [110, 85, 95, 100, 110], style_type="light")
 
     return [
         Paragraph("PORTFOLIO REBALANCING", ParagraphStyle("pga", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
@@ -7882,7 +7890,6 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
 @app.route("/report/generate", methods=["POST"])
 @require_auth
 @require_payment
-@consume_credit
 def report_generate():
     data = request.get_json(force=True) or {}
     questionnaire_id = data.get("questionnaire_id")
@@ -7892,7 +7899,56 @@ def report_generate():
     if not q:
         return jsonify({"error": "questionnaire not found"}), 404
 
-    # Merge questionnaire + linked document insights
+    # --- 1. Resolve authenticated MFD user and verify available credits ---
+    current_user = getattr(g, "current_user", None) or {}
+    firebase_uid = current_user.get("firebase_uid") or getattr(g, "user_id", None)
+    if not firebase_uid:
+        return jsonify({"error": "Authentication required"}), 401
+
+    live_credits = get_user_credits(firebase_uid)
+    if live_credits <= 0:
+        return jsonify({
+            "error": "Insufficient credits",
+            "message": "You have no report credits remaining. Please purchase more credits to continue.",
+            "remaining_credits": 0,
+        }), 403
+
+    # --- 2. Extract & validate PAN from personal_info for the duplicate check ---
+    personal_info = q.get("personal_info") or {}
+    raw_pan = personal_info.get("pan")
+    if not raw_pan:
+        return jsonify({"error": "PAN missing in questionnaire personal_info"}), 400
+    client_pan = str(raw_pan).strip().upper()
+    if not re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", client_pan):
+        return jsonify({"error": "Invalid PAN format in questionnaire personal_info"}), 400
+    client_name = (personal_info.get("name") or current_user.get("display_name") or "Client")
+
+    # --- 3. Duplicate Check: supersede any existing ACTIVE report for same MFD + PAN ---
+    try:
+        existing_active = get_active_dashboard_report_by_pan(firebase_uid, client_pan)
+    except Exception as e:
+        logger.error(f"Failed to query active dashboard report: {e}")
+        existing_active = None
+
+    if existing_active:
+        try:
+            mark_dashboard_report_status(existing_active["id"], "SUPERSEDED")
+        except Exception as e:
+            logger.error(f"Failed to mark existing dashboard report {existing_active.get('id')} as SUPERSEDED: {e}")
+        try:
+            mark_aggregate_actions_status_by_report(existing_active["id"], "PENDING", "SUPERSEDED")
+        except Exception as e:
+            logger.error(f"Failed to mark pending aggregate_actions as SUPERSEDED for report {existing_active.get('id')}: {e}")
+        old_pdf_filename = existing_active.get("pdf_filename")
+        if old_pdf_filename:
+            old_pdf_path = os.path.join(OUTPUT_DIR, old_pdf_filename)
+            try:
+                if os.path.exists(old_pdf_path):
+                    os.remove(old_pdf_path)
+            except Exception as e:
+                logger.error(f"Failed to delete old PDF '{old_pdf_path}': {e}")
+
+    # --- 4. Build analysis context (used for both PDF generation and snapshot) ---
     doc_insights = {}
     try:
         doc_insights = aggregate_doc_insights_for_questionnaire(questionnaire_id)
@@ -7909,24 +7965,262 @@ def report_generate():
     except Exception as e:
         analysis["llm_error"] = str(e)
 
+    # --- 5. Generate the PDF, then persist dashboard records, then deduct credit ---
     pdf_filename = f"FinancialPlan_{os.urandom(8).hex()}.pdf"
     pdf_path = os.path.join(OUTPUT_DIR, pdf_filename)
-    generate_financial_plan_pdf(q, analysis, pdf_path, doc_insights=doc_insights, narratives=sections)
+    pdf_created = False
+    try:
+        generate_financial_plan_pdf(q, analysis, pdf_path, doc_insights=doc_insights, narratives=sections)
+        if not os.path.exists(pdf_path) or os.path.getsize(pdf_path) <= 0:
+            raise RuntimeError("Generated PDF was not saved to disk")
+        pdf_created = True
+
+        # 5a. Build snapshot_json + action_items_json from analysis
+        snapshot_payload = _build_dashboard_snapshot(analysis, q, doc_insights)
+        action_items = _build_dashboard_action_items(analysis)
+        snapshot_json = json.dumps(snapshot_payload, default=str)
+        action_items_json = json.dumps(action_items, default=str)
+
+        # 5b. Compute expiry and persist the new dashboard report
+        generated_at = datetime.utcnow()
+        expires_at = (generated_at + timedelta(days=90)).isoformat()
+        report_id = insert_dashboard_report(
+            mfd_firebase_uid=firebase_uid,
+            client_pan=client_pan,
+            client_name=client_name,
+            expires_at=expires_at,
+            pdf_filename=pdf_filename,
+            status="ACTIVE",
+            snapshot_json=snapshot_json,
+            action_items_json=action_items_json,
+        )
+
+        # 5c. Persist every action item with status PENDING
+        report_generated_at_iso = generated_at.isoformat()
+        for item in action_items:
+            insert_aggregate_action(
+                id=str(uuid.uuid4()),
+                mfd_firebase_uid=firebase_uid,
+                client_pan=client_pan,
+                report_id=report_id,
+                item_id=item.get("item_id") or str(uuid.uuid4()),
+                dimension=item.get("dimension"),
+                urgency=item.get("urgency"),
+                value_type=item.get("value_type"),
+                value_num=item.get("value_num"),
+                final_status="PENDING",
+                report_generated_at=report_generated_at_iso,
+            )
+
+        # 5d. Only now deduct the token (atomically, after everything is saved)
+        if not consume_user_credit(firebase_uid):
+            raise RuntimeError("Failed to consume credit after report generation")
+
+    except Exception as e:
+        logger.error(f"/report/generate failed for user {firebase_uid}, questionnaire {questionnaire_id}: {e}")
+        if pdf_created:
+            try:
+                if os.path.exists(pdf_path):
+                    os.remove(pdf_path)
+            except Exception as cleanup_err:
+                logger.error(f"Failed to clean up new PDF '{pdf_path}' after error: {cleanup_err}")
+        return jsonify({
+            "error": "Failed to generate report",
+            "message": str(e),
+        }), 500
+
     url = url_for("download_file", filename=pdf_filename, _external=True)
-    
-    # Include remaining credits from consume_credit decorator
-    remaining_credits = getattr(g, 'remaining_credits', 0)
-    
+    remaining_credits = get_user_credits(firebase_uid)
+
     return jsonify({
         "financial_plan_pdf_url": url,
         "summary_pdf_url": url,
         "report_type": "financial_plan",
         "questionnaire_id": questionnaire_id,
+        "report_id": report_id,
+        "client_pan": client_pan,
         "analysis": analysis,
         "docInsights": doc_insights,
         "sections": sections,
-        "remaining_credits": remaining_credits
+        "remaining_credits": remaining_credits,
     }), 200
+
+
+# --- Dashboard snapshot / action item builders ---
+
+def _dimension_urgency(score):
+    """Map a 0-100 dimension score to an urgency tag used on the dashboard."""
+    try:
+        s = float(score)
+    except Exception:
+        s = 0.0
+    if s < 40:
+        return "IMMEDIATE"
+    if s < 75:
+        return "HIGH"
+    return "MAINTAIN"
+
+
+def _build_dashboard_snapshot(analysis: dict, questionnaire: dict, doc_insights: dict) -> dict:
+    """
+    Build the snapshot payload persisted as snapshot_json on a dashboard report.
+    Captures the headline scoring + key analysis flags so the dashboard API can
+    serve it without re-running analysis.
+    """
+    analysis = analysis or {}
+    ihs = analysis.get("ihs") or {}
+    diagnostics = analysis.get("_diagnostics") or {}
+    personal = (questionnaire or {}).get("personal_info") or {}
+
+    try:
+        facts = _build_client_facts(questionnaire or {}, analysis, doc_insights or {})
+    except Exception:
+        facts = {"analysis": analysis}
+
+    try:
+        health_score = compute_financial_health_score(analysis, facts)
+    except Exception:
+        health_score = {}
+
+    components = health_score.get("components") or {}
+    dimensions = {
+        key: {
+            "score": comp.get("score"),
+            "label": comp.get("label"),
+            "priority": comp.get("priority"),
+        }
+        for key, comp in components.items()
+    }
+
+    return {
+        "client_name": personal.get("name"),
+        "client_age": personal.get("age"),
+        "risk_profile": analysis.get("riskProfile"),
+        "ihs": {
+            "score": ihs.get("score"),
+            "band": ihs.get("band"),
+        },
+        "overall_health": {
+            "score": health_score.get("overall"),
+            "label": health_score.get("overall_label"),
+        },
+        "headline_indicators": {
+            "surplus_band": analysis.get("surplusBand"),
+            "insurance_gap": analysis.get("insuranceGap"),
+            "debt_stress": analysis.get("debtStress"),
+            "liquidity": analysis.get("liquidity"),
+        },
+        "diagnostics": diagnostics,
+        "dimensions": dimensions,
+        "flags": analysis.get("flags") or [],
+        "recommendations": analysis.get("recommendations") or [],
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
+def _build_dashboard_action_items(analysis: dict) -> list:
+    """
+    Translate the analysis output into structured action items that the
+    dashboard can show and that we mirror into aggregate_actions for
+    per-dimension tracking.
+    """
+    analysis = analysis or {}
+    diagnostics = analysis.get("_diagnostics") or {}
+    items = []
+
+    # Protection / insurance gap
+    insurance_gap = analysis.get("insuranceGap")
+    required_cover = diagnostics.get("requiredLifeCover")
+    if insurance_gap == "Underinsured":
+        items.append({
+            "item_id": "protection_life_cover_gap",
+            "dimension": "protection",
+            "urgency": "IMMEDIATE",
+            "value_type": "required_life_cover_inr",
+            "value_num": float(required_cover) if isinstance(required_cover, (int, float)) else None,
+            "title": "Increase life insurance cover",
+            "description": "Buy term life insurance for 10-12x your income to close the protection gap.",
+        })
+    elif insurance_gap and insurance_gap != "Adequate":
+        items.append({
+            "item_id": "protection_review",
+            "dimension": "protection",
+            "urgency": "HIGH",
+            "value_type": "required_life_cover_inr",
+            "value_num": float(required_cover) if isinstance(required_cover, (int, float)) else None,
+            "title": "Review insurance coverage",
+            "description": "Re-evaluate life and health cover to ensure adequacy.",
+        })
+
+    # Liquidity / emergency fund
+    liquidity = analysis.get("liquidity")
+    liquidity_months = diagnostics.get("liquidityMonths")
+    if liquidity == "Insufficient":
+        items.append({
+            "item_id": "liquidity_emergency_fund",
+            "dimension": "liquidity",
+            "urgency": "IMMEDIATE",
+            "value_type": "emergency_fund_months",
+            "value_num": float(liquidity_months) if isinstance(liquidity_months, (int, float)) else None,
+            "title": "Build emergency fund",
+            "description": "Top up your emergency reserve until you cover at least 6 months of expenses.",
+        })
+
+    # Debt management
+    debt_stress = analysis.get("debtStress")
+    emi_pct = diagnostics.get("emiPct")
+    if debt_stress == "Stressed":
+        items.append({
+            "item_id": "debt_stress_high",
+            "dimension": "debt_management",
+            "urgency": "IMMEDIATE",
+            "value_type": "emi_to_income_pct",
+            "value_num": float(emi_pct) if isinstance(emi_pct, (int, float)) else None,
+            "title": "Reduce debt burden",
+            "description": "Refinance or accelerate repayment of high-cost debt; avoid taking on new borrowing.",
+        })
+    elif debt_stress == "Moderate":
+        items.append({
+            "item_id": "debt_stress_moderate",
+            "dimension": "debt_management",
+            "urgency": "HIGH",
+            "value_type": "emi_to_income_pct",
+            "value_num": float(emi_pct) if isinstance(emi_pct, (int, float)) else None,
+            "title": "Prioritise repayment of unsecured debt",
+            "description": "Start chipping away at unsecured loans before they compound further.",
+        })
+
+    # Savings / surplus
+    surplus_band = analysis.get("surplusBand")
+    if surplus_band == "Low":
+        items.append({
+            "item_id": "savings_low_surplus",
+            "dimension": "savings",
+            "urgency": "HIGH",
+            "value_type": "surplus_band",
+            "value_num": None,
+            "title": "Lift your savings rate",
+            "description": "Cut discretionary spending and automate an SIP to push savings above 20% of income.",
+        })
+
+    # IHS / portfolio quality
+    ihs = analysis.get("ihs") or {}
+    ihs_band = ihs.get("band")
+    ihs_score = ihs.get("score")
+    if ihs_band in ("Poor", "Average"):
+        items.append({
+            "item_id": "portfolio_quality_low",
+            "dimension": "portfolio_health",
+            "urgency": _dimension_urgency(ihs_score),
+            "value_type": "ihs_score",
+            "value_num": float(ihs_score) if isinstance(ihs_score, (int, float)) else None,
+            "title": "Improve portfolio quality",
+            "description": "Diversify allocation and remove unsuitable products to lift portfolio quality.",
+        })
+
+    return items
+
+
 
 # --- PDF Generation Logic (Enhanced) ---
 
@@ -8787,6 +9081,10 @@ def free_retirement_calc():
         _autosave_free_tool_to_questionnaire(user_id, data, 'retirement')
 
     return jsonify(result), 200
+
+
+# ─── Register Blueprints ────────────────────────────────────────────────────
+app.register_blueprint(dashboard_bp)
 
 
 if __name__ == '__main__':
