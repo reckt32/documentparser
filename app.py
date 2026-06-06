@@ -7970,12 +7970,17 @@ def report_generate():
     inputs = _assemble_financial_inputs(q, doc_insights)
     analysis = analyze_financial_health(inputs)
 
+    # Build client_facts early — needed for PDF, dashboard snapshot, and action items
+    client_facts = _build_client_facts(q, analysis, doc_insights)
+
     sections = None
     try:
-        facts = _build_client_facts(q, analysis, doc_insights)
-        sections = run_report_sections(questionnaire_id, facts)
+        sections = run_report_sections(questionnaire_id, client_facts)
     except Exception as e:
         analysis["llm_error"] = str(e)
+
+    # Compute allocation_output — same engine the PDF pages use
+    allocation_output = _allocation_output(client_facts)
 
     # --- 5. Generate the PDF, then persist dashboard records, then deduct credit ---
     pdf_filename = f"FinancialPlan_{os.urandom(8).hex()}.pdf"
@@ -7987,9 +7992,9 @@ def report_generate():
             raise RuntimeError("Generated PDF was not saved to disk")
         pdf_created = True
 
-        # 5a. Build snapshot_json + action_items_json from analysis
-        snapshot_payload = _build_dashboard_snapshot(analysis, q, doc_insights)
-        action_items = _build_dashboard_action_items(analysis)
+        # 5a. Build snapshot_json + action_items_json from full analysis + client_facts + allocation
+        snapshot_payload = _build_dashboard_snapshot(analysis, q, doc_insights, client_facts, allocation_output)
+        action_items = _build_dashboard_action_items(analysis, client_facts, allocation_output)
         snapshot_json = json.dumps(snapshot_payload, default=str)
         action_items_json = json.dumps(action_items, default=str)
 
@@ -8073,24 +8078,26 @@ def _dimension_urgency(score):
     return "MAINTAIN"
 
 
-def _build_dashboard_snapshot(analysis: dict, questionnaire: dict, doc_insights: dict) -> dict:
+def _build_dashboard_snapshot(analysis: dict, questionnaire: dict, doc_insights: dict, client_facts: dict = None, allocation_output: dict = None) -> dict:
     """
     Build the snapshot payload persisted as snapshot_json on a dashboard report.
-    Captures the headline scoring + key analysis flags so the dashboard API can
-    serve it without re-running analysis.
+    Captures detailed per-client scoring, actual values, and allocation data
+    so the dashboard API can serve per-client data without re-running analysis.
     """
     analysis = analysis or {}
     ihs = analysis.get("ihs") or {}
     diagnostics = analysis.get("_diagnostics") or {}
     personal = (questionnaire or {}).get("personal_info") or {}
 
-    try:
-        facts = _build_client_facts(questionnaire or {}, analysis, doc_insights or {})
-    except Exception:
-        facts = {"analysis": analysis}
+    # Use pre-built client_facts if provided, otherwise build fresh
+    if client_facts is None:
+        try:
+            client_facts = _build_client_facts(questionnaire or {}, analysis, doc_insights or {})
+        except Exception:
+            client_facts = {"analysis": analysis}
 
     try:
-        health_score = compute_financial_health_score(analysis, facts)
+        health_score = compute_financial_health_score(analysis, client_facts)
     except Exception:
         health_score = {}
 
@@ -8100,9 +8107,47 @@ def _build_dashboard_snapshot(analysis: dict, questionnaire: dict, doc_insights:
             "score": comp.get("score"),
             "label": comp.get("label"),
             "priority": comp.get("priority"),
+            "weight": comp.get("weight"),
+            "weighted": comp.get("weighted"),
         }
         for key, comp in components.items()
     }
+
+    # Extract actual financial values for the dashboard
+    facts_income = client_facts.get("income") or {}
+    facts_insurance = client_facts.get("insurance") or {}
+    facts_personal = client_facts.get("personal") or {}
+    term_insurance = client_facts.get("term_insurance") or {}
+    alloc = allocation_output or {}
+
+    # Per-client insurance details with GAP calculation
+    life_cover_current = _safe_float(facts_insurance.get("lifeCover"), 0)
+    life_cover_required = _safe_float(diagnostics.get("requiredLifeCover"), 0)
+    life_cover_gap = max(0, life_cover_required - life_cover_current)
+    health_cover_current = _safe_float(facts_insurance.get("healthCover"), 0)
+    recommended_health = 1500000 if _safe_float(facts_personal.get("dependents_count"), 0) > 0 else 1000000
+    health_cover_gap = max(0, recommended_health - health_cover_current)
+
+    # Emergency fund details in rupees
+    monthly_expenses = _safe_float(facts_income.get("monthlyExpenses"), 0)
+    emergency_fund_target = monthly_expenses * 6
+    emergency_fund_current = _safe_float((client_facts.get("lifestyle") or {}).get("emergency_fund"), 0)
+    emergency_fund_gap_inr = max(0, emergency_fund_target - emergency_fund_current)
+
+    # Goal/SIP summary from allocation
+    goal_sip_table = alloc.get("goal_sip_table") or []
+    goal_summary = []
+    for g in goal_sip_table:
+        goal_summary.append({
+            "name": g.get("name"),
+            "allocated_sip": g.get("allocated_sip"),
+            "ideal_sip": g.get("ideal_sip"),
+            "shortfall": g.get("shortfall"),
+            "target_amount": g.get("target_amount"),
+            "horizon_years": g.get("horizon_years"),
+            "fund_type": g.get("fund_type"),
+            "risk_category": g.get("risk_category"),
+        })
 
     return {
         "client_name": personal.get("name"),
@@ -8122,6 +8167,35 @@ def _build_dashboard_snapshot(analysis: dict, questionnaire: dict, doc_insights:
             "debt_stress": analysis.get("debtStress"),
             "liquidity": analysis.get("liquidity"),
         },
+        "financials": {
+            "annual_income": _safe_float(facts_income.get("annualIncome"), 0),
+            "monthly_expenses": monthly_expenses,
+            "monthly_emi": _safe_float(facts_income.get("monthlyEmi"), 0),
+            "monthly_surplus": _safe_float(alloc.get("monthly_surplus"), 0),
+        },
+        "protection": {
+            "life_cover_current": life_cover_current,
+            "life_cover_required": life_cover_required,
+            "life_cover_gap": life_cover_gap,
+            "health_cover_current": health_cover_current,
+            "health_cover_recommended": recommended_health,
+            "health_cover_gap": health_cover_gap,
+            "insurance_provision_monthly": _safe_float(alloc.get("insurance_provision") or alloc.get("insurance_sip_monthly"), 0),
+        },
+        "liquidity_detail": {
+            "months_covered": diagnostics.get("liquidityMonths"),
+            "emergency_fund_target_inr": emergency_fund_target,
+            "emergency_fund_current_inr": emergency_fund_current,
+            "emergency_fund_gap_inr": emergency_fund_gap_inr,
+        },
+        "allocation_summary": {
+            "total_ideal_sip": _safe_float(alloc.get("total_ideal_sip_needed"), 0),
+            "total_allocated_sip": _safe_float(alloc.get("total_allocated_sip"), 0),
+            "goal_achievement_pct": _safe_float(alloc.get("goal_achievement_percent"), 0),
+            "existing_sip_running": _safe_float(alloc.get("existing_sip_running"), 0),
+            "total_investing": _safe_float(alloc.get("total_investing"), 0),
+        },
+        "goal_summary": goal_summary,
         "diagnostics": diagnostics,
         "dimensions": dimensions,
         "flags": analysis.get("flags") or [],
@@ -8130,92 +8204,209 @@ def _build_dashboard_snapshot(analysis: dict, questionnaire: dict, doc_insights:
     }
 
 
-def _build_dashboard_action_items(analysis: dict) -> list:
+def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, allocation_output: dict = None) -> list:
     """
-    Translate the analysis output into structured action items that the
-    dashboard can show and that we mirror into aggregate_actions for
-    per-dimension tracking.
+    Translate the full analysis + client_facts + allocation_output into
+    detailed, per-client action items. Each item captures the actual
+    rupee values, gaps, and SIP amounts specific to this client.
     """
     analysis = analysis or {}
     diagnostics = analysis.get("_diagnostics") or {}
+    facts = client_facts or {}
+    alloc = allocation_output or {}
     items = []
 
-    # Protection / insurance gap
-    insurance_gap = analysis.get("insuranceGap")
-    required_cover = diagnostics.get("requiredLifeCover")
-    if insurance_gap == "Underinsured":
+    facts_insurance = facts.get("insurance") or {}
+    facts_income = facts.get("income") or {}
+    facts_personal = facts.get("personal") or {}
+    term_ins = facts.get("term_insurance") or {}
+
+    # ---- 1. PROTECTION: Life Insurance (GAP-based, not total cover) ----
+    life_cover_current = _safe_float(facts_insurance.get("lifeCover"), 0)
+    life_cover_required = _safe_float(diagnostics.get("requiredLifeCover"),
+                                       _safe_float(term_ins.get("required_cover"), 0))
+    life_cover_gap = max(0, life_cover_required - life_cover_current)
+    has_dependents = facts_personal.get("has_financial_dependents", True)
+
+    if life_cover_gap > 0 and has_dependents:
+        # Estimate annual premium for the gap
+        age = int(_safe_float(facts_personal.get("age"), 35))
+        rate_per_lakh = 500 if age < 35 else (700 if age < 45 else 1200)
+        est_premium_yearly = (life_cover_gap / 100000) * rate_per_lakh
+        est_premium_monthly = est_premium_yearly / 12
+
+        urgency = "IMMEDIATE" if life_cover_gap >= life_cover_required * 0.5 else "HIGH"
         items.append({
             "item_id": "protection_life_cover_gap",
             "dimension": "protection",
-            "urgency": "IMMEDIATE",
-            "value_type": "required_life_cover_inr",
-            "value_num": float(required_cover) if isinstance(required_cover, (int, float)) else None,
+            "urgency": urgency,
+            "value_type": "life_cover_gap_inr",
+            "value_num": life_cover_gap,
             "title": "Increase life insurance cover",
-            "description": "Buy term life insurance for 10-12x your income to close the protection gap.",
-        })
-    elif insurance_gap and insurance_gap != "Adequate":
-        items.append({
-            "item_id": "protection_review",
-            "dimension": "protection",
-            "urgency": "HIGH",
-            "value_type": "required_life_cover_inr",
-            "value_num": float(required_cover) if isinstance(required_cover, (int, float)) else None,
-            "title": "Review insurance coverage",
-            "description": "Re-evaluate life and health cover to ensure adequacy.",
+            "description": (
+                f"Current cover: Rs. {life_cover_current:,.0f}. Required: Rs. {life_cover_required:,.0f}. "
+                f"Get additional Rs. {life_cover_gap:,.0f} term cover. "
+                f"Estimated premium: ~Rs. {est_premium_monthly:,.0f}/month."
+            ),
         })
 
-    # Liquidity / emergency fund
+    # ---- 2. PROTECTION: Health Insurance ----
+    health_cover_current = _safe_float(facts_insurance.get("healthCover"), 0)
+    recommended_health = 1500000 if _safe_float(facts_personal.get("dependents_count"), 0) > 0 else 1000000
+    health_cover_gap = max(0, recommended_health - health_cover_current)
+
+    if health_cover_gap > 0:
+        age = int(_safe_float(facts_personal.get("age"), 35))
+        health_rate = 2500 if age < 35 else (3500 if age < 45 else 5000)
+        health_premium_yearly = (health_cover_gap / 100000) * health_rate
+        health_premium_monthly = health_premium_yearly / 12
+
+        urgency = "IMMEDIATE" if health_cover_current < recommended_health * 0.5 else "HIGH"
+        items.append({
+            "item_id": "protection_health_cover_gap",
+            "dimension": "protection",
+            "urgency": urgency,
+            "value_type": "health_cover_gap_inr",
+            "value_num": health_cover_gap,
+            "title": "Get adequate health insurance",
+            "description": (
+                f"Current health cover: Rs. {health_cover_current:,.0f}. "
+                f"Recommended: Rs. {recommended_health:,.0f}. "
+                f"Gap: Rs. {health_cover_gap:,.0f}. "
+                f"Estimated premium: ~Rs. {health_premium_monthly:,.0f}/month."
+            ),
+        })
+
+    # ---- 3. LIQUIDITY: Emergency Fund (in RUPEES, not months) ----
     liquidity = analysis.get("liquidity")
-    liquidity_months = diagnostics.get("liquidityMonths")
-    if liquidity == "Insufficient":
+    liquidity_months = _safe_float(diagnostics.get("liquidityMonths"), 0)
+    monthly_expenses = _safe_float(facts_income.get("monthlyExpenses"), 0)
+    ef_target = monthly_expenses * 6
+    ef_current = _safe_float((facts.get("lifestyle") or {}).get("emergency_fund"), 0)
+    ef_gap_inr = max(0, ef_target - ef_current)
+
+    if liquidity in ("Insufficient", "Low", "Critical") and ef_gap_inr > 0:
         items.append({
             "item_id": "liquidity_emergency_fund",
             "dimension": "liquidity",
-            "urgency": "IMMEDIATE",
-            "value_type": "emergency_fund_months",
-            "value_num": float(liquidity_months) if isinstance(liquidity_months, (int, float)) else None,
+            "urgency": "IMMEDIATE" if liquidity_months < 3 else "HIGH",
+            "value_type": "emergency_fund_gap_inr",
+            "value_num": ef_gap_inr,
             "title": "Build emergency fund",
-            "description": "Top up your emergency reserve until you cover at least 6 months of expenses.",
+            "description": (
+                f"You have {liquidity_months:.1f} months of expenses covered. "
+                f"Target: 6 months (Rs. {ef_target:,.0f}). "
+                f"Gap: Rs. {ef_gap_inr:,.0f}. "
+                f"Park in liquid fund or high-yield savings."
+            ),
         })
 
-    # Debt management
+    # ---- 4. DEBT MANAGEMENT ----
     debt_stress = analysis.get("debtStress")
-    emi_pct = diagnostics.get("emiPct")
-    if debt_stress == "Stressed":
+    emi_pct = _safe_float(diagnostics.get("emiPct"), 0)
+    monthly_emi = _safe_float(facts_income.get("monthlyEmi"), 0)
+
+    if debt_stress in ("Stressed", "High"):
         items.append({
             "item_id": "debt_stress_high",
             "dimension": "debt_management",
             "urgency": "IMMEDIATE",
-            "value_type": "emi_to_income_pct",
-            "value_num": float(emi_pct) if isinstance(emi_pct, (int, float)) else None,
+            "value_type": "monthly_emi_inr",
+            "value_num": monthly_emi,
             "title": "Reduce debt burden",
-            "description": "Refinance or accelerate repayment of high-cost debt; avoid taking on new borrowing.",
+            "description": (
+                f"EMI-to-income ratio: {emi_pct:.1f}% (above safe limit of 40%). "
+                f"Monthly EMI: Rs. {monthly_emi:,.0f}. "
+                f"Refinance or accelerate repayment of high-cost debt."
+            ),
         })
     elif debt_stress == "Moderate":
         items.append({
             "item_id": "debt_stress_moderate",
             "dimension": "debt_management",
             "urgency": "HIGH",
-            "value_type": "emi_to_income_pct",
-            "value_num": float(emi_pct) if isinstance(emi_pct, (int, float)) else None,
-            "title": "Prioritise repayment of unsecured debt",
-            "description": "Start chipping away at unsecured loans before they compound further.",
+            "value_type": "monthly_emi_inr",
+            "value_num": monthly_emi,
+            "title": "Prioritise unsecured debt repayment",
+            "description": (
+                f"EMI-to-income ratio: {emi_pct:.1f}%. "
+                f"Monthly EMI: Rs. {monthly_emi:,.0f}. "
+                f"Start reducing unsecured loans before they compound."
+            ),
         })
 
-    # Savings / surplus
+    # ---- 5. SAVINGS RATE ----
     surplus_band = analysis.get("surplusBand")
+    monthly_surplus = _safe_float(alloc.get("monthly_surplus"), 0)
     if surplus_band == "Low":
         items.append({
             "item_id": "savings_low_surplus",
             "dimension": "savings",
             "urgency": "HIGH",
-            "value_type": "surplus_band",
-            "value_num": None,
+            "value_type": "monthly_surplus_inr",
+            "value_num": monthly_surplus,
             "title": "Lift your savings rate",
-            "description": "Cut discretionary spending and automate an SIP to push savings above 20% of income.",
+            "description": (
+                f"Current monthly surplus: Rs. {monthly_surplus:,.0f}. "
+                f"Cut discretionary spending and automate an SIP to push savings above 20% of income."
+            ),
         })
 
-    # IHS / portfolio quality
+    # ---- 6. GOAL-BASED SIP OPPORTUNITIES ----
+    goal_sip_table = alloc.get("goal_sip_table") or []
+    for idx, goal in enumerate(goal_sip_table):
+        goal_name = goal.get("name") or "Goal"
+        is_emergency = goal.get("is_emergency", False)
+        if is_emergency:
+            continue  # Already handled above in liquidity
+
+        allocated_sip = _safe_float(goal.get("allocated_sip"), 0)
+        ideal_sip = _safe_float(goal.get("ideal_sip"), 0)
+        shortfall = _safe_float(goal.get("shortfall"), 0)
+        target_amount = _safe_float(goal.get("target_amount"), 0)
+        horizon = goal.get("horizon_years")
+        fund_type = goal.get("fund_type") or "Diversified Funds"
+        risk_cat = goal.get("risk_category") or "Moderate"
+
+        # Create item_id from goal name (sanitized)
+        safe_name = (goal_name or "").lower().replace(" ", "_")[:30]
+        item_id = f"goal_sip_{safe_name}_{idx}"
+
+        if shortfall > 0:
+            urgency = "IMMEDIATE" if (horizon and float(horizon) <= 3) else "HIGH"
+            items.append({
+                "item_id": item_id,
+                "dimension": "goal_sip",
+                "urgency": urgency,
+                "value_type": "sip_amount_inr",
+                "value_num": ideal_sip,
+                "title": f"SIP for {goal_name}",
+                "description": (
+                    f"Target: Rs. {target_amount:,.0f}" +
+                    (f" in {horizon} years" if horizon else "") +
+                    f". Ideal SIP: Rs. {ideal_sip:,.0f}/month. "
+                    f"Currently allocated: Rs. {allocated_sip:,.0f}/month. "
+                    f"Shortfall: Rs. {shortfall:,.0f}/month. "
+                    f"Recommended: {fund_type} ({risk_cat} risk)."
+                ),
+            })
+        else:
+            items.append({
+                "item_id": item_id,
+                "dimension": "goal_sip",
+                "urgency": "MAINTAIN",
+                "value_type": "sip_amount_inr",
+                "value_num": allocated_sip,
+                "title": f"SIP for {goal_name}",
+                "description": (
+                    f"Target: Rs. {target_amount:,.0f}" +
+                    (f" in {horizon} years" if horizon else "") +
+                    f". Allocated SIP: Rs. {allocated_sip:,.0f}/month ({fund_type}). "
+                    f"On track."
+                ),
+            })
+
+    # ---- 7. PORTFOLIO HEALTH ----
     ihs = analysis.get("ihs") or {}
     ihs_band = ihs.get("band")
     ihs_score = ihs.get("score")
@@ -8227,8 +8418,51 @@ def _build_dashboard_action_items(analysis: dict) -> list:
             "value_type": "ihs_score",
             "value_num": float(ihs_score) if isinstance(ihs_score, (int, float)) else None,
             "title": "Improve portfolio quality",
-            "description": "Diversify allocation and remove unsuitable products to lift portfolio quality.",
+            "description": (
+                f"Portfolio health score: {ihs_score}/100 ({ihs_band}). "
+                f"Diversify allocation and remove unsuitable products."
+            ),
         })
+
+    # ---- 8. TAX OPTIMISATION ----
+    itr = facts.get("itr") or {}
+    deductions = itr.get("deductions_claimed") or []
+    total_deductions = sum(_safe_float(d.get("amount"), 0) for d in deductions)
+    if total_deductions < 150000 and _safe_float(facts_income.get("annualIncome"), 0) > 500000:
+        unused = 150000 - total_deductions
+        items.append({
+            "item_id": "tax_deduction_gap",
+            "dimension": "tax_efficiency",
+            "urgency": "HIGH" if unused > 100000 else "MAINTAIN",
+            "value_type": "tax_saving_potential_inr",
+            "value_num": unused * 0.3,  # Approximate tax saving at 30% bracket
+            "title": "Maximise tax deductions",
+            "description": (
+                f"Currently claiming Rs. {total_deductions:,.0f} in deductions. "
+                f"Unutilised 80C limit: Rs. {unused:,.0f}. "
+                f"Potential tax saving: ~Rs. {unused * 0.3:,.0f}/year via ELSS, PPF, or NPS."
+            ),
+        })
+
+    # ---- 9. RETIREMENT PLANNING (if applicable) ----
+    retirement = facts.get("retirement_planning")
+    if retirement and retirement.get("enabled"):
+        corpus_required = _safe_float(retirement.get("corpus_required"), 0)
+        monthly_sip_needed = _safe_float(retirement.get("monthly_sip_needed"), 0)
+        if corpus_required > 0 and monthly_sip_needed > 0:
+            items.append({
+                "item_id": "retirement_planning_sip",
+                "dimension": "goal_sip",
+                "urgency": "HIGH",
+                "value_type": "sip_amount_inr",
+                "value_num": monthly_sip_needed,
+                "title": "Retirement corpus SIP",
+                "description": (
+                    f"Retirement corpus needed: Rs. {corpus_required:,.0f}. "
+                    f"Required SIP: Rs. {monthly_sip_needed:,.0f}/month. "
+                    f"Start early to benefit from compounding."
+                ),
+            })
 
     return items
 

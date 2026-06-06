@@ -219,8 +219,9 @@ def overview():
     metrics["missed_quarter_days"] = MISSED_QUARTER_DAYS
 
     reports = list_active_dashboard_reports(mfd_uid)
-    active_reports = [
-        {
+    active_reports = []
+    for r in reports:
+        entry = {
             "id": r.get("id"),
             "client_pan": r.get("client_pan"),
             "client_name": r.get("client_name"),
@@ -229,8 +230,27 @@ def overview():
             "pdf_filename": r.get("pdf_filename"),
             "status": r.get("status"),
         }
-        for r in reports
-    ]
+        # Extract per-client summary from snapshot_json (already stored)
+        snapshot_raw = r.get("snapshot_json")
+        if snapshot_raw:
+            try:
+                snap = json.loads(snapshot_raw) if isinstance(snapshot_raw, str) else snapshot_raw
+                entry["health_score"] = (snap.get("overall_health") or {}).get("score")
+                entry["health_label"] = (snap.get("overall_health") or {}).get("label")
+                entry["risk_profile"] = snap.get("risk_profile")
+                # Protection summary
+                prot = snap.get("protection") or {}
+                entry["life_cover_gap"] = prot.get("life_cover_gap")
+                entry["health_cover_gap"] = prot.get("health_cover_gap")
+                # Allocation summary
+                alloc_sum = snap.get("allocation_summary") or {}
+                entry["total_ideal_sip"] = alloc_sum.get("total_ideal_sip")
+                entry["goal_achievement_pct"] = alloc_sum.get("goal_achievement_pct")
+                # Goal count
+                entry["goal_count"] = len(snap.get("goal_summary") or [])
+            except Exception:
+                pass
+        active_reports.append(entry)
 
     return jsonify({
         "mfd_firebase_uid": mfd_uid,
