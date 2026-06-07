@@ -180,6 +180,15 @@ if not openai_api_key:
 client = OpenAI(api_key=openai_api_key)
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
+# On Azure App Service, /tmp is ephemeral and not shared across container instances.
+# If DB_PATH is in /home/site/data (persistent shared storage), we redirect OUTPUT_DIR
+# to a subfolder there so PDFs are saved persistently and are accessible to all instances.
+db_path_env = os.getenv("DB_PATH")
+if db_path_env and "/home/site/data" in db_path_env:
+    OUTPUT_DIR = "/home/site/data/output"
+elif OUTPUT_DIR == "/tmp" and os.path.exists("/home/site/data"):
+    OUTPUT_DIR = "/home/site/data/output"
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Storage behavior:
@@ -6558,6 +6567,18 @@ def build_page_snapshot(client_facts, allocation_output):
     def kpi_fmt(s):
         return str(s).replace("Rs. ", "Rs.").replace(" L", "L").replace(" Cr", "Cr")
 
+    # Compute actual SIP amount from CAS + manual SIP
+    active_sip = _num(portfolio.get("total_monthly_sip"), 0) + _num((client_facts.get("lifestyle") or {}).get("manual_sip"), 0)
+    active_sip_text = f"Rs.{active_sip:,.0f}/mo" if active_sip > 0 else "Rs.0/mo"
+    active_sip_color = green if active_sip > 0 else red
+
+    # Compute funded goals from allocation output
+    goal_sip_rows = _as_list(allocation_output.get("goal_sip_table"))
+    total_goals = len(client_facts.get("goals") or [])
+    funded_goals = sum(1 for g in goal_sip_rows if _num(_as_dict(g).get("shortfall"), 0) <= 0)
+    funded_color = green if funded_goals >= total_goals and total_goals > 0 else (orange if funded_goals > 0 else red)
+    goals_tag = "GOOD" if funded_goals >= total_goals and total_goals > 0 else "HIGH"
+
     rows = [["AREA", "CURRENT", "IDEAL", "PRIORITY"]]
     rows += [
         ["Life Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("lifeCover"))), red), ctext(kpi_fmt(_fmt_rs(diag.get("requiredLifeCover"))), green), _tag(_urgency(_ihs_component_score(analysis, "protection")))],
@@ -6565,8 +6586,8 @@ def build_page_snapshot(client_facts, allocation_output):
         ["Emergency Fund", ctext(f"{_num(diag.get('liquidityMonths'), 0):.1f} months", blue), ctext(f"6 months expenses ({kpi_fmt(_fmt_rs(ef_target))})", green), _tag(analysis.get("liquidity") or "-")],
         ["Equity Allocation", ctext(f"{_portfolio_equity(portfolio):.0f}%", red), ctext(_recommended_band_text(ar), green), _tag("HIGH")],
         ["EMI / Income", ctext(f"{_num(diag.get('emiPct'), 0):.1f}%", blue), ctext("<40%", green), _tag(analysis.get("debtStress") or "-")],
-        ["Active SIP", ctext("Rs.0/mo", red), ctext(f"Need {kpi_fmt(_fmt_rs(allocation_output.get('combined_shortfall'), False))}/mo", green), _tag("HIGH")],
-        ["Goals Funded", ctext(f"0 of {len(client_facts.get('goals') or [])}", red), ctext(f"{len(client_facts.get('goals') or [])} of {len(client_facts.get('goals') or [])}", green), _tag("HIGH")],
+        ["Active SIP", ctext(active_sip_text, active_sip_color), ctext(f"Need {kpi_fmt(_fmt_rs(allocation_output.get('combined_shortfall'), False))}/mo", green), _tag("HIGH" if active_sip <= 0 else "GOOD")],
+        ["Goals Funded", ctext(f"{funded_goals} of {total_goals}", funded_color), ctext(f"{total_goals} of {total_goals}", green), _tag(goals_tag)],
     ]
     profile = [
         ["Risk Profile", ctext(_format_status(analysis.get("riskProfile")), colors.HexColor("#2C3E50"), True)],
@@ -6583,11 +6604,26 @@ def build_page_snapshot(client_facts, allocation_output):
         ["Final Category", ctext(_format_status(ar.get("finalCategory") or "-"), orange, True)],
         ["Recommended Equity Band", ctext(_recommended_band_text(ar), green, True)],
     ]
+    # Compute dynamic KPI notes
+    annual_inc = _num(income.get("annualIncome"), 0)
+    monthly_inc = annual_inc / 12 if annual_inc > 0 else 0
+    savings_rate = (monthly_surplus / monthly_inc * 100) if monthly_inc > 0 else 0
+
+    # Portfolio value: CAS data first, then manual_corpus fallback
+    portfolio_val = _num(portfolio.get("total_value") or portfolio.get("current_value"), 0)
+    if portfolio_val <= 0:
+        portfolio_val = _num((client_facts.get("lifestyle") or {}).get("manual_corpus"), 0)
+    equity_pct = _portfolio_equity(portfolio)
+    portfolio_note = f"{equity_pct:.0f}% equity" if portfolio_val > 0 else "No data"
+
+    # Active SIP: CAS + manual
+    active_sip_val = _num(portfolio.get("total_monthly_sip"), 0) + _num((client_facts.get("lifestyle") or {}).get("manual_sip"), 0)
+
     snapshot_kpis = [
-        {"label": "Annual Income (Gross)", "value": kpi_fmt(_fmt_rs(income.get("annualIncome"))), "note": "Rs.2.0L gross / month"},
-        {"label": "Monthly Surplus", "value": kpi_fmt(_fmt_rs(monthly_surplus)), "note": "Savings rate: 45%"},
-        {"label": "Current Portfolio", "value": kpi_fmt(_fmt_rs(portfolio.get("total_value") or portfolio.get("current_value"))), "note": f"72% equity - Gains Rs.2.1L"},
-        {"label": "Active SIP", "value": "Rs.0", "note": f"Need {kpi_fmt(_fmt_rs(allocation_output.get('combined_shortfall'), False))}/mo", "note_color": "orange"},
+        {"label": "Annual Income (Gross)", "value": kpi_fmt(_fmt_rs(income.get("annualIncome"))), "note": f"{kpi_fmt(_fmt_rs(monthly_inc, False))}/month" if monthly_inc > 0 else ""},
+        {"label": "Monthly Surplus", "value": kpi_fmt(_fmt_rs(monthly_surplus)), "note": f"Savings rate: {savings_rate:.0f}%" if savings_rate > 0 else ""},
+        {"label": "Current Portfolio", "value": kpi_fmt(_fmt_rs(portfolio_val)) if portfolio_val > 0 else "—", "note": portfolio_note},
+        {"label": "Active SIP", "value": f"Rs.{active_sip_val:,.0f}/mo" if active_sip_val > 0 else "Rs.0", "note": f"Need {kpi_fmt(_fmt_rs(allocation_output.get('combined_shortfall'), False))}/mo" if active_sip_val <= 0 else "On track", "note_color": "orange" if active_sip_val <= 0 else "green"},
     ]
     current_vs_ideal = _styled_table(rows, [74, 56, 76, 104], style_type="light")
     profile_tbl = _styled_table(profile, [64, 96], header=False, style_type="light_right")
@@ -7868,12 +7904,16 @@ def generate_financial_plan_pdf(q: dict, analysis: dict, output_path: str, doc_i
             analysis["ihs"] = {}
         analysis["ihs"]["score"] = hs.get("overall", 0)
         analysis["ihs"]["band"] = hs.get("overall_label", "")
+        # Inject component breakdown so _ihs_component_score() can find
+        # protection, liquidity, debt_management, etc. for urgency tags.
+        analysis["ihs"]["breakdown"] = hs.get("components") or {}
         if "analysis" not in client_facts:
             client_facts["analysis"] = {}
         if "ihs" not in client_facts["analysis"]:
             client_facts["analysis"]["ihs"] = {}
         client_facts["analysis"]["ihs"]["score"] = hs.get("overall", 0)
         client_facts["analysis"]["ihs"]["band"] = hs.get("overall_label", "")
+        client_facts["analysis"]["ihs"]["breakdown"] = hs.get("components") or {}
     except Exception:
         pass
     narratives = _strip_in_app_report_text(narratives or {})
