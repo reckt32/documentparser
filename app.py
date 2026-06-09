@@ -16,7 +16,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from reportlab.pdfgen import canvas
 from extractors import index_and_extract, extract_and_store_from_indexed
@@ -2205,45 +2205,55 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
 
     per_doc_extracts = []
     
-    # Extract full ITR data from metadata_json (includes deductions_claimed, income_sources, etc.)
+    # Extract metadata_json fields that are not stored as numeric metrics.
     for upload in uploads:
         doc_type = (upload.get("doc_type") or upload["doc_type"] if isinstance(upload, dict) else "").lower()
+        metadata_json = upload.get("metadata_json") or (upload["metadata_json"] if isinstance(upload, dict) else None)
+        if not metadata_json:
+            continue
+        try:
+            metadata = json.loads(metadata_json) if isinstance(metadata_json, str) else metadata_json
+        except Exception as e:
+            logger.warning(f"Error parsing upload metadata: {e}")
+            continue
+
+        if "insurance" in doc_type:
+            for key in ("insurance_type", "insurer_name", "policy_number", "policy_holder"):
+                value = metadata.get(key)
+                if value not in (None, "", "N/A") and not insurance.get(key):
+                    insurance[key] = value
+
         if "itr" in doc_type:
-            metadata_json = upload.get("metadata_json") or (upload["metadata_json"] if isinstance(upload, dict) else None)
-            if metadata_json:
-                try:
-                    metadata = json.loads(metadata_json) if isinstance(metadata_json, str) else metadata_json
-                    # Merge full ITR extracted data into itr dict
-                    # Include deductions_claimed, income_sources, tax_computation, etc.
-                    if metadata.get("deductions_claimed"):
-                        itr["deductions_claimed"] = metadata["deductions_claimed"]
-                    if metadata.get("income_sources"):
-                        itr["income_sources"] = metadata["income_sources"]
-                    if metadata.get("tax_computation"):
-                        itr["tax_computation"] = metadata["tax_computation"]
-                    if metadata.get("carry_forward_losses"):
-                        itr["carry_forward_losses"] = metadata["carry_forward_losses"]
-                    if metadata.get("assets_and_liabilities"):
-                        itr["assets_and_liabilities"] = metadata["assets_and_liabilities"]
-                    # Also get numeric fields from metadata if not already from metrics
-                    if metadata.get("gross_total_income") and not itr.get("gross_total_income"):
-                        try:
-                            itr["gross_total_income"] = float(metadata["gross_total_income"])
-                        except (ValueError, TypeError):
-                            pass
-                    if metadata.get("taxable_income") and not itr.get("taxable_income"):
-                        try:
-                            itr["taxable_income"] = float(metadata["taxable_income"])
-                        except (ValueError, TypeError):
-                            pass
-                    if metadata.get("total_tax_paid") and not itr.get("total_tax_paid"):
-                        try:
-                            itr["total_tax_paid"] = float(metadata["total_tax_paid"])
-                        except (ValueError, TypeError):
-                            pass
-                except Exception as e:
-                    logger.warning(f"Error parsing ITR metadata: {e}")
-                    continue
+            try:
+                # Merge full ITR extracted data into itr dict.
+                if metadata.get("deductions_claimed"):
+                    itr["deductions_claimed"] = metadata["deductions_claimed"]
+                if metadata.get("income_sources"):
+                    itr["income_sources"] = metadata["income_sources"]
+                if metadata.get("tax_computation"):
+                    itr["tax_computation"] = metadata["tax_computation"]
+                if metadata.get("carry_forward_losses"):
+                    itr["carry_forward_losses"] = metadata["carry_forward_losses"]
+                if metadata.get("assets_and_liabilities"):
+                    itr["assets_and_liabilities"] = metadata["assets_and_liabilities"]
+                if metadata.get("gross_total_income") and not itr.get("gross_total_income"):
+                    try:
+                        itr["gross_total_income"] = float(metadata["gross_total_income"])
+                    except (ValueError, TypeError):
+                        pass
+                if metadata.get("taxable_income") and not itr.get("taxable_income"):
+                    try:
+                        itr["taxable_income"] = float(metadata["taxable_income"])
+                    except (ValueError, TypeError):
+                        pass
+                if metadata.get("total_tax_paid") and not itr.get("total_tax_paid"):
+                    try:
+                        itr["total_tax_paid"] = float(metadata["total_tax_paid"])
+                    except (ValueError, TypeError):
+                        pass
+            except Exception as e:
+                logger.warning(f"Error parsing ITR metadata: {e}")
+                continue
 
     for did in doc_ids:
         # 1) Deterministic summaries from indexed sections/tables
@@ -2783,6 +2793,8 @@ def upload_document():
                             elif doc_type == "Insurance document":
                                 metadata_update["policy_holder"] = other_data.get("policy_holder")
                                 metadata_update["insurance_type"] = other_data.get("insurance_type")
+                                metadata_update["insurer_name"] = other_data.get("insurer_name")
+                                metadata_update["policy_number"] = other_data.get("policy_number")
                                 metadata_update["sum_assured_or_insured"] = other_data.get("sum_assured_or_insured")
                                 metadata_update["date_of_birth"] = other_data.get("date_of_birth")
                                 logger.debug(f"Insurance metadata: type={metadata_update.get('insurance_type')}, sum={metadata_update.get('sum_assured_or_insured')}")
@@ -3073,10 +3085,25 @@ def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
     insurance = q.get("insurance") or {}
     lifestyle = q.get("lifestyle") or {}
 
+    children = family.get("children") or []
+    other_dependents = family.get("dependents") or []
+    has_financial_dependents = bool(
+        children
+        or other_dependents
+        or family.get("has_financial_dependents")
+        or family.get("spouse")
+    )
+    allocation = dict(lifestyle.get("allocation") or {})
+    if not allocation and risk.get("equity_allocation_percent") not in (None, ""):
+        equity_pct = _safe_float(risk.get("equity_allocation_percent"), 0.0)
+        if equity_pct > 0:
+            allocation = {"equity": equity_pct, "debt": max(0.0, 100.0 - equity_pct)}
+
     payload = {
         "personal": {
             "age": personal.get("age"),
             "name": personal.get("name"),
+            "has_financial_dependents": has_financial_dependents,
         },
         "income": {
             "annualIncome": lifestyle.get("annual_income"),
@@ -3110,7 +3137,7 @@ def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
         },
         "investments": {
             "current": lifestyle.get("products") or [],
-            "allocation": lifestyle.get("allocation") or {},
+            "allocation": allocation,
         },
         "emergencyFundAmount": lifestyle.get("emergency_fund"),
         # Manual overrides (used when CAS data is absent)
@@ -3201,7 +3228,7 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     
     di = doc_insights or {}
     bank = di.get("bank") or {}
-    portfolio = di.get("portfolio") or {}
+    portfolio = dict(di.get("portfolio") or {})
     itr = di.get("itr") or {}
     
     # ITR fallback if tax_info is missing
@@ -3223,6 +3250,21 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
             "tax_regime": tax_info.get("tax_regime", "old").lower(),
         }
     
+    # Merge questionnaire allocation/corpus/SIP values so report pages do not
+    # depend on CAS-only fields after the UI revamp.
+    manual_allocation = lifestyle.get("allocation") or {}
+    if not portfolio:
+        portfolio.update(manual_allocation)
+    else:
+        for key, value in manual_allocation.items():
+            if portfolio.get(key) in (None, "", 0):
+                portfolio[key] = value
+    if not portfolio and (q.get("risk_profile") or {}).get("equity_allocation_percent") not in (None, ""):
+        equity_pct = _safe_float((q.get("risk_profile") or {}).get("equity_allocation_percent"), 0.0)
+        if equity_pct > 0:
+            portfolio["equity"] = equity_pct
+            portfolio["debt"] = max(0.0, 100.0 - equity_pct)
+
     # Get CAS data for SIP commitments
     qid = q.get("id")
     cas_data = _get_cas_data_for_questionnaire(qid) if qid else {}
@@ -3238,8 +3280,15 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     
     # Enrich portfolio with SIP data
     enriched_portfolio = dict(portfolio)
+    manual_sip = _safe_float(lifestyle.get("manual_sip"), 0.0)
+    manual_corpus = _safe_float(lifestyle.get("manual_corpus"), 0.0)
+    if total_monthly_sip <= 0 and manual_sip > 0:
+        total_monthly_sip = manual_sip
     enriched_portfolio["total_monthly_sip"] = total_monthly_sip
     enriched_portfolio["sip_count"] = len(sip_details)
+    if manual_corpus > 0:
+        enriched_portfolio.setdefault("current_value", manual_corpus)
+        enriched_portfolio.setdefault("total_value", manual_corpus)
     
     # Calculate retirement planning if enabled
     age = personal.get("age")
@@ -3249,7 +3298,11 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     
     retirement_planning = None
     if goals_data.get("wants_retirement_planning"):
-        desired_pension = goals_data.get("desired_monthly_pension")
+        desired_pension = (
+            goals_data.get("desired_monthly_pension")
+            or goals_data.get("expected_pension")
+            or lifestyle.get("expected_pension")
+        )
         retirement_planning = compute_retirement_corpus(
             age=age,
             monthly_income=monthly_income,
@@ -3287,6 +3340,8 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
         "insurance": {
             "lifeCover": insurance.get("life_cover"),
             "healthCover": insurance.get("health_cover"),
+            "insurerName": insurance.get("insurer_name") or (di.get("insurance") or {}).get("insurer_name"),
+            "insuranceType": insurance.get("insurance_type") or (di.get("insurance") or {}).get("insurance_type"),
         },
         "savings": {
             "savingsPercent": lifestyle.get("savings_percent"),
@@ -3325,11 +3380,9 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
         "term_insurance": term_insurance,
         "tax": tax_info,
         "itr": itr,  # Full ITR data for tax optimization section
+        "estate": q.get("estate") or {},
     }
     return facts
-
-
-# ------------------------ Financial Health Score Calculator ------------------------ #
 def compute_financial_health_score(analysis: dict, facts: dict) -> dict:
     """
     Compute overall financial health score (0-100) and component scores.
@@ -5973,7 +6026,8 @@ def _display_monthly_surplus(client_facts):
     monthly_income = _num(income.get("annualIncome"), 0) / 12
     computed = monthly_income - _num(income.get("monthlyExpenses"), 0) - _num(income.get("monthlyEmi"), 0)
     bank_net = _num(bank.get("net_cashflow"), 0)
-    if monthly_income > 0 and abs(bank_net) <= monthly_income * 1.5:
+    has_bank_cashflow = any(_num(bank.get(k), 0) > 0 for k in ("total_inflows", "total_outflows"))
+    if has_bank_cashflow and monthly_income > 0 and abs(bank_net) <= monthly_income * 1.5:
         return bank_net
     return computed
 
@@ -6401,12 +6455,22 @@ def _allocation_output(client_facts):
         )
     except Exception:
         out = {}
+    existing_sip_running = _num(portfolio.get("total_monthly_sip") or portfolio.get("monthly_sip"), 0)
+    if existing_sip_running <= 0:
+        existing_sip_running = _num((client_facts.get("lifestyle") or {}).get("manual_sip"), 0)
     goal_rows = out.get("goal_sip_table") or []
     combined = sum(_num(g.get("shortfall"), 0) for g in goal_rows) or sum(_num(g.get("ideal_sip"), 0) for g in goals)
     out.setdefault("goal_sip_table", goal_rows)
     out.setdefault("combined_shortfall", combined)
     out.setdefault("insurance_provision", out.get("insurance_sip_monthly") or 0)
-    out.setdefault("available_for_goals", out.get("remaining_for_goals") or 0)
+    out.setdefault("existing_sip_running", existing_sip_running)
+    out.setdefault("monthly_surplus", round(max(0, monthly_surplus), 0))
+    if _num(out.get("monthly_surplus"), 0) <= 0 and monthly_surplus > 0:
+        out["monthly_surplus"] = round(monthly_surplus, 0)
+    out.setdefault("available_for_goals", out.get("remaining_for_goals") or max(0, monthly_surplus - existing_sip_running - _num(out.get("insurance_provision"), 0)))
+    if _num(out.get("available_for_goals"), 0) <= 0 and monthly_surplus > existing_sip_running:
+        out["available_for_goals"] = max(0, monthly_surplus - existing_sip_running - _num(out.get("insurance_provision"), 0))
+    out.setdefault("total_investing", existing_sip_running + _num(out.get("available_for_goals"), 0))
     if not out.get("goal_sip_table") and goals:
         available = _num(out.get("available_for_goals"), 0)
         total_ideal = sum(_num(g.get("ideal_sip"), 0) for g in goals)
@@ -6452,7 +6516,8 @@ def build_page_cover(client_facts, allocation_output, narratives=None):
             c.restoreState()
             
         badge = CanvasBlock(60, 16, draw_badge)
-        date_str = f"<font size='9' color='#2C3E50'><b>{datetime.now().strftime('%d %B %Y')}</b></font><br/><font size='8' color='#6E8094'>{datetime.now().strftime('%I:%M %p IST')}</font>"
+        generated_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        date_str = f"<font size='9' color='#2C3E50'><b>{generated_ist.strftime('%d %B %Y')}</b></font><br/><font size='8' color='#6E8094'>{generated_ist.strftime('%I:%M %p IST')}</font>"
         date_para = Paragraph(date_str, ParagraphStyle("mk_cover_date", parent=styles["small"], alignment=TA_RIGHT))
         
         right_table = Table([[date_para, badge]], colWidths=[120, 60])
@@ -6567,8 +6632,8 @@ def build_page_snapshot(client_facts, allocation_output):
     def kpi_fmt(s):
         return str(s).replace("Rs. ", "Rs.").replace(" L", "L").replace(" Cr", "Cr")
 
-    # Compute actual SIP amount from CAS + manual SIP
-    active_sip = _num(portfolio.get("total_monthly_sip"), 0) + _num((client_facts.get("lifestyle") or {}).get("manual_sip"), 0)
+    # Compute actual SIP amount from normalized CAS/manual facts.
+    active_sip = _num(portfolio.get("total_monthly_sip"), 0)
     active_sip_text = f"Rs.{active_sip:,.0f}/mo" if active_sip > 0 else "Rs.0/mo"
     active_sip_color = green if active_sip > 0 else red
 
@@ -6616,8 +6681,8 @@ def build_page_snapshot(client_facts, allocation_output):
     equity_pct = _portfolio_equity(portfolio)
     portfolio_note = f"{equity_pct:.0f}% equity" if portfolio_val > 0 else "No data"
 
-    # Active SIP: CAS + manual
-    active_sip_val = _num(portfolio.get("total_monthly_sip"), 0) + _num((client_facts.get("lifestyle") or {}).get("manual_sip"), 0)
+    # Active SIP: normalized CAS/manual value
+    active_sip_val = _num(portfolio.get("total_monthly_sip"), 0)
 
     snapshot_kpis = [
         {"label": "Annual Income (Gross)", "value": kpi_fmt(_fmt_rs(income.get("annualIncome"))), "note": f"{kpi_fmt(_fmt_rs(monthly_inc, False))}/month" if monthly_inc > 0 else ""},
@@ -6822,7 +6887,7 @@ def build_page_protection(client_facts, allocation_output):
             [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Pure term insurance — no investment component", styles["body"])],
             [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Coverage tenure until age 55-60 minimum", styles["body"])],
             [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Sum assured benchmark: ~20x annual expenses", styles["body"])],
-            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Compare: HDFC Life, ICICI Prudential, Max Life", styles["body"])],
+            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Compare claim-settlement ratio, exclusions and premium stability", styles["body"])],
         ], [220], header=False, style_type="light"),
     ]
     health_header = Table(
@@ -7207,6 +7272,8 @@ def build_page_goal_feasibility(client_facts, allocation_output):
     goal_sip_rows = _as_list(allocation_output.get("goal_sip_table"))
     total_goals = max(1, len(goal_sip_rows))
     total_shortfall = _num(allocation_output.get("combined_shortfall"), 0)
+    existing_sip_running = _num(allocation_output.get("existing_sip_running"), 0)
+    total_ideal_for_share = sum(_num(_as_dict(g).get("ideal_sip"), 0) for g in goal_sip_rows)
     
     cards = []
     for g in goal_sip_rows:
@@ -7215,7 +7282,9 @@ def build_page_goal_feasibility(client_facts, allocation_output):
         target_val = _num(g.get("target_amount"), 0)
         horizon = f"{g.get('horizon_years') or '-'} yrs"
         ideal = _num(g.get("ideal_sip"), 0)
-        curr = 0 # Currently assumed Rs. 0
+        curr = 0
+        if existing_sip_running > 0 and total_ideal_for_share > 0 and ideal > 0:
+            curr = existing_sip_running * ideal / total_ideal_for_share
         gap = _num(g.get("shortfall"), 0)
         coverage = (_num(g.get("allocated_sip"), 0) / ideal * 100) if ideal > 0 else 0
         
@@ -8280,8 +8349,8 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
             "item_id": "protection_life_cover_gap",
             "dimension": "protection",
             "urgency": urgency,
-            "value_type": "life_cover_gap_inr",
-            "value_num": life_cover_gap,
+            "value_type": "life_premium_monthly_inr",
+            "value_num": est_premium_monthly,
             "title": "Increase life insurance cover",
             "description": (
                 f"Current cover: Rs. {life_cover_current:,.0f}. Required: Rs. {life_cover_required:,.0f}. "
@@ -8306,8 +8375,8 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
             "item_id": "protection_health_cover_gap",
             "dimension": "protection",
             "urgency": urgency,
-            "value_type": "health_cover_gap_inr",
-            "value_num": health_cover_gap,
+            "value_type": "health_premium_monthly_inr",
+            "value_num": health_premium_monthly,
             "title": "Get adequate health insurance",
             "description": (
                 f"Current health cover: Rs. {health_cover_current:,.0f}. "
@@ -8419,7 +8488,7 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
                 "dimension": "goal_sip",
                 "urgency": urgency,
                 "value_type": "sip_amount_inr",
-                "value_num": ideal_sip,
+                "value_num": shortfall,
                 "title": f"SIP for {goal_name}",
                 "description": (
                     f"Target: Rs. {target_amount:,.0f}" +
@@ -8464,6 +8533,48 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
             ),
         })
 
+    # ---- 7b. PORTFOLIO REBALANCING ----
+    portfolio = facts.get("portfolio") or {}
+    total_portfolio_value = _safe_float(portfolio.get("total_value") or portfolio.get("current_value"), 0)
+    current_equity = _safe_float(portfolio.get("equity"), 0)
+    advanced_risk = analysis.get("advancedRisk") or {}
+    rec_band = advanced_risk.get("recommendedEquityBand") or {}
+    rec_min = _safe_float(rec_band.get("min"), 40)
+    rec_max = _safe_float(rec_band.get("max"), 60)
+    rec_mid = _safe_float(advanced_risk.get("recommendedEquityMid"), 50)
+
+    if current_equity > 0:
+        if current_equity > rec_max:
+            shift_pct = current_equity - rec_mid
+            shift_amount = (shift_pct / 100.0) * total_portfolio_value
+            items.append({
+                "item_id": "portfolio_rebalance_reduce_equity",
+                "dimension": "portfolio_health",
+                "urgency": "HIGH",
+                "value_type": "rebalance_shift_inr",
+                "value_num": shift_amount,
+                "title": "Rebalance portfolio: Reduce equity",
+                "description": (
+                    f"Current equity allocation: {current_equity:.1f}% is above the recommended range of {rec_min:.0f}%-{rec_max:.0f}%. "
+                    f"Consider shifting ~{shift_pct:.1f}% of your portfolio (approx. Rs. {shift_amount:,.0f}) from equity to debt."
+                )
+            })
+        elif current_equity < rec_min:
+            shift_pct = rec_mid - current_equity
+            shift_amount = (shift_pct / 100.0) * total_portfolio_value
+            items.append({
+                "item_id": "portfolio_rebalance_increase_equity",
+                "dimension": "portfolio_health",
+                "urgency": "HIGH",
+                "value_type": "rebalance_shift_inr",
+                "value_num": shift_amount,
+                "title": "Rebalance portfolio: Increase equity",
+                "description": (
+                    f"Current equity allocation: {current_equity:.1f}% is below the recommended range of {rec_min:.0f}%-{rec_max:.0f}%. "
+                    f"Consider shifting ~{shift_pct:.1f}% of your portfolio (approx. Rs. {shift_amount:,.0f}) from debt to equity."
+                )
+            })
+
     # ---- 8. TAX OPTIMISATION ----
     itr = facts.get("itr") or {}
     deductions = itr.get("deductions_claimed") or []
@@ -8482,6 +8593,77 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
                 f"Unutilised 80C limit: Rs. {unused:,.0f}. "
                 f"Potential tax saving: ~Rs. {unused * 0.3:,.0f}/year via ELSS, PPF, or NPS."
             ),
+        })
+
+    # ---- 8b. TAX REGIME SWITCH ----
+    gross = _safe_float(facts_income.get("annualIncome"), 0)
+    if gross > 0:
+        tax_info = facts.get("tax") or {}
+        regime = tax_info.get("tax_regime", "old").lower()
+        d_80c = _safe_float(tax_info.get("deductions_80c"), 0)
+        d_80d = _safe_float(tax_info.get("deductions_80d"), 0)
+        d_24c = _safe_float(tax_info.get("deductions_24c"), 0)
+        d_80dd = _safe_float(tax_info.get("deductions_80dd"), 0)
+        
+        comp = compute_regime_comparison(
+            gross_income=gross,
+            deductions_80c=d_80c,
+            deductions_80d=d_80d,
+            other_deductions=d_24c + d_80dd
+        )
+        better_regime = comp.get("better_regime")
+        savings = _safe_float(comp.get("savings"), 0)
+        if savings > 0 and better_regime != regime:
+            items.append({
+                "item_id": "tax_regime_switch",
+                "dimension": "tax_efficiency",
+                "urgency": "HIGH",
+                "value_type": "tax_saving_potential_inr",
+                "value_num": savings,
+                "title": f"Switch to {better_regime.upper()} tax regime",
+                "description": (
+                    f"Your current regime is {regime.upper()}. By switching to the {better_regime.upper()} regime, "
+                    f"you could save approx. Rs. {savings:,.0f}/year in taxes based on your current income and deductions."
+                )
+            })
+
+    # ---- 8c. TAX FILING COMPLIANCE ----
+    if gross > 250000 and not facts.get("itr"):
+        items.append({
+            "item_id": "tax_filing_compliance",
+            "dimension": "tax_efficiency",
+            "urgency": "HIGH",
+            "value_type": "tax_filing_status",
+            "value_num": None,
+            "title": "File ITR & upload tax return",
+            "description": "Upload your latest ITR to verify tax compliance, claim refunds, and identify further tax optimization opportunities."
+        })
+
+    # ---- 8d. ESTATE PLANNING: Will & Nominations ----
+    estate = facts.get("estate") or {}
+    will_status = str(estate.get("will_status") or "").strip().lower()
+    nominees = estate.get("nominees") or []
+    
+    if will_status in ("no", ""):
+        items.append({
+            "item_id": "estate_will_planning",
+            "dimension": "estate_planning",
+            "urgency": "HIGH",
+            "value_type": "will_planning_status",
+            "value_num": None,
+            "title": "Create a Will",
+            "description": "You do not have a registered Will. Create a Will to ensure hassle-free distribution of your estate and assets to your loved ones."
+        })
+    
+    if len(nominees) == 0:
+        items.append({
+            "item_id": "estate_nominee_registration",
+            "dimension": "estate_planning",
+            "urgency": "HIGH",
+            "value_type": "nominee_status",
+            "value_num": None,
+            "title": "Register Nominees",
+            "description": "No nominee details are added to your estate profile. Register nominees across all bank accounts, mutual funds, and insurance policies."
         })
 
     # ---- 9. RETIREMENT PLANNING (if applicable) ----
