@@ -40,6 +40,7 @@ from db import (
     get_active_dashboard_report_by_pan,
     get_aggregate_metrics_for_period,
     get_aggregate_metrics_overview,
+    get_category_client_breakdown,
     list_active_dashboard_reports,
     update_aggregate_action_status_for_mfd,
     get_aggregate_action_statuses,
@@ -55,6 +56,7 @@ dashboard_bp = Blueprint("dashboard", __name__, url_prefix="/api/dashboard")
 
 ALLOWED_ACTION_STATUSES = {"CONVERTED", "PENDING"}
 PAN_PATTERN = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+DIMENSION_PATTERN = re.compile(r"^[a-z0-9 _\-]{1,64}$")
 MISSED_QUARTER_DAYS = 90  # a calendar quarter
 DEFAULT_ANNUAL_PERIOD_DAYS = 365
 
@@ -257,6 +259,54 @@ def overview():
         "metrics": metrics,
         "active_reports": active_reports,
         "active_report_count": len(active_reports),
+    }), 200
+
+
+# ---------------------------------------------------------------------------
+# GET /api/dashboard/category/<dimension>
+# ---------------------------------------------------------------------------
+
+@dashboard_bp.route("/category/<string:dimension>", methods=["GET"])
+@require_auth
+def category_breakdown(dimension: str):
+    """
+    Per-client breakdown of a single opportunity category (e.g. protection,
+    liquidity). Powers the dashboard drill-down: tapping a category bar shows
+    which clients make up its total and for what amount.
+
+    Response shape::
+
+        {
+          "dimension": "protection",
+          "total_opportunity": float,
+          "converted": float,
+          "pending": float,
+          "client_count": int,
+          "clients": [
+            {"client_pan": "...", "client_name": "...",
+             "total_opportunity": float, "converted": float,
+             "pending": float, "action_count": int},
+            ...
+          ]
+        }
+    """
+    mfd_uid = _get_mfd_uid()
+    if not mfd_uid:
+        return _bad_request("Authentication required", 401)
+
+    normalized = (dimension or "").strip().lower()
+    if not DIMENSION_PATTERN.match(normalized):
+        return _bad_request("Invalid category dimension.")
+
+    clients = get_category_client_breakdown(mfd_uid, normalized)
+
+    return jsonify({
+        "dimension": normalized,
+        "total_opportunity": sum(float(c.get("total_opportunity") or 0) for c in clients),
+        "converted": sum(float(c.get("converted") or 0) for c in clients),
+        "pending": sum(float(c.get("pending") or 0) for c in clients),
+        "client_count": len(clients),
+        "clients": clients,
     }), 200
 
 

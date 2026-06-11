@@ -21,6 +21,7 @@ from typing import Any, Dict
 from reportlab.pdfgen import canvas
 from extractors import index_and_extract, extract_and_store_from_indexed
 from llm_sections import run_report_sections, compute_goal_sip, compute_regime_comparison, PriorityAllocationEngine
+from assumptions import LIFE_COVER_MULTIPLE, WITHDRAWAL_RATE_RETIREMENT
 from db import (
     list_sections,
     list_metrics,
@@ -1538,7 +1539,7 @@ def compute_surplus_band(savings_percent):
 def compute_insurance_gap(annual_income, life_cover):
     ai = _safe_float(annual_income, 0.0)
     lc = _safe_float(life_cover, 0.0)
-    required = 10.0 * ai
+    required = LIFE_COVER_MULTIPLE * ai
     status = "Adequate" if lc >= required else "Underinsured"
     return status, required
 
@@ -1560,7 +1561,7 @@ def compute_liquidity(monthly_expenses, emergency_fund_amount):
     status = "Adequate" if months >= 6.0 else "Insufficient"
     return status, months
 
-def compute_retirement_corpus(age, monthly_income, desired_monthly_pension=None, withdrawal_rate=0.07, retirement_age=60):
+def compute_retirement_corpus(age, monthly_income, desired_monthly_pension=None, withdrawal_rate=WITHDRAWAL_RATE_RETIREMENT, retirement_age=60):
     """
     Calculate retirement corpus needed.
     
@@ -1590,7 +1591,7 @@ def compute_retirement_corpus(age, monthly_income, desired_monthly_pension=None,
         pension = _safe_float(desired_monthly_pension, 0.0)
         if pension > 0:
             annual_pension = pension * 12
-            # Ideal retirement corpus = annual pension / 7% (perpetuity formula)
+            # Ideal retirement corpus = annual pension / withdrawal rate (perpetuity formula)
             pension_corpus = annual_pension / withdrawal_rate
             
             result["desired_monthly_pension"] = round(pension, 0)
@@ -1604,17 +1605,19 @@ def compute_retirement_corpus(age, monthly_income, desired_monthly_pension=None,
 def compute_term_insurance_need(age, monthly_income, retirement_age=60):
     """
     Calculate term insurance requirement.
-    Formula: 15x annual income × 1.3 (inflation buffer) = 19.5x annual income
-    
-    For example: ₹30,000/month = ₹3.6 lakh/year → Required cover = ₹70.2 lakh
-    
+    Formula: LIFE_COVER_MULTIPLE x annual income (single source of truth in
+    assumptions.py), so this matches compute_insurance_gap, the protection
+    score, and the allocation engine's term gap.
+
+    For example, at a 10x multiple: ₹30,000/month = ₹3.6 lakh/year
+    → Required cover = ₹36 lakh.
+
     Returns the required term cover amount.
     """
     mi = _safe_float(monthly_income, 0.0)
     annual_income = mi * 12
-    
-    # 15x annual income with 1.3x inflation buffer = 19.5x
-    required_cover = annual_income * 15 * 1.3
+
+    required_cover = annual_income * LIFE_COVER_MULTIPLE
     return round(required_cover, 0)
 
 def compute_ihs(savings_percent, current_products, allocation):
@@ -2031,7 +2034,7 @@ def generate_flags_and_recommendations(results, inputs):
     if results.get("surplusBand") == "Low":
         flags.append(f"Low Surplus: Saving {round(savings_percent,1)}% vs Benchmark 20%+")
     if results.get("insuranceGap") == "Underinsured":
-        required = 10.0 * annual_income
+        required = LIFE_COVER_MULTIPLE * annual_income
         flags.append(f"Underinsured: Cover Rs. {_format_indian_amount(life_cover)} vs Required Rs. {_format_indian_amount(required)}")
     if results.get("debtStress") == "Stressed":
         # Recompute ratio for message
@@ -3427,16 +3430,20 @@ def compute_financial_health_score(analysis: dict, facts: dict) -> dict:
     }
     
     # 2. Liquidity Score (20% weight) - based on liquidity assessment
+    # compute_liquidity emits "Adequate" / "Insufficient"; grade the gap by
+    # months covered (from diagnostics) so we keep a Critical vs Low distinction.
     liquidity = analysis.get("liquidity", "Unknown")
+    liquidity_months = _safe_float((analysis.get("_diagnostics") or {}).get("liquidityMonths"), None)
     if liquidity == "Adequate":
         liquidity_score = 100
         liquidity_label = "Adequate"
-    elif liquidity == "Low":
-        liquidity_score = 50
-        liquidity_label = "Low"
-    elif liquidity == "Critical":
-        liquidity_score = 20
-        liquidity_label = "Critical"
+    elif liquidity == "Insufficient":
+        if liquidity_months is not None and liquidity_months < 3:
+            liquidity_score = 20
+            liquidity_label = "Critical"
+        else:
+            liquidity_score = 50
+            liquidity_label = "Low"
     else:
         liquidity_score = 50  # Unknown defaults to middle
         liquidity_label = "Unknown"
@@ -3482,14 +3489,15 @@ def compute_financial_health_score(analysis: dict, facts: dict) -> dict:
     }
     
     # 4. Debt Management Score (15% weight) - based on debt stress
-    debt_stress = analysis.get("debtStress", "Low")
-    if debt_stress == "Low":
+    # compute_debt_stress emits "Healthy" / "Moderate" / "Stressed".
+    debt_stress = analysis.get("debtStress", "Healthy")
+    if debt_stress == "Healthy":
         debt_score = 100
         debt_label = "Healthy"
     elif debt_stress == "Moderate":
         debt_score = 60
         debt_label = "Moderate"
-    elif debt_stress == "High":
+    elif debt_stress == "Stressed":
         debt_score = 30
         debt_label = "High Burden"
     else:
@@ -3512,8 +3520,9 @@ def compute_financial_health_score(analysis: dict, facts: dict) -> dict:
     ihs_score = ihs.get("score", 50)
     
     # Approximate goal readiness from IHS and surplus band
+    # compute_surplus_band emits "Low" / "Adequate" / "Strong".
     surplus_band = analysis.get("surplusBand", "Unknown")
-    if surplus_band == "High":
+    if surplus_band == "Strong":
         goal_score = min(80, ihs_score)
         goal_label = "Good Progress"
     elif surplus_band == "Adequate":
@@ -3636,7 +3645,7 @@ def generate_action_timeline(analysis: dict, goals: list, facts: dict) -> dict:
         })
     
     # WEEK 2: Emergency Fund Review
-    if liquidity in ("Critical", "Low", "Unknown"):
+    if liquidity in ("Insufficient", "Critical", "Low", "Unknown"):
         timeline["week_2"].append({
             "action": "Calculate actual monthly essential expenses",
             "area": "Emergency Fund",
@@ -4154,7 +4163,7 @@ def _generate_financial_plan_pdf_legacy(q: dict, analysis: dict, output_path: st
         ["Current Status", life_status],
         ["Current Coverage", f"Rs. {_format_indian_amount(life_cover)}" if life_cover > 0 else "Rs. 0"],
         ["Recommended Coverage", f"Rs. {_format_indian_amount(required_term_cover)} minimum"],
-        ["Basis", "15x annual income (with 1.3x inflation buffer)"],
+        ["Basis", f"{LIFE_COVER_MULTIPLE:g}x annual income"],
         ["Gap", f"Rs. {_format_indian_amount(max(0, required_term_cover - life_cover))}"],
     ]
     life_table = Table(
@@ -6423,7 +6432,7 @@ def _allocation_output(client_facts):
     portfolio = client_facts.get("portfolio") or {}
     monthly_income = _num(income.get("annualIncome"), 0) / 12
     monthly_surplus = _display_monthly_surplus(client_facts)
-    required_life = _num((analysis.get("_diagnostics") or {}).get("requiredLifeCover"), monthly_income * 12 * 10)
+    required_life = _num((analysis.get("_diagnostics") or {}).get("requiredLifeCover"), monthly_income * 12 * LIFE_COVER_MULTIPLE)
     current_life = _num(insurance.get("lifeCover"), 0)
     current_health = _num(insurance.get("healthCover"), 0)
     recommended_health = 1500000 if _num(personal.get("dependents_count"), 0) > 0 else 1000000

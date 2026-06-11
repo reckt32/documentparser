@@ -6,19 +6,20 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app import generate_financial_plan_pdf, compute_term_insurance_need
+from assumptions import LIFE_COVER_MULTIPLE
 import fitz  # PyMuPDF - to read PDF text
 
 print("=" * 70)
 print(" TESTING GOAL-WISE SIP TABLE AND REALITY CHECK CHANGES")
 print("=" * 70)
 
-# Test 1: Verify life cover formula (19.5x)
-print("\n--- Test 1: Life Cover Formula (15x * 1.3 = 19.5x) ---")
+# Test 1: Verify life cover formula uses the central LIFE_COVER_MULTIPLE.
+print(f"\n--- Test 1: Life Cover Formula ({LIFE_COVER_MULTIPLE:g}x annual income) ---")
 monthly_income = 30000  # 30k/month
-expected_cover = 30000 * 12 * 15 * 1.3  # 3.6L * 19.5 = 70.2L
+expected_cover = monthly_income * 12 * LIFE_COVER_MULTIPLE
 actual_cover = compute_term_insurance_need(30, monthly_income)
 print(f"Monthly Income: Rs. {monthly_income:,}")
-print(f"Expected Cover (19.5x annual): Rs. {expected_cover:,.0f}")
+print(f"Expected Cover ({LIFE_COVER_MULTIPLE:g}x annual): Rs. {expected_cover:,.0f}")
 print(f"Actual Cover from function: Rs. {actual_cover:,.0f}")
 if abs(actual_cover - expected_cover) < 100:
     print("[PASS] Life cover formula is correct!")
@@ -80,7 +81,7 @@ try:
     
     # Check for key content
     checks = [
-        ("15x annual income", "Life cover basis text"),
+        (f"{LIFE_COVER_MULTIPLE:g}x annual income", "Life cover basis text"),
         ("Goal-wise SIP Allocation", "Goal-wise SIP table header"),
         ("Required SIP", "SIP table column"),
         ("Allocated SIP", "SIP table column"),
@@ -103,12 +104,12 @@ try:
     else:
         print("\n[WARNING] Some content is missing. Check PDF generation code.")
         print("\n--- Relevant PDF Text Snippet (Page 6) ---")
-        if len(doc) >= 6:
-            doc = fitz.open(output_path)
-            page6_text = doc[5].get_text() if len(doc) > 5 else "Page 6 not found"
-            doc.close()
-            print(page6_text[:2000])
-        
+        # Re-open: `doc` was already closed above.
+        doc2 = fitz.open(output_path)
+        page6_text = doc2[5].get_text() if len(doc2) > 5 else "Page 6 not found"
+        doc2.close()
+        print(page6_text[:2000])
+
 finally:
     # Clean up
     if os.path.exists(output_path):

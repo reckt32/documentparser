@@ -943,6 +943,38 @@ def get_aggregate_metrics_overview(mfd_firebase_uid: str, missed_quarter_days: i
     return overview
 
 
+def get_category_client_breakdown(mfd_firebase_uid: str, dimension: str):
+    """
+    Per-client breakdown of aggregate actions inside a single category
+    (dimension), scoped to the MFD. Powers the dashboard's "which clients
+    make up this category and for what amount" drill-down.
+
+    Empty/NULL dimensions are bucketed as 'uncategorized' to mirror
+    get_aggregate_metrics_overview, so a tap on any category row in the
+    overview always resolves to the same rows that produced its total.
+    """
+    rows = _query(
+        """
+        SELECT
+          aa.client_pan AS client_pan,
+          MAX(COALESCE(NULLIF(TRIM(dr.client_name), ''), aa.client_pan)) AS client_name,
+          COALESCE(SUM(CASE WHEN aa.final_status IN ('PENDING','CONVERTED') THEN aa.value_num ELSE 0 END), 0) AS total_opportunity,
+          COALESCE(SUM(CASE WHEN aa.final_status = 'CONVERTED' THEN aa.value_num ELSE 0 END), 0) AS converted,
+          COALESCE(SUM(CASE WHEN aa.final_status = 'PENDING' THEN aa.value_num ELSE 0 END), 0) AS pending,
+          COUNT(*) AS action_count
+        FROM aggregate_actions aa
+        LEFT JOIN dashboard_reports dr ON dr.id = aa.report_id
+        WHERE aa.mfd_firebase_uid = ?
+          AND aa.final_status IN ('PENDING','CONVERTED')
+          AND COALESCE(NULLIF(TRIM(aa.dimension), ''), 'uncategorized') = ?
+        GROUP BY aa.client_pan
+        ORDER BY total_opportunity DESC
+        """,
+        (mfd_firebase_uid, dimension),
+    )
+    return [dict(r) for r in rows]
+
+
 def update_aggregate_action_status_for_mfd(
     mfd_firebase_uid: str, item_id: str, final_status: str
 ) -> Optional[Dict[str, Any]]:

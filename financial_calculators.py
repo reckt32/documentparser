@@ -17,10 +17,14 @@ from typing import Dict, Any, Optional
 # Constants
 # ──────────────────────────────────────────────────────────────────────────────
 
-DEFAULT_INFLATION_RATE = 0.07       # 7% p.a.
-DEFAULT_ANNUAL_RETURN = 0.10        # 10% p.a.
-DEFAULT_STEP_UP_RATE = 0.10         # 10% annual SIP increase
-DEFAULT_WITHDRAWAL_RATE = 0.05      # 5% safe withdrawal rate
+# Single source of truth lives in assumptions.py; re-exported here under the
+# names this module already uses.
+from assumptions import (
+    INFLATION_RATE as DEFAULT_INFLATION_RATE,
+    DEFAULT_ANNUAL_RETURN,
+    STEP_UP_RATE as DEFAULT_STEP_UP_RATE,
+    WITHDRAWAL_RATE_RETIREMENT as DEFAULT_WITHDRAWAL_RATE,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -48,15 +48,15 @@ NO_IN_APP_NUDGE_CLAUSE = (
 LLM_OUTPUT_BLOCKLIST = ("in-app", "nudge", "push notification", "mobile alert")
 
 # ------------------------ Financial Assumptions (Configurable) ------------------------ #
-# These assumptions are used for SIP calculations and are displayed in reports
-ASSUMED_INFLATION_RATE = 0.07  # 7% annual inflation (founder requested)
-ASSUMED_RETURNS = {
-    "aggressive": {"annual": 0.14, "monthly": 0.011, "label": "14% p.a. (Aggressive Equity)"},
-    "growth": {"annual": 0.114, "monthly": 0.009, "label": "11.4% p.a. (Growth/Balanced)"},
-    "moderate": {"annual": 0.114, "monthly": 0.009, "label": "11.4% p.a. (Moderate)"},
-    "conservative": {"annual": 0.074, "monthly": 0.006, "label": "7.4% p.a. (Conservative/Debt)"},
-}
-WITHDRAWAL_RATE_RETIREMENT = 0.05  # 5% safe withdrawal rate (founder requested)
+# Single source of truth lives in assumptions.py; re-exported here under the
+# names this module already uses so SIP/retirement math stays consistent with
+# the rest of the app.
+from assumptions import (
+    ASSUMED_RETURNS,
+    INFLATION_RATE as ASSUMED_INFLATION_RATE,
+    WITHDRAWAL_RATE_RETIREMENT,
+    LIFE_COVER_MULTIPLE,
+)
 
 
 def _ensure_dir(path: str):
@@ -1283,8 +1283,8 @@ class GoalsStrategyRunner(SectionRunner):
             if term_gap <= 0:
                 # Fallback: compute from required vs current
                 required_cover = _coerce_float(
-                    (analysis.get("_diagnostics") or {}).get("requiredLifeCover"), 
-                    monthly_income * 12 * 15 * 1.3  # Default: 15x annual income with 1.3x inflation buffer
+                    (analysis.get("_diagnostics") or {}).get("requiredLifeCover"),
+                    monthly_income * 12 * LIFE_COVER_MULTIPLE  # central life-cover multiple
                 )
                 current_life_cover = _coerce_float(insurance.get("lifeCover"), 0.0)
                 term_gap = max(0, required_cover - current_life_cover)
