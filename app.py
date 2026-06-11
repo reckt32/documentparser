@@ -20,6 +20,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from reportlab.pdfgen import canvas
 from extractors import index_and_extract, extract_and_store_from_indexed
+from transaction_analytics import (
+    detect_recurring_transactions,
+    merge_recurring,
+    compute_average_monthly_balance,
+    months_from_period,
+    statement_months,
+)
 from llm_sections import run_report_sections, compute_goal_sip, compute_regime_comparison, PriorityAllocationEngine
 from assumptions import LIFE_COVER_MULTIPLE, WITHDRAWAL_RATE_RETIREMENT
 from db import (
@@ -167,6 +174,32 @@ def _add_extraction_metadata(data: dict, field_meta: dict) -> None:
         data["_extraction_meta"] = {}
     data["_extraction_meta"].update(field_meta)
 
+def _merge_llm_data(data: dict, llm_data: dict, protected: tuple = ()) -> None:
+    """
+    Merge LLM-extracted fields into `data` with explicit precedence:
+    deterministic/regex values win, the LLM only fills gaps.
+
+    For keys in `protected` that already hold a real value (not None/""/"N/A"),
+    a conflicting LLM value is logged and discarded. All other LLM keys are
+    merged as before, so the output shape is unchanged.
+    """
+    if not isinstance(llm_data, dict):
+        return
+    for key, value in llm_data.items():
+        existing = data.get(key)
+        if key in protected and existing not in (None, "", "N/A"):
+            if value not in (None, "", "N/A") and value != existing:
+                logger.info(
+                    f"LLM value for '{key}' discarded (regex wins): "
+                    f"regex={_redact_pii(str(existing)[:80])} llm={_redact_pii(str(value)[:80])}"
+                )
+                _add_extraction_metadata(data, {
+                    key: {**data.get("_extraction_meta", {}).get(key, {}),
+                          "llm_disagrees": True}
+                })
+            continue
+        data[key] = value
+
 # --- Initialization ---
 load_dotenv()
 
@@ -198,6 +231,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 STORE_REPORTS = os.getenv("STORE_REPORTS", "disk").lower()
 # SAVE_TX_JSON = "true"/"false" -> whether to persist extracted bank tx JSON artifacts
 SAVE_TX_JSON = os.getenv("SAVE_TX_JSON", "false").lower() == "true"
+# DETERMINISTIC_RECURRING = "true"/"false" -> compute recurring debits/credits from
+# structured transactions (LLM entries only fill non-overlapping gaps). Kill switch
+# back to pure-LLM recurring detection if set to "false".
+DETERMINISTIC_RECURRING = os.getenv("DETERMINISTIC_RECURRING", "true").lower() == "true"
 # Simple in-memory store for ephemeral downloads
 TEMP_REPORTS = {}
 
@@ -261,8 +298,27 @@ def _sanitize_text_for_llm(text: str, max_length: int = 20000) -> str:
     
     for pattern in injection_patterns:
         sanitized = re.sub(pattern, '[FILTERED]', sanitized)
-    
+
     return sanitized
+
+def _select_text_for_llm(text: str, max_length: int = 20000, head_ratio: float = 0.6) -> str:
+    """
+    Pick the document text the LLM actually needs, within a character budget.
+
+    Financial documents put their critical numbers at the END (bank statement
+    summary, CAS grand total, ITR tax computation), so instead of a blind
+    text[:max_length] we keep the head AND the tail and drop the middle.
+    Also runs the prompt-injection filter.
+    """
+    if not text:
+        return ""
+    sanitized = _sanitize_text_for_llm(text, max_length=len(text))
+    if len(sanitized) <= max_length:
+        return sanitized
+    marker = "\n\n[... middle of document omitted ...]\n\n"
+    head = int((max_length - len(marker)) * head_ratio)
+    tail = max_length - len(marker) - head
+    return sanitized[:head] + marker + sanitized[-tail:]
 
 # Logo path - uses app directory for production compatibility
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
@@ -316,7 +372,7 @@ def _persist_metrics_for_doc(document_id: int, data: dict):
 
     # Bank account summary
     acct = data.get("account_summary") or {}
-    for k in ["opening_balance", "closing_balance", "total_inflows", "total_outflows"]:
+    for k in ["opening_balance", "closing_balance", "total_inflows", "total_outflows", "statement_months"]:
         v = acct.get(k)
         nv = n(v)
         if nv is not None:
@@ -598,6 +654,17 @@ def extract_bank_statement_transactions(file_like):
         with pdfplumber.open(file_like) as pdf:
             for page in pdf.pages:
                 tables = page.extract_tables() or []
+                if not tables:
+                    # Borderless statements defeat the default (line-based)
+                    # strategy; retry using text alignment. Junk pseudo-tables
+                    # are filtered by the header checks below.
+                    try:
+                        tables = page.extract_tables({
+                            "vertical_strategy": "text",
+                            "horizontal_strategy": "text",
+                        }) or []
+                    except Exception:
+                        tables = []
                 for table in tables:
                     if not table or len(table) < 2:
                         continue
@@ -820,8 +887,8 @@ def extract_bank_statement_hybrid(text, transactions_payload=None, save_json_pat
     Structured Transactions JSON (optional):
     {tx_json_str if tx_json_str else "<none>"}
 
-    Raw Bank Statement Text (truncated):
-    {text[:8000]}
+    Raw Bank Statement Text (head and tail of document):
+    {_select_text_for_llm(text, 8000)}
     """
     
     try:
@@ -840,13 +907,60 @@ def extract_bank_statement_hybrid(text, transactions_payload=None, save_json_pat
             _add_extraction_metadata(data, {
                 llm_field: _create_extraction_meta(llm_field, llm_data[llm_field], "llm")
             })
-        data.update(llm_data)
+        # Regex-extracted account identifiers are authoritative; LLM fills gaps only.
+        _merge_llm_data(data, llm_data, protected=(
+            "account_number", "ifsc", "statement_period",
+        ))
     except Exception as e:
         logger.error(f"LLM extraction error for bank statement: {str(e)}")
         data['extraction_error'] = str(e)
         _add_extraction_metadata(data, {
             "_llm_extraction": {"confidence": 0.0, "source": "llm", "needs_review": True, "reason": str(e)}
         })
+
+    # Deterministic recurring detection from structured transactions.
+    # Deterministic groups win on overlap; LLM entries are kept for descriptions
+    # the structured path didn't catch (failed table extraction, single-occurrence
+    # EMIs). If detection finds nothing, the LLM output is left untouched.
+    if DETERMINISTIC_RECURRING and transactions_payload and isinstance(transactions_payload, dict):
+        try:
+            txns = transactions_payload.get("transactions") or []
+            det = detect_recurring_transactions(txns)
+            for side in ("recurring_debits", "recurring_credits"):
+                det_entries = det.get(side) or []
+                if not det_entries:
+                    continue
+                llm_entries = data.get(side) or []
+                merged = merge_recurring(det_entries, llm_entries)
+                logger.info(
+                    f"Recurring {side}: deterministic={len(det_entries)} llm={len(llm_entries)} merged={len(merged)}"
+                )
+                data[side] = merged
+                _add_extraction_metadata(data, {
+                    side: _create_extraction_meta(side, merged, "regex")
+                })
+            amb = compute_average_monthly_balance(txns)
+            if amb is not None:
+                acct = data.get("account_summary") or {}
+                acct["average_monthly_balance"] = amb
+                data["account_summary"] = acct
+        except Exception as e:
+            logger.warning(f"Deterministic recurring detection failed; keeping LLM output: {e}")
+
+    # Statement coverage in months: the declared period wins, transaction-date
+    # span is the fallback. Downstream prefill uses this to normalize monthly
+    # figures instead of assuming every statement covers 12 months.
+    try:
+        months = months_from_period(data.get("statement_period"))
+        if months is None and transactions_payload and isinstance(transactions_payload, dict):
+            months = statement_months(transactions_payload.get("transactions") or [])
+        if months:
+            acct = data.get("account_summary") or {}
+            acct["statement_months"] = months
+            data["account_summary"] = acct
+    except Exception as e:
+        logger.warning(f"Statement period detection failed: {e}")
+
     # Merge in any precomputed totals from structured parsing when LLM omitted
     if transactions_payload and isinstance(transactions_payload, dict):
         totals = transactions_payload.get("totals", {})
@@ -989,8 +1103,8 @@ def extract_itr_hybrid(text):
     
     All amounts should be numbers without currency symbols. Use 0 for not found/not applicable.
     
-    ITR Document Text:
-    {text[:20000]}
+    ITR Document Text (head and tail of document):
+    {_select_text_for_llm(text, 20000)}
     """
     
     try:
@@ -1037,22 +1151,29 @@ def extract_itr_hybrid(text):
 def extract_insurance_hybrid(text):
     data = {}
     
-    is_life_insurance = bool(re.search(r"(?i)(life\s+insurance|term\s+plan|endowment|ULIP|whole\s+life)", text))
-    is_health_insurance = bool(re.search(r"(?i)(health\s+insurance|mediclaim|medical\s+insurance|hospitali[sz]ation|health\s*cover|in-?patient\s+treatment|annual\s+sum\s+insured|sum\s+insured|health\s+advantedge|health\s+plan|health\s+policy|medicare\s*premier|tata\s*aig\s*medicare)", text))
-    is_general_insurance = bool(re.search(r"(?i)(motor\s+insurance|vehicle\s+insurance|property\s+insurance|home\s+insurance|fire\s+insurance)", text))
-    
-    # Debug logging
-    logger.debug(f"Insurance type detection - life: {is_life_insurance}, health: {is_health_insurance}, general: {is_general_insurance}")
-    
-    if is_life_insurance:
-        data["insurance_type"] = "Life Insurance"
-    elif is_health_insurance:
-        data["insurance_type"] = "Health Insurance"
-    elif is_general_insurance:
-        data["insurance_type"] = "General Insurance"
-    else:
+    # Score each type by keyword frequency instead of life-first ordering:
+    # health policies routinely mention "life" in insurer names/footers, which
+    # used to misclassify them (and route health cover into life cover).
+    life_score = len(re.findall(r"(?i)(life\s+insurance|term\s+plan|term\s+insurance|endowment|ULIP|whole\s+life|sum\s+assured|death\s+benefit|maturity\s+benefit)", text))
+    health_score = len(re.findall(r"(?i)(health\s+insurance|mediclaim|medical\s+insurance|hospitali[sz]ation|health\s*cover|in-?patient\s+treatment|annual\s+sum\s+insured|sum\s+insured|health\s+advantedge|health\s+plan|health\s+policy|medicare\s*premier|tata\s*aig\s*medicare|room\s+rent|cashless|day\s*care\s+procedure|pre-?existing\s+disease)", text))
+    general_score = len(re.findall(r"(?i)(motor\s+insurance|vehicle\s+insurance|property\s+insurance|home\s+insurance|fire\s+insurance|own\s+damage|third\s+party|IDV)", text))
+
+    logger.debug(f"Insurance type scores - life: {life_score}, health: {health_score}, general: {general_score}")
+
+    best_score = max(life_score, health_score, general_score)
+    if best_score == 0:
         data["insurance_type"] = "Unknown"
-    
+    elif health_score == best_score:
+        # Ties favor health: life phrases leak into health policies far more
+        # often than the reverse
+        data["insurance_type"] = "Health Insurance"
+    elif life_score == best_score:
+        data["insurance_type"] = "Life Insurance"
+    else:
+        data["insurance_type"] = "General Insurance"
+
+    is_life_insurance = data["insurance_type"] == "Life Insurance"
+
     logger.info(f"Detected insurance_type: {data['insurance_type']}")
 
     patterns = {
@@ -1270,8 +1391,8 @@ def extract_insurance_hybrid(text):
     
     Return empty objects/arrays if not found. All amounts should be numbers.
     
-    Insurance Document Text:
-    {text[:20000]}
+    Insurance Document Text (head and tail of document):
+    {_select_text_for_llm(text, 20000)}
     """
     
     try:
@@ -1291,7 +1412,13 @@ def extract_insurance_hybrid(text):
                 _add_extraction_metadata(data, {
                     llm_field: _create_extraction_meta(llm_field, llm_data[llm_field], "llm")
                 })
-        data.update(llm_data)
+        # Regex-extracted policy facts are authoritative; LLM fills gaps only.
+        _merge_llm_data(data, llm_data, protected=(
+            "insurance_type", "policy_number", "insurer_name", "policy_holder",
+            "policy_term", "policy_start_date", "policy_end_date", "nominee",
+            "date_of_birth", "sum_assured_or_insured", "premium_amount",
+            "premium_frequency",
+        ))
     except Exception as e:
         logger.error(f"LLM extraction error for insurance: {str(e)}")
         data['extraction_error'] = str(e)
@@ -1372,8 +1499,8 @@ def extract_mutual_fund_cas_hybrid(text):
     
     All amounts should be numbers without currency symbols. Return empty arrays/objects if not found.
     
-    Mutual Fund CAS Text:
-    {text[:20000]}
+    Mutual Fund CAS Text (head and tail of document):
+    {_select_text_for_llm(text, 20000)}
     """
     
     try:
@@ -1392,7 +1519,10 @@ def extract_mutual_fund_cas_hybrid(text):
             _add_extraction_metadata(data, {
                 llm_field: _create_extraction_meta(llm_field, llm_data[llm_field], "llm")
             })
-        data.update(llm_data)
+        # Regex-extracted identity fields are authoritative; LLM fills gaps only.
+        _merge_llm_data(data, llm_data, protected=(
+            "investor_name", "pan", "email", "folio_numbers",
+        ))
     except Exception as e:
         logger.error(f"LLM extraction error for CAS: {str(e)}")
         data['extraction_error'] = str(e)
@@ -2197,7 +2327,8 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
         ]
       }
     """
-    uploads = list_questionnaire_uploads(qid) or []
+    # _query returns sqlite3.Row objects, which have no .get(); normalize to dicts
+    uploads = [dict(u) for u in (list_questionnaire_uploads(qid) or [])]
     doc_ids = [r["document_id"] for r in uploads if r["document_id"] is not None]
 
     # Aggregates
@@ -2207,11 +2338,11 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
     itr = {}
 
     per_doc_extracts = []
-    
+
     # Extract metadata_json fields that are not stored as numeric metrics.
     for upload in uploads:
-        doc_type = (upload.get("doc_type") or upload["doc_type"] if isinstance(upload, dict) else "").lower()
-        metadata_json = upload.get("metadata_json") or (upload["metadata_json"] if isinstance(upload, dict) else None)
+        doc_type = str(upload.get("doc_type") or "").lower()
+        metadata_json = upload.get("metadata_json")
         if not metadata_json:
             continue
         try:
@@ -2258,6 +2389,13 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
                 logger.warning(f"Error parsing ITR metadata: {e}")
                 continue
 
+    # Period-normalized cashflow estimates (each doc treated as a distinct
+    # account; only emitted when every doc with flows declares its coverage)
+    monthly_in_sum = 0.0
+    monthly_out_sum = 0.0
+    months_max = 0.0
+    normalization_complete = True
+
     for did in doc_ids:
         # 1) Deterministic summaries from indexed sections/tables
         try:
@@ -2284,6 +2422,9 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
             mets = list_metrics(did) or []
         except Exception:
             mets = []
+        doc_inflows = None
+        doc_outflows = None
+        doc_months = None
         for m in mets:
             md = dict(m)
             k = (md.get("key") or "").strip().lower()
@@ -2293,8 +2434,13 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
                     if vnum is not None:
                         if k == "total_inflows":
                             bank["total_inflows"] += float(vnum)
+                            doc_inflows = float(vnum)
                         else:
                             bank["total_outflows"] += float(vnum)
+                            doc_outflows = float(vnum)
+                elif k == "statement_months":
+                    if vnum is not None and float(vnum) > 0:
+                        doc_months = float(vnum)
                 elif k in ("opening_balance", "closing_balance"):
                     if vnum is not None:
                         bank[k] = float(vnum)
@@ -2310,6 +2456,18 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
             except Exception:
                 continue
 
+        # Accumulate period-normalized flows for this doc
+        if doc_months:
+            if doc_inflows is not None:
+                monthly_in_sum += doc_inflows / doc_months
+            if doc_outflows is not None:
+                monthly_out_sum += doc_outflows / doc_months
+            months_max = max(months_max, doc_months)
+        elif doc_inflows is not None or doc_outflows is not None:
+            # A doc contributed flows without declaring coverage: estimates
+            # would be wrong, so suppress them and let consumers fall back.
+            normalization_complete = False
+
     # Compute net cashflow
     try:
         inflow = float(bank.get("total_inflows") or 0.0)
@@ -2317,6 +2475,17 @@ def aggregate_doc_insights_for_questionnaire(qid: int) -> dict:
         bank["net_cashflow"] = inflow - outflow
     except Exception:
         bank["net_cashflow"] = None
+
+    # Period-normalized estimates (additive keys; only when coverage is known
+    # for every contributing doc, so legacy consumers see no change otherwise)
+    if normalization_complete and (monthly_in_sum > 0 or monthly_out_sum > 0):
+        bank["months_covered"] = months_max
+        if monthly_in_sum > 0:
+            bank["monthly_inflows"] = round(monthly_in_sum, 2)
+            bank["annual_inflows_est"] = round(monthly_in_sum * 12.0, 2)
+        if monthly_out_sum > 0:
+            bank["monthly_outflows"] = round(monthly_out_sum, 2)
+            bank["annual_outflows_est"] = round(monthly_out_sum * 12.0, 2)
 
     out: Dict[str, dict] = {}
     if any(v not in (None, 0.0) for v in bank.values()):
@@ -2379,13 +2548,24 @@ def build_prefill_from_insights(qid: int) -> dict:
         itr_income = itr.get("gross_total_income")
         bank_inflow = bank.get("total_inflows")
         bank_outflow = bank.get("total_outflows")
+        # Period-normalized estimates (set only when statement coverage is known)
+        annual_in_est = bank.get("annual_inflows_est")
+        monthly_out_est = bank.get("monthly_outflows")
 
-        inflow = itr_income if isinstance(itr_income, (int, float)) and itr_income > 0 else bank_inflow
+        if isinstance(itr_income, (int, float)) and itr_income > 0:
+            inflow = itr_income
+        elif isinstance(annual_in_est, (int, float)) and annual_in_est > 0:
+            inflow = annual_in_est
+        else:
+            inflow = bank_inflow
         outflow = bank_outflow
 
         if isinstance(inflow, (int, float)) and inflow > 0:
             lifestyle["annual_income"] = round(float(inflow), 2)
-        if isinstance(outflow, (int, float)) and outflow > 0:
+        if isinstance(monthly_out_est, (int, float)) and monthly_out_est > 0:
+            lifestyle["monthly_expenses"] = round(float(monthly_out_est), 2)
+        elif isinstance(outflow, (int, float)) and outflow > 0:
+            # Legacy fallback: assume a 12-month statement
             lifestyle["monthly_expenses"] = round(float(outflow) / 12.0, 2)
         if isinstance(bank_inflow, (int, float)) and bank_inflow > 0 and isinstance(bank_outflow, (int, float)):
             sp = max(0.0, (float(bank_inflow) - float(bank_outflow))) / float(bank_inflow) * 100.0
@@ -2669,6 +2849,10 @@ def upload_document():
             logger.info(f"Processing file {idx + 1}: {file.filename}")
             # Read file bytes once so we can reuse for multiple parsers
             file_bytes = file.read()
+            is_valid, validation_error = _validate_pdf_file(file_bytes, file.filename or "upload.pdf")
+            if not is_valid:
+                extracted_data[f"Document {idx+1} ({doc_type})"] = {"error": validation_error}
+                continue
             file_stream_for_text = io.BytesIO(file_bytes)
             text = extract_structured_text_with_tables(file_stream_for_text)
             logger.debug(f"Extracted text for file {idx + 1} successfully.")
@@ -2725,7 +2909,14 @@ def upload_document():
                     # Merge DB-backed summaries if present
                     if isinstance(summaries, dict):
                         if summaries.get("account_summary"):
-                            bank_data["account_summary"] = summaries["account_summary"]
+                            # Per-key merge: indexed values win for the keys they carry,
+                            # but LLM-only fields (account_holder_name,
+                            # average_monthly_balance) must survive.
+                            merged_acct = dict(bank_data.get("account_summary") or {})
+                            merged_acct.update({
+                                k: v for k, v in summaries["account_summary"].items() if v is not None
+                            })
+                            bank_data["account_summary"] = merged_acct
                         if summaries.get("investment_snapshot"):
                             bank_data["investment_snapshot"] = summaries["investment_snapshot"]
                         if summaries.get("portfolio_summary"):
@@ -3152,15 +3343,18 @@ def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
     di = doc_insights or {}
     bank = di.get("bank") or {}
     try:
-        # Annual income fallback from bank inflows
+        # Annual income fallback from bank inflows (period-normalized when known)
         if not payload["income"].get("annualIncome"):
-            inflow = bank.get("total_inflows")
+            inflow = bank.get("annual_inflows_est") or bank.get("total_inflows")
             if isinstance(inflow, (int, float)) and inflow > 0:
                 payload["income"]["annualIncome"] = inflow
         # Monthly expenses fallback from bank outflows
         if not payload["income"].get("monthlyExpenses"):
+            monthly_out = bank.get("monthly_outflows")
             outflow = bank.get("total_outflows")
-            if isinstance(outflow, (int, float)) and outflow > 0:
+            if isinstance(monthly_out, (int, float)) and monthly_out > 0:
+                payload["income"]["monthlyExpenses"] = round(monthly_out, 2)
+            elif isinstance(outflow, (int, float)) and outflow > 0:
                 payload["income"]["monthlyExpenses"] = round(outflow / 12.0, 2)
         # Savings percent fallback from net cashflow
         if not payload["savings"].get("savingsPercent"):
