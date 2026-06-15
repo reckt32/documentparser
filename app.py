@@ -3271,6 +3271,42 @@ def questionnaire_prefill(qid: int):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+def _resolve_current_allocation(lifestyle: dict, risk: dict, cas_portfolio: dict) -> dict:
+    """Single source of truth for the client's CURRENT asset allocation.
+
+    Used by both the analysis pipeline (_assemble_financial_inputs) and the
+    report (_build_client_facts) so the equity % is identical on every page.
+
+    Precedence (Manual Investment Override toggle):
+      - toggle ON  -> manual grid wins over CAS (override exists because CAS can
+                      be inaccurate).
+      - toggle OFF -> CAS holdings authoritative; manual only fills missing fields.
+      - no CAS     -> manual grid used as-is.
+    The standalone equity-% field is a last-resort fallback (it is prefilled with
+    the recommended target, so it never overrides an actual holding).
+    """
+    lifestyle = lifestyle or {}
+    manual = lifestyle.get("allocation") or {}
+    use_manual = bool(lifestyle.get("use_manual_overrides"))
+    portfolio = dict(cas_portfolio or {})
+    if not portfolio:
+        portfolio.update(manual)
+    elif use_manual:
+        for k, v in manual.items():
+            if v not in (None, "", 0):
+                portfolio[k] = v
+    else:
+        for k, v in manual.items():
+            if portfolio.get(k) in (None, "", 0):
+                portfolio[k] = v
+    rp_equity = _safe_float((risk or {}).get("equity_allocation_percent"), 0.0)
+    if rp_equity > 0 and portfolio.get("equity") in (None, "", 0):
+        portfolio["equity"] = rp_equity
+        if portfolio.get("debt") in (None, "", 0):
+            portfolio["debt"] = max(0.0, 100.0 - rp_equity)
+    return portfolio
+
+
 def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
     personal = q.get("personal_info") or {}
     family = q.get("family_info") or {}
@@ -3287,11 +3323,9 @@ def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
         or family.get("has_financial_dependents")
         or family.get("spouse")
     )
-    allocation = dict(lifestyle.get("allocation") or {})
-    if not allocation and risk.get("equity_allocation_percent") not in (None, ""):
-        equity_pct = _safe_float(risk.get("equity_allocation_percent"), 0.0)
-        if equity_pct > 0:
-            allocation = {"equity": equity_pct, "debt": max(0.0, 100.0 - equity_pct)}
+    # Resolve current allocation with the same CAS-vs-manual precedence the report
+    # uses, so the equity % feeding risk/recommendations matches every report page.
+    allocation = _resolve_current_allocation(lifestyle, risk, (doc_insights or {}).get("portfolio"))
 
     payload = {
         "personal": {
@@ -3447,20 +3481,10 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
             "tax_regime": tax_info.get("tax_regime", "old").lower(),
         }
     
-    # Merge questionnaire allocation/corpus/SIP values so report pages do not
-    # depend on CAS-only fields after the UI revamp.
-    manual_allocation = lifestyle.get("allocation") or {}
-    if not portfolio:
-        portfolio.update(manual_allocation)
-    else:
-        for key, value in manual_allocation.items():
-            if portfolio.get(key) in (None, "", 0):
-                portfolio[key] = value
-    if not portfolio and (q.get("risk_profile") or {}).get("equity_allocation_percent") not in (None, ""):
-        equity_pct = _safe_float((q.get("risk_profile") or {}).get("equity_allocation_percent"), 0.0)
-        if equity_pct > 0:
-            portfolio["equity"] = equity_pct
-            portfolio["debt"] = max(0.0, 100.0 - equity_pct)
+    # Resolve current allocation with the shared precedence rule (same one the
+    # analysis pipeline uses), honoring the Manual Investment Override toggle.
+    use_manual_overrides = bool(lifestyle.get("use_manual_overrides"))
+    portfolio = _resolve_current_allocation(lifestyle, q.get("risk_profile") or {}, portfolio)
 
     # Get CAS data for SIP commitments
     qid = q.get("id")
@@ -3479,13 +3503,19 @@ def _build_client_facts(q: dict, analysis: dict, doc_insights=None) -> dict:
     enriched_portfolio = dict(portfolio)
     manual_sip = _safe_float(lifestyle.get("manual_sip"), 0.0)
     manual_corpus = _safe_float(lifestyle.get("manual_corpus"), 0.0)
-    if total_monthly_sip <= 0 and manual_sip > 0:
-        total_monthly_sip = manual_sip
+    if use_manual_overrides and manual_sip > 0:
+        total_monthly_sip = manual_sip          # override toggled -> manual wins over CAS
+    elif total_monthly_sip <= 0 and manual_sip > 0:
+        total_monthly_sip = manual_sip          # fallback when CAS has no SIP
     enriched_portfolio["total_monthly_sip"] = total_monthly_sip
     enriched_portfolio["sip_count"] = len(sip_details)
     if manual_corpus > 0:
-        enriched_portfolio.setdefault("current_value", manual_corpus)
-        enriched_portfolio.setdefault("total_value", manual_corpus)
+        if use_manual_overrides:
+            enriched_portfolio["current_value"] = manual_corpus   # override toggled -> manual wins
+            enriched_portfolio["total_value"] = manual_corpus
+        else:
+            enriched_portfolio.setdefault("current_value", manual_corpus)
+            enriched_portfolio.setdefault("total_value", manual_corpus)
     
     # Calculate retirement planning if enabled
     age = personal.get("age")
@@ -6693,6 +6723,32 @@ def _allocation_output(client_facts):
             })
         out["goal_sip_table"] = fallback_rows
         out["combined_shortfall"] = sum(_num(g.get("shortfall"), 0) for g in fallback_rows)
+
+    # ── Single source of truth for the goal cards / cashflow plan ──────────────
+    # Per goal: Current SIP (existing SIP shared by need), Gap = Required − Current,
+    # and Coverage = the client's spare surplus directed at that gap. The surplus
+    # pool (Σ allocated_sip) is redistributed proportionally to each goal's gap and
+    # capped at it, so no cash is wasted on a small-gap goal and the "extra savings
+    # needed" total is honest (= max(0, total_gap − pool)). When the pool covers
+    # every gap, each goal's Coverage equals its Gap.
+    rows = out.get("goal_sip_table") or []
+    existing = _num(out.get("existing_sip_running"), 0)
+    total_ideal = sum(_num(r.get("ideal_sip"), 0) for r in rows)
+    pool = sum(_num(r.get("allocated_sip"), 0) for r in rows)
+    total_gap = 0.0
+    for r in rows:
+        ideal = _num(r.get("ideal_sip"), 0)
+        curr = existing * ideal / total_ideal if existing > 0 and total_ideal > 0 and ideal > 0 else 0
+        gap = max(0, ideal - curr)
+        r["current_sip"] = round(curr, 0)
+        r["gap_mo"] = round(gap, 0)
+        total_gap += gap
+    cover_ratio = min(1.0, pool / total_gap) if total_gap > 0 else 0.0
+    for r in rows:
+        r["coverage_used"] = round(_num(r.get("gap_mo"), 0) * cover_ratio, 0)
+    out["goal_total_gap"] = round(total_gap, 0)
+    out["goal_total_coverage"] = round(total_gap * cover_ratio, 0)   # = min(pool, total_gap)
+    out["goal_savings_increase"] = round(max(0, total_gap - pool), 0)
     return out
 
 
@@ -7474,78 +7530,88 @@ def build_page_goal_feasibility(client_facts, allocation_output):
     
     goal_sip_rows = _as_list(allocation_output.get("goal_sip_table"))
     total_goals = max(1, len(goal_sip_rows))
-    total_shortfall = _num(allocation_output.get("combined_shortfall"), 0)
-    existing_sip_running = _num(allocation_output.get("existing_sip_running"), 0)
-    total_ideal_for_share = sum(_num(_as_dict(g).get("ideal_sip"), 0) for g in goal_sip_rows)
-    
+    total_gap = _num(allocation_output.get("goal_total_gap"), 0)        # Σ (Required − Current)
+    total_raisable = _num(allocation_output.get("goal_total_coverage"), 0)  # Σ coverage (= min(pool, gap))
+
+    def _fmt(val):
+        return _fmt_rs(val, compact=True)
+
+    hint_style = ParagraphStyle("goal_hint", fontName="Helvetica", fontSize=7, leading=9,
+                                textColor=colors.HexColor("#7F8C8D"), leftIndent=16, spaceBefore=3)
+
     cards = []
+    goal_metrics = []          # per-goal {name, gap} for the stacked bar
     for g in goal_sip_rows:
         g = _as_dict(g)
         name = g.get("name") or "Goal"
         target_val = _num(g.get("target_amount"), 0)
         horizon = f"{g.get('horizon_years') or '-'} yrs"
         ideal = _num(g.get("ideal_sip"), 0)
-        curr = 0
-        if existing_sip_running > 0 and total_ideal_for_share > 0 and ideal > 0:
-            curr = existing_sip_running * ideal / total_ideal_for_share
-        gap = _num(g.get("shortfall"), 0)
-        coverage = (_num(g.get("allocated_sip"), 0) / ideal * 100) if ideal > 0 else 0
-        
-        # formatting
-        def _fmt(val):
-            return _fmt_rs(val, compact=True)
-            
+        # Current SIP / Gap / Coverage are centralised in _allocation_output so the
+        # goals page and the cashflow plan can't drift apart. Coverage is already
+        # the gap-proportional share of surplus (capped at the gap).
+        curr = _num(g.get("current_sip"), 0)
+        gap = _num(g.get("gap_mo"), 0)
+        coverage_used = _num(g.get("coverage_used"), 0)
+        savings_gap = max(0, gap - coverage_used)
+        # Bar = share of Required already fundable from Current + Coverage.
+        funded_pct = min(100, (curr + coverage_used) / ideal * 100) if ideal > 0 else 100
+        goal_metrics.append({"name": name, "gap": gap})
+
         target_str = _fmt(target_val)
         curr_str = _fmt(curr)
         ideal_str = _fmt(ideal)
+        cov_str = _fmt(coverage_used)
         gap_str = _fmt(gap)
-        
+
         goal_text = f"<font color='#666666' size='7'>GOAL</font><br/><font face='Times-Roman' size='11' color='#2C3E50'>{name}</font>"
 
         target_text = f"<font color='#666666' size='7'>TARGET</font><br/><font color='#2C3E50'>{target_str}</font>"
         horizon_text = f"<font color='#666666' size='7'>HORIZON</font><br/><font color='#2C3E50'>{horizon}</font>"
-        curr_sip_text = f"<font color='#666666' size='7'>CURR. SIP</font><br/><font color='#C0392B'>{curr_str}</font>"
         req_sip_text = f"<font color='#666666' size='7'>REQ. SIP</font><br/><font color='#D35400'>{ideal_str}</font>"
-        gap_text = f"<font color='#666666' size='7'>GAP/MO</font><br/><font color='#C0392B'>{gap_str}</font>"
-        
+        curr_sip_text = f"<font color='#666666' size='7'>CURR. SIP</font><br/><font color='#2C3E50'>{curr_str}</font>"
+        cov_sip_text = f"<font color='#666666' size='7'>COVERAGE</font><br/><font color='#27AE60'>{cov_str}</font>"
+        gap_text = f"<font color='#666666' size='7'>GAP/MO</font><br/><font color='{'#27AE60' if gap <= 0 else '#C0392B'}'>{gap_str}</font>"
+
         p_style = ParagraphStyle("card_p", fontName="Helvetica-Bold", fontSize=9, leading=12)
-        
+        val_style = ParagraphStyle("card_val", fontName="Helvetica-Bold", fontSize=8, leading=11)
+
         inner_data = [[
-            Paragraph(target_text, p_style),
-            Paragraph(horizon_text, p_style),
-            Paragraph(curr_sip_text, p_style),
-            Paragraph(req_sip_text, p_style),
-            Paragraph(gap_text, p_style),
+            Paragraph(target_text, val_style),
+            Paragraph(horizon_text, val_style),
+            Paragraph(req_sip_text, val_style),
+            Paragraph(curr_sip_text, val_style),
+            Paragraph(cov_sip_text, val_style),
+            Paragraph(gap_text, val_style),
         ]]
-        inner_table = Table(inner_data, colWidths=[55, 45, 45, 55, 50])
+        inner_table = Table(inner_data, colWidths=[44, 36, 46, 44, 50, 50])
         inner_table.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
             ("TOPPADDING", (0, 0), (-1, -1), 2),
         ]))
-        
-        # Coverage section
-        cov_val = f"{coverage:.0f}%"
-        cov_color = '#E67E22' if coverage < 80 else '#27AE60'
-        if coverage < 50: cov_color = '#C0392B'
-        
+
+        # Funded bar = how much of Required is met by Current + Coverage today.
+        fund_val = f"{funded_pct:.0f}%"
+        fund_color = '#27AE60' if funded_pct >= 80 else ('#E67E22' if funded_pct >= 50 else '#C0392B')
+
         cov_tbl = Table(
-            [[CoverageFlowable(min(coverage, 100), width=85, height=8)],
+            [[CoverageFlowable(min(funded_pct, 100), width=74, height=8)],
              [Spacer(1, 4)],
-             [Table([[Paragraph("<font color='#666666' size='7'>Coverage</font>"), Paragraph(f"<b><font color='{cov_color}' size='8'>{cov_val}</font></b>", ParagraphStyle("r", alignment=TA_RIGHT))]], colWidths=[45, 40], style=TableStyle([("PADDING", (0, 0), (-1, -1), 0)]))]],
-            colWidths=[85]
+             [Table([[Paragraph("<font color='#666666' size='7'>Funded</font>"), Paragraph(f"<b><font color='{fund_color}' size='8'>{fund_val}</font></b>", ParagraphStyle("r", alignment=TA_RIGHT))]], colWidths=[40, 34], style=TableStyle([("PADDING", (0, 0), (-1, -1), 0)]))]],
+            colWidths=[74]
         )
         cov_tbl.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-        
+
         card = Table(
             [[
                 Paragraph(goal_text, p_style),
                 inner_table,
                 cov_tbl
             ]],
-            colWidths=[100, 250, 100]
+            colWidths=[104, 270, 76]
         )
         card.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -7555,13 +7621,24 @@ def build_page_goal_feasibility(client_facts, allocation_output):
             ("LEFTPADDING", (0, 0), (-1, -1), 0),
             ("RIGHTPADDING", (0, 0), (-1, -1), 0),
             ("LEFTPADDING", (0, 0), (0, -1), 16),
+            ("RIGHTPADDING", (0, 0), (0, -1), 8),
             ("RIGHTPADDING", (-1, 0), (-1, -1), 16),
             ("TOPPADDING", (0, 0), (-1, -1), 12),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
         ]))
 
-        
+        # Per-goal one-line action: raise SIP now (from surplus) + savings to add later.
+        if gap <= 0:
+            hint = "Fully funded by current SIP."
+        elif coverage_used > 0 and savings_gap > 0:
+            hint = f"Raise SIP by {_fmt(coverage_used)} now from surplus · increase savings by {_fmt(savings_gap)} to fully close the gap."
+        elif savings_gap <= 0:
+            hint = f"Raise SIP by {_fmt(coverage_used)} now from surplus to fully close the gap."
+        else:
+            hint = f"Increase savings by {_fmt(savings_gap)} to close the gap."
+
         cards.append(card)
+        cards.append(Paragraph(hint, hint_style))
         cards.append(Spacer(1, 10))
 
     goal_colors = [
@@ -7574,25 +7651,25 @@ def build_page_goal_feasibility(client_facts, allocation_output):
     ]
     
     goals_data = []
-    for i, g in enumerate(allocation_output.get("goal_sip_table") or []):
-        shortfall = _num(g.get("shortfall"), 0)
-        if shortfall > 0:
+    for i, m in enumerate(goal_metrics):
+        gap_amt = _num(m.get("gap"), 0)
+        if gap_amt > 0:
             goals_data.append({
-                "name": g.get("name") or f"Goal {i+1}",
-                "shortfall": shortfall,
+                "name": m.get("name") or f"Goal {i+1}",
+                "shortfall": gap_amt,
                 "color": goal_colors[i % len(goal_colors)]
             })
 
     def draw_stacked_bar(c, x, y, w, h):
-        if not total_shortfall or total_shortfall <= 0: return
+        if not total_gap or total_gap <= 0: return
         c.saveState()
         path = c.beginPath()
         path.roundRect(x, y, w, h, h/2.0)
         c.clipPath(path, stroke=0)
-        
+
         current_x = x
         for item in goals_data:
-            seg_w = (item["shortfall"] / total_shortfall) * w
+            seg_w = (item["shortfall"] / total_gap) * w
             if seg_w > 0:
                 c.setFillColor(item["color"])
                 c.rect(current_x, y, seg_w, h, fill=1, stroke=0)
@@ -7600,7 +7677,7 @@ def build_page_goal_feasibility(client_facts, allocation_output):
         c.restoreState()
 
     stacked_bar_block = CanvasBlock(220, 14, draw_stacked_bar)
-    
+
     legend_cells = []
     for item in goals_data:
         amt = item["shortfall"]
@@ -7608,16 +7685,16 @@ def build_page_goal_feasibility(client_facts, allocation_output):
             amt_str = f"Rs. {amt/100000:.1f}L"
         else:
             amt_str = f"Rs. {amt/1000:.1f}K"
-            
+
         color_hex = item["color"].hexval()[2:] # rrggbb
         legend_cells.append(Paragraph(f"<font color='#{color_hex}'>■</font> <font color='#4A5568' size='7'>{item['name']} {amt_str}</font>", styles["small"]))
-    
+
     legend_rows = []
     for i in range(0, len(legend_cells), 2):
         legend_rows.append(legend_cells[i:i+2])
     if legend_rows and len(legend_rows[-1]) == 1:
         legend_rows[-1].append(Paragraph("", styles["small"]))
-        
+
     if legend_rows:
         legend_table = Table(legend_rows, colWidths=[110, 110])
         legend_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 1), ("BOTTOMPADDING", (0, 0), (-1, -1), 1)]))
@@ -7631,13 +7708,29 @@ def build_page_goal_feasibility(client_facts, allocation_output):
         colWidths=[214]
     )
     right_side.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
-    
-    total_short_str = _fmt_rs(total_shortfall, False)
+
+    # Action plan: raise SIP by what surplus allows now, then grow savings to close the rest.
+    savings_increase = max(0, total_gap - total_raisable)
+    if savings_increase > 0:
+        plan_label = "ADDITIONAL MONTHLY SAVINGS NEEDED"
+        plan_amount = savings_increase
+        plan_sub = (f"Raise SIP by {_fmt_rs(total_raisable, False)} now from your surplus, then grow monthly "
+                    f"savings by {_fmt_rs(savings_increase, False)} to fully close the {_fmt_rs(total_gap, False)} "
+                    f"gap across all {total_goals} goals.")
+    elif total_raisable > 0:
+        plan_label = "RAISE SIP FROM CURRENT SURPLUS"
+        plan_amount = total_raisable
+        plan_sub = (f"Raise SIP by {_fmt_rs(total_raisable, False)} from your surplus to fully fund all "
+                    f"{total_goals} goals — no extra savings needed.")
+    else:
+        plan_label = "GOAL FUNDING"
+        plan_amount = 0
+        plan_sub = f"All {total_goals} goals are on track with current SIPs."
     left_side = Table(
-        [[Paragraph("COMBINED MONTHLY SIP SHORTFALL", ParagraphStyle("cms", parent=styles["small"], textColor=colors.HexColor("#D35400"), fontSize=7, spaceAfter=2))],
-         [Paragraph(f"<font color='#D35400'>{total_short_str}</font><font color='#D35400' size='12'>/month</font>", ParagraphStyle("cmsh", fontName="Times-Roman", fontSize=26, leading=26))],
+        [[Paragraph(plan_label, ParagraphStyle("cms", parent=styles["small"], textColor=colors.HexColor("#D35400"), fontSize=7, spaceAfter=2))],
+         [Paragraph(f"<font color='#D35400'>{_fmt_rs(plan_amount, False)}</font><font color='#D35400' size='12'>/month</font>", ParagraphStyle("cmsh", fontName="Times-Roman", fontSize=26, leading=26))],
          [Spacer(1, 4)],
-         [Paragraph(f"<font color='#666666' size='7'>Total additional SIP needed across all {total_goals} goals to achieve full coverage</font>", styles["small"])]],
+         [Paragraph(f"<font color='#666666' size='7'>{plan_sub}</font>", styles["small"])]],
         colWidths=[224]
     )
     left_side.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
@@ -7714,36 +7807,52 @@ def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
     ]))
 
     plan_rows = [[
-        Paragraph("GOAL", styles["table_head_dark"]), 
-        Paragraph("REQUIRED SIP", styles["table_head_dark"]), 
-        Paragraph("ALLOCATED SIP", styles["table_head_dark"]), 
-        Paragraph("MONTHLY GAP", styles["table_head_dark"]), 
+        Paragraph("GOAL", styles["table_head_dark"]),
+        Paragraph("REQUIRED SIP", styles["table_head_dark"]),
+        Paragraph("CURRENT SIP", styles["table_head_dark"]),
+        Paragraph("COVERAGE", styles["table_head_dark"]),
+        Paragraph("GAP/MO", styles["table_head_dark"]),
         Paragraph("STATUS", styles["table_head_dark"])
     ]]
-    for g in _as_list(allocation_output.get("goal_sip_table")):
+    goal_rows_cf = _as_list(allocation_output.get("goal_sip_table"))
+    tot_req = tot_curr = tot_cov = tot_gap = 0.0
+    for g in goal_rows_cf:
         g = _as_dict(g)
-        shortfall = _num(g.get("shortfall"), 0)
-        status_label = "Funded" if shortfall <= 0 else "Partial"
-        if _num(g.get("allocated_sip"), 0) <= 0 and shortfall > 0:
+        # Current SIP / Gap / Coverage centralised in _allocation_output (same
+        # numbers the Goals page shows). Coverage is the gap-proportional share
+        # of surplus, capped at the gap.
+        ideal = _num(g.get("ideal_sip"), 0)
+        curr = _num(g.get("current_sip"), 0)
+        gap = _num(g.get("gap_mo"), 0)
+        coverage_used = _num(g.get("coverage_used"), 0)
+        tot_req += ideal; tot_curr += curr; tot_cov += coverage_used; tot_gap += gap
+
+        if gap <= 0 or coverage_used >= gap:
+            status_label = "Funded"
+        elif coverage_used > 0:
+            status_label = "Partial"
+        else:
             status_label = "Pending"
-            
+
         plan_rows.append([
-            Paragraph(str(g.get("name") or "Goal"), styles["table"]), 
-            Paragraph(_fmt_rs(g.get("ideal_sip"), False), styles["table"]), 
-            Paragraph(_fmt_rs(g.get("allocated_sip"), False), styles["table"]), 
-            Paragraph(_fmt_rs(shortfall, False), styles["table"]), 
+            Paragraph(str(g.get("name") or "Goal"), styles["table"]),
+            Paragraph(_fmt_rs(ideal, False), styles["table"]),
+            Paragraph(_fmt_rs(curr, False), styles["table"]),
+            Paragraph(_fmt_rs(coverage_used, False), styles["table"]),
+            Paragraph(_fmt_rs(gap, False), styles["table"]),
             TagFlowable(status_label, bg_tint=True)
         ])
-    
+
     plan_rows.append([
-        Paragraph("<b>Total</b>", styles["table"]), 
-        Paragraph(f"<b>{_fmt_rs(total_req, False)}</b>", styles["table"]), 
-        Paragraph(f"<b>{_fmt_rs(available, False)}</b>", styles["table"]), 
-        Paragraph(f"<b>{_fmt_rs(max(0, total_req - available), False)}</b>", styles["table"]), 
+        Paragraph("<b>Total</b>", styles["table"]),
+        Paragraph(f"<b>{_fmt_rs(tot_req, False)}</b>", styles["table"]),
+        Paragraph(f"<b>{_fmt_rs(tot_curr, False)}</b>", styles["table"]),
+        Paragraph(f"<b>{_fmt_rs(tot_cov, False)}</b>", styles["table"]),
+        Paragraph(f"<b>{_fmt_rs(tot_gap, False)}</b>", styles["table"]),
         Paragraph("", styles["table"])
     ])
-    
-    plan_table = Table(plan_rows, colWidths=[160, 90, 90, 90, 70])
+
+    plan_table = Table(plan_rows, colWidths=[120, 76, 76, 76, 76, 76])
     plan_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F1F5F9")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#475569")),
