@@ -1309,9 +1309,11 @@ class GoalsStrategyRunner(SectionRunner):
         has_health_insurance_confirmed = insurance.get("has_health_insurance_confirmed", False) or \
                                          insurance.get("health_insurance_confirmed", False)
         
-        # Emergency fund calculations
-        emergency_fund_target = _coerce_float(monthly_expenses * 6, 0.0)  # 6 months expenses
+        # Emergency fund calculations. If the client already listed an Emergency
+        # Fund among their goals, don't let the engine inject a second EF bucket.
         emergency_fund_current = _coerce_float(lifestyle.get("emergency_fund"), 0.0)
+        _has_ef_goal = any("emergency" in (str(it.get("name") or "")).lower() for it in items)
+        emergency_fund_target = 0.0 if _has_ef_goal else _coerce_float(monthly_expenses * 6, 0.0)  # 6 months expenses
         
         # Existing investments from portfolio
         existing_investments = _coerce_float(portfolio_info.get("total_value") or 
@@ -1760,14 +1762,16 @@ def compute_regime_comparison(
       - Standard deduction: 50,000
       - All deductions (80C, 80D, HRA, etc.) allowed
     
-    New Regime (FY 2024-25):
-      - 0-3L: Nil
-      - 3-7L: 5%
-      - 7-10L: 10%
-      - 10-12L: 15%
-      - 12-15L: 20%
-      - >15L: 30%
+    New Regime (FY 2025-26 / AY 2026-27, Budget 2025):
+      - 0-4L: Nil
+      - 4-8L: 5%
+      - 8-12L: 10%
+      - 12-16L: 15%
+      - 16-20L: 20%
+      - 20-24L: 25%
+      - >24L: 30%
       - Standard deduction: 75,000
+      - Section 87A rebate: taxable income up to 12L pays zero tax
       - NO deductions allowed (except standard deduction)
     
     Returns dict with:
@@ -1815,27 +1819,33 @@ def compute_regime_comparison(
     # Add 4% cess
     tax_old_with_cess = tax_old * 1.04
     
-    # NEW REGIME CALCULATION
+    # NEW REGIME CALCULATION (FY 2025-26 / AY 2026-27 slabs, Budget 2025)
     new_std_deduction = 75000
     taxable_new = max(0, gross_income - new_std_deduction)
-    
-    # New regime tax calculation (FY 2024-25 slabs)
+
+    # New regime tax calculation (FY 2025-26 slabs):
+    #   0-4L nil · 4-8L 5% · 8-12L 10% · 12-16L 15% · 16-20L 20% · 20-24L 25% · >24L 30%
     tax_new = 0
-    if taxable_new > 1500000:
-        tax_new = 150000 + (taxable_new - 1500000) * 0.30
+    if taxable_new > 2400000:
+        tax_new = 300000 + (taxable_new - 2400000) * 0.30
+    elif taxable_new > 2000000:
+        tax_new = 200000 + (taxable_new - 2000000) * 0.25
+    elif taxable_new > 1600000:
+        tax_new = 120000 + (taxable_new - 1600000) * 0.20
     elif taxable_new > 1200000:
-        tax_new = 90000 + (taxable_new - 1200000) * 0.20
-    elif taxable_new > 1000000:
-        tax_new = 60000 + (taxable_new - 1000000) * 0.15
-    elif taxable_new > 700000:
-        tax_new = 30000 + (taxable_new - 700000) * 0.10
-    elif taxable_new > 300000:
-        tax_new = (taxable_new - 300000) * 0.05
-    
-    # Rebate u/s 87A for new regime (if taxable income <= 7L, full rebate up to 25K)
-    if taxable_new <= 700000:
-        tax_new = max(0, tax_new - 25000)
-    
+        tax_new = 60000 + (taxable_new - 1200000) * 0.15
+    elif taxable_new > 800000:
+        tax_new = 20000 + (taxable_new - 800000) * 0.10
+    elif taxable_new > 400000:
+        tax_new = (taxable_new - 400000) * 0.05
+
+    # Rebate u/s 87A for new regime (FY 2025-26): taxable income up to 12L is fully
+    # rebated -> zero tax. Above 12L, marginal relief caps tax at income over 12L.
+    if taxable_new <= 1200000:
+        tax_new = 0
+    else:
+        tax_new = min(tax_new, taxable_new - 1200000)
+
     # Add 4% cess
     tax_new_with_cess = tax_new * 1.04
     
@@ -1852,8 +1862,8 @@ def compute_regime_comparison(
         savings = 0
     
     # Generate recommendation
-    if gross_income <= 700000:
-        recommendation = "With income ≤ ₹7L, New Regime is better (full rebate, zero tax)."
+    if gross_income <= 1275000:
+        recommendation = "With income ≤ ₹12.75L, New Regime is better — full 87A rebate means zero tax."
     elif gross_income <= 1200000:
         if total_deductions_old - old_std_deduction >= 150000:
             recommendation = f"With ₹{total_deductions_old - old_std_deduction:,.0f} in deductions, Old Regime saves ₹{savings:,.0f}." if better == "old" else f"Even with deductions, New Regime saves ₹{savings:,.0f}."

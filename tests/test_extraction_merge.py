@@ -247,18 +247,21 @@ def test_prefill_normalizes_by_statement_period():
     assert lifestyle["savings_percent"] == pytest.approx(70.0)
 
 
-def test_prefill_legacy_12_month_assumption_without_period():
+def test_prefill_income_not_seeded_from_raw_inflows_without_period():
+    # Raw statement-period inflows are NOT an annual figure: a 2-3 month
+    # statement used to seed a wildly understated annual income (client bug,
+    # Jul 2026). Without period coverage, income must be left blank for the
+    # user to fill; expenses keep the legacy /12 fallback.
     qid = create_questionnaire(user_id="test-legacy-" + os.urandom(4).hex())
     sha = _rand_sha()
     doc_id = upsert_document(sha, "bank_nop.pdf", 5)
     link_questionnaire_upload(qid, doc_id, sha, "Bank statement", "bank_nop.pdf", metadata={})
     insert_metric(doc_id, "total_inflows", 300000.0, None)
     insert_metric(doc_id, "total_outflows", 90000.0, None)
-    # no statement_months metric -> behavior must be byte-identical to before
     prefill = build_prefill_from_insights(qid)
     lifestyle = prefill["lifestyle"]
     assert lifestyle["monthly_expenses"] == pytest.approx(90000.0 / 12.0)
-    assert lifestyle["annual_income"] == pytest.approx(300000.0)
+    assert "annual_income" not in lifestyle
 
 
 # --- insurance classification scoring ----------------------------------------

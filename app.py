@@ -2014,6 +2014,11 @@ def compute_advanced_risk(payload, age):
     except Exception:
         equity_pct = None
 
+    # The recommended band is driven by the client's risk profile (answers +
+    # tenure + goal adjustments), NOT by their current allocation. Current
+    # equity only measures the rebalancing distance — letting it mutate the
+    # category made the target chase the holdings and pinned every profile
+    # with a drifted portfolio to Moderate (the "47% for all cases" bug).
     if equity_pct is not None:
         band = _RISK_EQUITY_BANDS.get(baseline_category)
         if band:
@@ -2023,23 +2028,10 @@ def compute_advanced_risk(payload, age):
                 nearest_edge_dist = band_min - equity_pct
             elif equity_pct > band_max:
                 nearest_edge_dist = equity_pct - band_max
-            if nearest_edge_dist > 20:
-                forced = "Moderate"
-                if _category_index(baseline_category) > _category_index(forced):
-                    adjustments.append(f"PortfolioForce: {baseline_category} -> {forced} (drift {nearest_edge_dist:.1f}pp)")
-                    baseline_category = forced
-            else:
-                if equity_pct > (band_max + 10):
-                    new_cat = _index_to_category(_category_index(baseline_category) - 1)
-                    adjustments.append(f"PortfolioDowngrade: equity {equity_pct:.1f}% > {band_max + 10}%")
-                    baseline_category = new_cat
-                elif equity_pct < (band_min - 10):
-                    if _category_index(baseline_category) < _category_index(tenure_limit):
-                        new_cat = _index_to_category(_category_index(baseline_category) + 1)
-                        if _category_index(new_cat) > _category_index(tenure_limit):
-                            new_cat = tenure_limit
-                        adjustments.append(f"PortfolioUpgrade: equity {equity_pct:.1f}% < {band_min - 10}%")
-                        baseline_category = new_cat
+            if nearest_edge_dist > 0:
+                adjustments.append(
+                    f"AllocationDrift: current equity {equity_pct:.1f}% is {nearest_edge_dist:.1f}pp outside the {band_min}-{band_max}% band (rebalance, target unchanged)"
+                )
 
     final_category = baseline_category
     if _category_index(final_category) > _category_index(tenure_limit):
@@ -2557,7 +2549,11 @@ def build_prefill_from_insights(qid: int) -> dict:
         elif isinstance(annual_in_est, (int, float)) and annual_in_est > 0:
             inflow = annual_in_est
         else:
-            inflow = bank_inflow
+            # Raw statement-period inflows are NOT an annual figure — a 2-3 month
+            # statement understates income several-fold. Only prefill annual income
+            # from ITR or a period-normalized annual estimate; otherwise leave it
+            # blank for the user to enter rather than seed a wrong value.
+            inflow = None
         outflow = bank_outflow
 
         if isinstance(inflow, (int, float)) and inflow > 0:
@@ -3377,9 +3373,11 @@ def _assemble_financial_inputs(q: dict, doc_insights=None) -> dict:
     di = doc_insights or {}
     bank = di.get("bank") or {}
     try:
-        # Annual income fallback from bank inflows (period-normalized when known)
+        # Annual income fallback from bank inflows — ONLY the period-normalized
+        # annual estimate. Raw total_inflows is a statement-period sum, not annual,
+        # so using it would grossly understate income for short statements.
         if not payload["income"].get("annualIncome"):
-            inflow = bank.get("annual_inflows_est") or bank.get("total_inflows")
+            inflow = bank.get("annual_inflows_est")
             if isinstance(inflow, (int, float)) and inflow > 0:
                 payload["income"]["annualIncome"] = inflow
         # Monthly expenses fallback from bank outflows
@@ -6671,6 +6669,12 @@ def _allocation_output(client_facts):
             "ideal_sip": ideal,
             "risk_category": g.get("risk_tolerance") or "moderate",
         })
+    # Avoid a duplicate Emergency Fund: if the client already listed one as a goal
+    # (it's a selectable goal type), don't let the engine inject its own EF bucket.
+    lifestyle_facts = client_facts.get("lifestyle") or {}
+    ef_current = _num(lifestyle_facts.get("emergency_fund"), 0)
+    has_ef_goal = any("emergency" in (str(g.get("name") or "")).lower() for g in goals)
+    ef_target = 0 if has_ef_goal else _num(income.get("monthlyExpenses"), 0) * 6
     try:
         out = PriorityAllocationEngine.compute_allocation(
             monthly_surplus=max(0, monthly_surplus),
@@ -6679,7 +6683,8 @@ def _allocation_output(client_facts):
             goals=goals,
             age=int(_num(personal.get("age"), 35)),
             has_dependents=_num(personal.get("dependents_count"), 0) > 0,
-            emergency_fund_target=_num(income.get("monthlyExpenses"), 0) * 6,
+            emergency_fund_target=ef_target,
+            emergency_fund_current=ef_current,
             existing_sip_commitments=_num(portfolio.get("total_monthly_sip") or portfolio.get("monthly_sip"), 0),
             manual_sip=_num((client_facts.get("lifestyle") or {}).get("manual_sip"), 0),
             manual_corpus=_num((client_facts.get("lifestyle") or {}).get("manual_corpus"), 0),
@@ -6846,7 +6851,7 @@ def build_page_cover(client_facts, allocation_output, narratives=None):
             "<font color='#4A5568' size='8'>"
             "• This is an <b>educational financial analysis tool</b>, not personalised investment advice.<br/>"
             "• All recommendations are <b>indicative</b> and based on the data and assumptions you provided.<br/>"
-            "• Calculations use <b>standard benchmarks</b> (6-month emergency fund, 20× term cover, &lt;40% EMI/income, 12% long-term equity CAGR).<br/>"
+            f"• Calculations use <b>standard benchmarks</b> (6-month emergency fund, {int(LIFE_COVER_MULTIPLE)}× income term cover, &lt;40% EMI/income, 12% long-term equity CAGR).<br/>"
             "• <b>Market and regulatory conditions change</b>; revisit this plan at least annually or after major life events.<br/>"
             "• <b>Product selection and execution are your responsibility.</b> Consult a SEBI-registered Investment Advisor before acting.<br/>"
             "• We do <b>not recommend specific securities or products</b> and do not earn commissions from any provider."
@@ -7123,7 +7128,7 @@ def build_page_protection(client_facts, allocation_output):
         Spacer(1, 8),
         CanvasBlock(220, 14, lambda c, x, y, w, h: draw_coverage_bar(c, 0, 0, 220, coverage_pct, _fmt_rs(current_life), bar_color=(0.75, 0.22, 0.17))),
         Spacer(1, 8),
-        Paragraph(f"Coverage gap: <b><font color='#C0392B'>{life_gap_pct:.0f}% underinsured</font></b> · Basis: 20x annual expenses", styles["small"]),
+        Paragraph(f"Coverage gap: <b><font color='#C0392B'>{life_gap_pct:.0f}% underinsured</font></b> · Basis: {int(LIFE_COVER_MULTIPLE)}x annual income", styles["small"]),
         Spacer(1, 16),
         Table(
             [[ [Paragraph("PROTECTION GAP", ParagraphStyle("gap_lbl", parent=styles["label"], textColor=colors.HexColor("#C0392B"), spaceAfter=6)),
@@ -7145,7 +7150,7 @@ def build_page_protection(client_facts, allocation_output):
         _styled_table([
             [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Pure term insurance — no investment component", styles["body"])],
             [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Coverage tenure until age 55-60 minimum", styles["body"])],
-            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Sum assured benchmark: ~20x annual expenses", styles["body"])],
+            [Paragraph(f"<font color='#27AE60'>✓</font> &nbsp; Sum assured benchmark: ~{int(LIFE_COVER_MULTIPLE)}x annual income", styles["body"])],
             [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Compare claim-settlement ratio, exclusions and premium stability", styles["body"])],
         ], [220], header=False, style_type="light"),
     ]
@@ -7287,7 +7292,7 @@ def build_page_portfolio_debt(client_facts, allocation_output):
         Spacer(1, 4),
         Paragraph(f"<font color='{target_color}'>● <b>{int(target_eq)}% Equity</b></font> &nbsp;&nbsp; <font color='#8CA2B5'>● {100-int(target_eq)}% Debt</font>", ParagraphStyle("sub3", parent=styles["body"], alignment=TA_CENTER)),
         Spacer(1, 2),
-        Paragraph(f"Conservative · Band {int(b_min)}–{int(b_max)}% · Risk-aligned", ParagraphStyle("sub4", parent=styles["small"], alignment=TA_CENTER, textColor=colors.HexColor("#7F8C8D"))),
+        Paragraph(f"{_as_dict(ar).get('finalCategory') or 'Moderate'} · Band {int(b_min)}–{int(b_max)}% · Risk-aligned", ParagraphStyle("sub4", parent=styles["small"], alignment=TA_CENTER, textColor=colors.HexColor("#7F8C8D"))),
     ]
 
     arrow_block = [
@@ -7390,14 +7395,26 @@ def build_page_liquidity(client_facts, allocation_output):
     expenses = _num(income.get("monthlyExpenses"), 0)
     target = expenses * 6
     score = _ihs_component_score(analysis, "liquidity")
-    
+
+    # Current emergency fund from the questionnaire (Rs.). When provided, show the
+    # actual funded status instead of a blanket "Unknown".
+    ef_current = _num((client_facts.get("lifestyle") or {}).get("emergency_fund"), 0)
+    ef_months = (ef_current / expenses) if expenses > 0 else 0
+    ef_gap = max(0, target - ef_current)
+    if ef_current <= 0:
+        status_markup = "<font color='#E67E22'><b>Unknown — assess now</b></font>"
+    elif ef_current >= target and target > 0:
+        status_markup = f"<font color='#27AE60'><b>Fully funded · {_fmt_rs(ef_current, False)} (~{ef_months:.1f} months)</b></font>"
+    else:
+        status_markup = f"<font color='#E67E22'><b>{_fmt_rs(ef_current, False)} · ~{ef_months:.1f} of 6 months</b></font>"
+
     # Left Card: Parameters
     params = [
         ["Liquidity Score", Paragraph(f"<font color='#E67E22'><b>{_num(score, 0):.0f}/100</b></font>", styles["body"])],
         ["Basis", Paragraph("<b>6 months</b> essential expenses", styles["body"])],
         ["Monthly Expenses (est.)", Paragraph(f"<b>{_fmt_rs(expenses, False)}/month</b>", styles["body"])],
         ["Emergency Fund Target", Paragraph(f"<font color='#27AE60'><b>~{_fmt_rs(target, False)}</b></font>", styles["body"])],
-        ["Current Status", Paragraph("<font color='#E67E22'><b>Unknown — assess now</b></font>", styles["body"])],
+        ["Current Status", Paragraph(status_markup, styles["body"])],
     ]
     params_table = _styled_table(params, [110, 80], header=False, style_type="compact_light")
 
@@ -7432,12 +7449,13 @@ def build_page_liquidity(client_facts, allocation_output):
         ])
     )
     
-    # Right Card: Strategy
+    # Right Card: Strategy — build the *remaining* gap when some fund already exists.
+    build_base = ef_gap if ef_current > 0 else target
     strategy = [
         ["OPTION", "DURATION", "MONTHLY", "BEST FOR"],
-        [Paragraph("<font color='#27AE60'><b>A — Fast</b></font>", styles["body"]), "12 months", Paragraph(f"<font color='#E67E22'><b>{_fmt_rs(target / 12, False)}</b></font>", styles["body"]), Paragraph("<font color='#4A5568'>High surplus period</font>", styles["small"])],
-        [Paragraph("<font color='#A8813C'><b>B — Balanced<br/>★</b></font>", styles["body"]), "18 months", Paragraph(f"<font color='#E67E22'><b>{_fmt_rs(target / 18, False)}</b></font>", styles["body"]), Paragraph("<font color='#4A5568'>Recommended</font>", styles["small"])],
-        [Paragraph("<font color='#7F8C8D'><b>C — Gentle</b></font>", styles["body"]), "24 months", Paragraph(f"<font color='#E67E22'><b>{_fmt_rs(target / 24, False)}</b></font>", styles["body"]), Paragraph("<font color='#4A5568'>If goals compete</font>", styles["small"])],
+        [Paragraph("<font color='#27AE60'><b>A — Fast</b></font>", styles["body"]), "12 months", Paragraph(f"<font color='#E67E22'><b>{_fmt_rs(build_base / 12, False)}</b></font>", styles["body"]), Paragraph("<font color='#4A5568'>High surplus period</font>", styles["small"])],
+        [Paragraph("<font color='#A8813C'><b>B — Balanced<br/>★</b></font>", styles["body"]), "18 months", Paragraph(f"<font color='#E67E22'><b>{_fmt_rs(build_base / 18, False)}</b></font>", styles["body"]), Paragraph("<font color='#4A5568'>Recommended</font>", styles["small"])],
+        [Paragraph("<font color='#7F8C8D'><b>C — Gentle</b></font>", styles["body"]), "24 months", Paragraph(f"<font color='#E67E22'><b>{_fmt_rs(build_base / 24, False)}</b></font>", styles["body"]), Paragraph("<font color='#4A5568'>If goals compete</font>", styles["small"])],
     ]
     strategy_table = _styled_table(strategy, [60, 58, 60, 63], style_type="compact_light")
 
@@ -7450,7 +7468,7 @@ def build_page_liquidity(client_facts, allocation_output):
     ]))
     
     right = Table(
-        [[ [Paragraph("BUILDING STRATEGY — FROM ZERO", ParagraphStyle("bs", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=12)),
+        [[ [Paragraph("BUILDING STRATEGY — TO CLOSE GAP" if ef_current > 0 else "BUILDING STRATEGY — FROM ZERO", ParagraphStyle("bs", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=12)),
             strategy_table] ]],
         colWidths=[265],
         style=TableStyle([
@@ -8080,8 +8098,11 @@ def build_page_action_plan(client_facts, allocation_output):
             res.append(Paragraph(f"→ {it}", ParagraphStyle("ti", parent=styles["body"], fontSize=8, leftIndent=8)))
         return res
 
+    required_life = _num((_as_dict(client_facts.get("analysis")).get("_diagnostics") or {}).get("requiredLifeCover"), 0)
+    term_action = (f"Get term insurance — {_fmt_rs(required_life)} cover"
+                   if required_life > 0 else "Review term insurance need with an advisor")
     col1 = [
-        _timeline_item("WEEK 1", "Protection", ["Get term insurance — Rs. 4.4 Cr cover", "Upgrade health to Rs. 10-15L floater"]),
+        _timeline_item("WEEK 1", "Protection", [term_action, "Upgrade health to Rs. 10-15L floater"]),
         Spacer(1, 8),
         _timeline_item("WEEK 2", "Liquidity", ["Assess savings + FD vs target", "Set up Tier 1/2/3 structure"]),
         Spacer(1, 8),
@@ -8196,7 +8217,7 @@ def build_page_review(client_facts, allocation_output):
         "Financial Health Score across 6 dimensions", "Snapshot — Current vs Ideal with priorities",
         "Advanced Risk Assessment + Profile at a Glance", "Protection gap (Life + Health with guidance)",
         "Portfolio rebalancing plan", "Debt Management data (EMI ratio + benchmarks)",
-        "Liquidity & Emergency Fund full assessment", "Goal feasibility for all 5 goals + SIP column",
+        "Liquidity & Emergency Fund full assessment", "Goal feasibility for all your goals + SIP column",
         "Reality Check — cash flow vs goal requirement", "Goal-wise SIP Allocation plan",
         "Tax optimisation + structured action table", "90-Day Roadmap + Phase-wise Action Plan"
     ]
