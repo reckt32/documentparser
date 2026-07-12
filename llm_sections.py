@@ -56,6 +56,8 @@ from assumptions import (
     INFLATION_RATE as ASSUMED_INFLATION_RATE,
     WITHDRAWAL_RATE_RETIREMENT,
     LIFE_COVER_MULTIPLE,
+    OVER_INSURED_THRESHOLD,
+    recommended_health_cover,
 )
 
 
@@ -966,26 +968,52 @@ class ProtectionPlanRunner(SectionRunner):
         current_life = _coerce_float(digest.get("lifeCover"), 0.0)
         current_health = _coerce_float(digest.get("healthCover"), 0.0)
         age = _coerce_float(digest.get("age"), 35)
-        
+
         # Estimate term premium (rough: Rs. 500-800 per lakh for 30-40 age group)
         cover_gap = max(0, required_cover - current_life)
         estimated_premium = (cover_gap / 100000) * (500 if age < 35 else 700 if age < 45 else 1200)
-        
+        rec_health = recommended_health_cover(annual_income, digest.get("dependents"))
+
+        if cover_gap > 0:
+            life_instruction = (
+                f"   - Gap exists: recommend ADDITIONAL term cover of Rs.{cover_gap:,.0f} (to reach Rs.{required_cover:,.0f} total)\n"
+                f"   - Estimated premium: approx Rs.{estimated_premium:,.0f}/year (varies by age, health, insurer)\n"
+            )
+        elif required_cover > 0 and current_life >= required_cover * OVER_INSURED_THRESHOLD:
+            life_instruction = (
+                "   - Current cover EXCEEDS the requirement by a wide margin: mark it OVER-INSURED.\n"
+                "   - Do NOT recommend buying any term insurance. Suggest reviewing the sum assured vs premium at renewal.\n"
+            )
+        else:
+            life_instruction = (
+                "   - Cover is adequate: do NOT recommend buying any term insurance. Advise maintaining the existing policy.\n"
+            )
+
+        if current_health >= rec_health:
+            health_instruction = (
+                f"   - Current cover meets/exceeds the recommended Rs.{rec_health:,.0f}: state it is ADEQUATE.\n"
+                "   - Do NOT recommend an upgrade or a new policy; advise an annual review only.\n"
+            )
+        else:
+            health_instruction = (
+                f"   - Recommend upgrading to a Rs.{rec_health:,.0f} family floater\n"
+                "   - If current < Rs.5 lakh, flag as critical gap\n"
+            )
+
         system = (
             "You are a senior financial planner. Draft a protection (life/health) section for Indian clients. "
             "IMPORTANT: All monetary values MUST be in Indian Rupees (₹ or Rs.). NEVER use dollars ($) or any other currency. "
-            "Provide SPECIFIC coverage amounts and estimates. Avoid naming specific insurers but be specific about amounts."
+            "Provide SPECIFIC coverage amounts and estimates. Avoid naming specific insurers but be specific about amounts. "
+            "NEVER advise buying cover the client already has — adequate or over-insured policies must be labelled as such."
         )
         user = (
             "Section: Protection Plan\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
             "INSTRUCTIONS:\n"
-            f"1. Life Insurance Gap: Required Rs.{required_cover:,.0f}, Current Rs.{current_life:,.0f}, Gap Rs.{cover_gap:,.0f}\n"
-            f"   - If gap exists, recommend term insurance with specific cover amount\n"
-            f"   - Estimated premium: approx Rs.{estimated_premium:,.0f}/year (varies by age, health, insurer)\n"
-            f"2. Health Insurance: Current Rs.{current_health:,.0f}\n"
-            "   - Recommend Rs.10-15 lakh family floater for adequate coverage\n"
-            "   - If current < Rs.5 lakh, flag as critical gap\n"
+            f"1. Life Insurance: Required Rs.{required_cover:,.0f}, Current Rs.{current_life:,.0f}, Gap Rs.{cover_gap:,.0f}\n"
+            f"{life_instruction}"
+            f"2. Health Insurance: Current Rs.{current_health:,.0f}, Recommended Rs.{rec_health:,.0f}\n"
+            f"{health_instruction}"
             "3. Priority Order: Term life first if dependents exist, then health cover\n\n"
             "Output JSON keys: title, bullets, paragraphs, actions.\n"
             "Length limits: <=6 bullets, <=2 paragraphs, <=5 actions."
@@ -999,8 +1027,24 @@ class CashflowRunner(SectionRunner):
     def digest(self, facts: Dict[str, Any]) -> Dict[str, Any]:
         analysis = facts.get("analysis") or {}
         bank = facts.get("bank") or {}
+        income = facts.get("income") or {}
+        # Declared cashflow so the narrative can quantify the surplus even when
+        # no bank statement was uploaded (band alone reads as "unknown" to the LLM).
+        annual_income = _coerce_float(income.get("annualIncome"), 0.0)
+        monthly_income = annual_income / 12.0 if annual_income > 0 else 0.0
+        monthly_expenses = _coerce_float(income.get("monthlyExpenses"), 0.0)
+        monthly_emi = _coerce_float(income.get("monthlyEmi"), 0.0)
+        declared_surplus = monthly_income - monthly_expenses - monthly_emi if monthly_income > 0 else None
+        savings_rate_pct = round(declared_surplus / monthly_income * 100.0, 1) if declared_surplus is not None and monthly_income > 0 else None
         return {
             "surplusBand": analysis.get("surplusBand"),
+            "declared": {
+                "monthly_income": round(monthly_income, 0) or None,
+                "monthly_expenses": monthly_expenses or None,
+                "monthly_emi": monthly_emi or None,
+                "monthly_surplus": round(declared_surplus, 0) if declared_surplus is not None else None,
+                "savings_rate_pct": savings_rate_pct,
+            },
             "bank": {
                 "total_inflows": bank.get("total_inflows"),
                 "total_outflows": bank.get("total_outflows"),
@@ -1289,11 +1333,10 @@ class GoalsStrategyRunner(SectionRunner):
                 current_life_cover = _coerce_float(insurance.get("lifeCover"), 0.0)
                 term_gap = max(0, required_cover - current_life_cover)
         
-        # Calculate health insurance gap (recommend Rs. 10-15 lakh family floater)
+        # Health insurance gap vs the profile-scaled recommendation
         current_health_cover = _coerce_float(insurance.get("healthCover"), 0.0)
-        recommended_health = 1000000  # Rs. 10 lakh minimum recommended
-        if has_dependents:
-            recommended_health = 1500000  # Rs. 15 lakh for family
+        recommended_health = recommended_health_cover(
+            monthly_income * 12, personal.get("dependents_count") or (1 if has_dependents else 0))
         health_gap = max(0, recommended_health - current_health_cover)
         
         # --- NEW: Extract additional data for enhanced allocation ---

@@ -47,3 +47,73 @@ ASSUMED_RETURNS = {
     "moderate": {"annual": 0.114, "monthly": 0.009, "label": "11.4% p.a. (Moderate)"},
     "conservative": {"annual": 0.074, "monthly": 0.006, "label": "7.4% p.a. (Conservative/Debt)"},
 }
+
+# Health insurance: recommended sum insured scales with the client's profile
+# instead of a fixed "10-15L" for everyone. Base cover 10L (individual) /
+# 15L (family floater when dependents exist), lifted to ~50% of annual income
+# for higher earners, capped at HEALTH_COVER_MAX.
+HEALTH_COVER_BASE_INDIVIDUAL = _env_float("HEALTH_COVER_BASE_INDIVIDUAL", 1000000.0)
+HEALTH_COVER_BASE_FAMILY = _env_float("HEALTH_COVER_BASE_FAMILY", 1500000.0)
+HEALTH_COVER_INCOME_FACTOR = _env_float("HEALTH_COVER_INCOME_FACTOR", 0.5)
+HEALTH_COVER_MAX = _env_float("HEALTH_COVER_MAX", 10000000.0)
+
+# Cover at or above OVER_INSURED_THRESHOLD x requirement is tagged
+# "Over-insured" (informational — the client pays premium for cover beyond
+# the benchmark, not a protection defect).
+OVER_INSURED_THRESHOLD = _env_float("OVER_INSURED_THRESHOLD", 1.25)
+
+
+def recommended_health_cover(annual_income, dependents_count=0) -> float:
+    """Recommended health sum insured for this profile, rounded to the lakh."""
+    try:
+        income = float(annual_income or 0)
+    except (TypeError, ValueError):
+        income = 0.0
+    try:
+        deps = float(dependents_count or 0)
+    except (TypeError, ValueError):
+        deps = 0.0
+    base = HEALTH_COVER_BASE_FAMILY if deps > 0 else HEALTH_COVER_BASE_INDIVIDUAL
+    scaled = max(base, income * HEALTH_COVER_INCOME_FACTOR)
+    lakh = 100000.0
+    return min(round(scaled / lakh) * lakh, HEALTH_COVER_MAX)
+
+
+def health_cover_status(current_cover, recommended_cover) -> str:
+    """UI status for health cover: NOT COVERED / UPGRADE RECOMMENDED / ADEQUATE / OVER-INSURED."""
+    try:
+        current = float(current_cover or 0)
+    except (TypeError, ValueError):
+        current = 0.0
+    try:
+        rec = float(recommended_cover or 0)
+    except (TypeError, ValueError):
+        rec = 0.0
+    if current <= 0:
+        return "NOT COVERED"
+    if rec > 0 and current >= rec * 2.0:
+        return "OVER-INSURED"
+    if current >= rec:
+        return "ADEQUATE"
+    return "UPGRADE RECOMMENDED"
+
+
+def life_cover_status(current_cover, required_cover) -> str:
+    """UI status for term cover: NOT COVERED / UNDERINSURED / ADEQUATE / OVER-INSURED."""
+    try:
+        current = float(current_cover or 0)
+    except (TypeError, ValueError):
+        current = 0.0
+    try:
+        required = float(required_cover or 0)
+    except (TypeError, ValueError):
+        required = 0.0
+    if required <= 0:
+        return "ADEQUATE"
+    if current <= 0:
+        return "NOT COVERED"
+    if current >= required * OVER_INSURED_THRESHOLD:
+        return "OVER-INSURED"
+    if current >= required:
+        return "ADEQUATE"
+    return "UNDERINSURED"

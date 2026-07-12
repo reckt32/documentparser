@@ -28,7 +28,14 @@ from transaction_analytics import (
     statement_months,
 )
 from llm_sections import run_report_sections, compute_goal_sip, compute_regime_comparison, PriorityAllocationEngine
-from assumptions import LIFE_COVER_MULTIPLE, WITHDRAWAL_RATE_RETIREMENT
+from assumptions import (
+    LIFE_COVER_MULTIPLE,
+    WITHDRAWAL_RATE_RETIREMENT,
+    recommended_health_cover,
+    health_cover_status,
+    life_cover_status,
+    OVER_INSURED_THRESHOLD,
+)
 from db import (
     list_sections,
     list_metrics,
@@ -1609,14 +1616,15 @@ def _clamp(v, lo, hi):
 def _band_midpoint(band: str):
     if not band:
         return None
-    b = str(band).strip().lower()
-    if b.startswith("<") or b.startswith("<"):
+    b = str(band).strip().lower().replace("%", "").replace(" ", "")
+    if b.startswith("<") or b in ("0-10", "under10", "below10"):
         return 5.0
     if "10-20" in b:
         return 15.0
     if "20-30" in b:
         return 25.0
-    if b.startswith(">") or b.startswith(">"):
+    # ">30", "30+", "30andabove", "above30" — any "more than 30" phrasing
+    if b.startswith(">") or b.endswith("+") or b.startswith("30") or "above" in b:
         return 35.0
     return None
 
@@ -1631,6 +1639,38 @@ def resolve_savings_percent(savings_percent, savings_band):
         mp = _band_midpoint(savings_band)
         sp = mp if mp is not None else 0.0
     return _clamp(sp, 0.0, 100.0)
+
+def declared_savings_percent(income: dict):
+    """
+    Savings rate from the client's own declared cashflow:
+    (monthly income − expenses − EMI) / monthly income.
+
+    This is the same arithmetic the report's snapshot page prints as
+    "Savings rate", so the Surplus Level band can never contradict it.
+    Returns None when income or expenses are missing.
+    """
+    income = income or {}
+    ai = _safe_float(income.get("annualIncome"), 0.0)
+    me = _safe_float(income.get("monthlyExpenses"), 0.0)
+    emi = _safe_float(income.get("monthlyEmi"), 0.0)
+    if ai <= 0 or me <= 0:
+        return None
+    monthly_income = ai / 12.0
+    sp = (monthly_income - me - emi) / monthly_income * 100.0
+    return _clamp(sp, 0.0, 100.0)
+
+def effective_savings_percent(payload: dict):
+    """
+    Single source of truth for the savings rate used by surplus band, IHS and
+    flags. Declared cashflow wins (it's complete and what the report displays);
+    doc-derived savingsPercent and the self-reported band are fallbacks.
+    """
+    payload = payload or {}
+    sp = declared_savings_percent(payload.get("income") or {})
+    if sp is not None:
+        return sp
+    savings = payload.get("savings") or {}
+    return resolve_savings_percent(savings.get("savingsPercent"), savings.get("savingsBand"))
 
 def compute_risk_profile(age, tolerance, horizon):
     a = _safe_float(age, 0.0)
@@ -2142,10 +2182,7 @@ def generate_flags_and_recommendations(results, inputs):
     monthly_expenses = _safe_float(inputs.get("income", {}).get("monthlyExpenses"), 0.0)
     monthly_emi = _safe_float(inputs.get("income", {}).get("monthlyEmi"), 0.0)
     life_cover = _safe_float(inputs.get("insurance", {}).get("lifeCover"), 0.0)
-    savings_percent = resolve_savings_percent(
-        inputs.get("savings", {}).get("savingsPercent"),
-        inputs.get("savings", {}).get("savingsBand"),
-    )
+    savings_percent = effective_savings_percent(inputs)
     allocation = (inputs.get("investments") or {}).get("allocation") or {}
     equity = _safe_float(allocation.get("equity"), 0.0)
     debt = _safe_float(allocation.get("debt"), 0.0)
@@ -2251,7 +2288,7 @@ def analyze_financial_health(payload: dict):
     age = personal.get("age")
     tolerance = risk.get("tolerance")
     horizon = goals.get("goalHorizon")
-    savings_percent = resolve_savings_percent(savings.get("savingsPercent"), savings.get("savingsBand"))
+    savings_percent = effective_savings_percent(payload)
 
     basic_risk_profile, basic_risk_score = compute_risk_profile(age, tolerance, horizon)
     surplus_band = compute_surplus_band(savings_percent)
@@ -6298,6 +6335,7 @@ def draw_tag(canvas, x, y, label, font_size=8, bg_tint=False):
         'IMMEDIATE': '#C0392B', 'CRITICAL': '#C0392B', 'UNDERINSURED': '#C0392B', 'URGENT': '#C0392B', 'INSUFFICIENT': '#C0392B',
         'STRESSED': '#E67E22', 'NEEDS ATTENTION': '#E67E22', 'ATTENTION': '#E67E22', 'ASSESS & IMPROVE': '#E67E22', 'MODERATE': '#E67E22', 'GAP': '#E67E22', 'LOW': '#E67E22', 'UPGRADE RECOMMENDED': '#E67E22', 'REVIEW': '#E67E22', 'AVERAGE': '#E67E22', 'POOR': '#E67E22',
         'GOOD': '#27AE60', 'MAINTAIN': '#27AE60', 'WELL OPTIMISED': '#27AE60', 'ADEQUATE': '#27AE60', 'HEALTHY': '#27AE60', 'FUNDED': '#27AE60', 'COMFORTABLE': '#27AE60', 'EXCELLENT': '#27AE60',
+        'FEASIBLE': '#2A557E', 'OVER-INSURED': '#2A557E', 'NOT COVERED': '#C0392B', 'PENDING': '#C0392B', 'PARTIAL': '#E67E22',
     }
     hex_col = colour_map.get(label.upper(), '#888888')
     r, g, b = int(hex_col[1:3],16)/255, int(hex_col[3:5],16)/255, int(hex_col[5:7],16)/255
@@ -6657,7 +6695,7 @@ def _allocation_output(client_facts):
     required_life = _num((analysis.get("_diagnostics") or {}).get("requiredLifeCover"), monthly_income * 12 * LIFE_COVER_MULTIPLE)
     current_life = _num(insurance.get("lifeCover"), 0)
     current_health = _num(insurance.get("healthCover"), 0)
-    recommended_health = 1500000 if _num(personal.get("dependents_count"), 0) > 0 else 1000000
+    recommended_health = recommended_health_cover(income.get("annualIncome"), personal.get("dependents_count"))
     goals = []
     for g in _as_list(client_facts.get("goals")):
         g = _as_dict(g)
@@ -6754,6 +6792,13 @@ def _allocation_output(client_facts):
     out["goal_total_gap"] = round(total_gap, 0)
     out["goal_total_coverage"] = round(total_gap * cover_ratio, 0)   # = min(pool, total_gap)
     out["goal_savings_increase"] = round(max(0, total_gap - pool), 0)
+
+    # Insurance verdicts shared by the snapshot, protection page and roadmap so
+    # "recommended" amounts and adequate/over-insured tags can't disagree.
+    out["recommended_health_cover"] = recommended_health
+    out["health_cover_status"] = health_cover_status(current_health, recommended_health)
+    out["required_life_cover"] = required_life
+    out["life_cover_status"] = life_cover_status(current_life, required_life)
     return out
 
 
@@ -6901,17 +6946,36 @@ def build_page_snapshot(client_facts, allocation_output):
     active_sip_text = f"Rs.{active_sip:,.0f}/mo" if active_sip > 0 else "Rs.0/mo"
     active_sip_color = green if active_sip > 0 else red
 
-    # Compute funded goals from allocation output
+    # Goal status from allocation output. "Funded" means the current SIP covers
+    # the requirement; a gap the surplus could absorb is only "feasible".
     goal_sip_rows = _as_list(allocation_output.get("goal_sip_table"))
-    total_goals = len(client_facts.get("goals") or [])
-    funded_goals = sum(1 for g in goal_sip_rows if _num(_as_dict(g).get("shortfall"), 0) <= 0)
-    funded_color = green if funded_goals >= total_goals and total_goals > 0 else (orange if funded_goals > 0 else red)
-    goals_tag = "GOOD" if funded_goals >= total_goals and total_goals > 0 else "HIGH"
+    total_goals = max(len(goal_sip_rows), len(client_facts.get("goals") or []))
+    funded_goals = 0
+    feasible_goals = 0
+    for g in goal_sip_rows:
+        g = _as_dict(g)
+        g_gap = _num(g.get("gap_mo"), 0)
+        if g_gap <= 0:
+            funded_goals += 1
+        elif _num(g.get("coverage_used"), 0) >= g_gap:
+            feasible_goals += 1
+    all_funded = funded_goals >= total_goals and total_goals > 0
+    all_feasible = (funded_goals + feasible_goals) >= total_goals and total_goals > 0
+    funded_color = green if all_funded else (blue if all_feasible else (orange if funded_goals > 0 else red))
+    goals_tag = "GOOD" if all_funded else ("FEASIBLE" if all_feasible else "HIGH")
+
+    # Insurance verdicts shared with the protection page
+    life_status = str(allocation_output.get("life_cover_status") or "").upper()
+    health_status = str(allocation_output.get("health_cover_status") or "").upper()
+    rec_health = _num(allocation_output.get("recommended_health_cover"), 0)
+    life_ok = life_status in ("ADEQUATE", "OVER-INSURED")
+    health_ok = health_status in ("ADEQUATE", "OVER-INSURED")
+    life_tag = life_status if life_ok else _urgency(_ihs_component_score(analysis, "protection"))
 
     rows = [["AREA", "CURRENT", "IDEAL", "PRIORITY"]]
     rows += [
-        ["Life Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("lifeCover"))), red), ctext(kpi_fmt(_fmt_rs(diag.get("requiredLifeCover"))), green), _tag(_urgency(_ihs_component_score(analysis, "protection")))],
-        ["Health Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("healthCover"))), orange), ctext("Rs.10-15L", green), _tag(analysis.get("insuranceGap") or "-")],
+        ["Life Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("lifeCover"))), green if life_ok else red), ctext(kpi_fmt(_fmt_rs(diag.get("requiredLifeCover"))), green), _tag(life_tag)],
+        ["Health Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("healthCover"))), green if health_ok else orange), ctext(kpi_fmt(_fmt_rs(rec_health)), green), _tag(health_status)],
         ["Emergency Fund", ctext(f"{_num(diag.get('liquidityMonths'), 0):.1f} months", blue), ctext(f"6 months expenses ({kpi_fmt(_fmt_rs(ef_target))})", green), _tag(analysis.get("liquidity") or "-")],
         ["Equity Allocation", ctext(f"{_portfolio_equity(portfolio):.0f}%", red), ctext(_recommended_band_text(ar), green), _tag("HIGH")],
         ["EMI / Income", ctext(f"{_num(diag.get('emiPct'), 0):.1f}%", blue), ctext("<40%", green), _tag(analysis.get("debtStress") or "-")],
@@ -7053,7 +7117,15 @@ def build_page_executive_summary(client_facts, allocation_output, narratives=Non
     overall = int(_num((((client_facts.get("analysis") or {}).get("ihs") or {}).get("score")), 0))
     overall_label = (("Needs Attention" if overall < 75 else "Healthy") if overall > 0 else "-")
     overall_color = "#E67E22" if overall < 75 else "#27AE60"
-    priority_rows.append([Paragraph("<b>Overall Score</b>", styles["table"]), Paragraph(f"<b><font color='{overall_color}'>{overall}/100</font></b>", styles["table"]), _tag(overall_label.title() if overall_label != "-" else "-", bg_tint=True), "3 areas require immediate action before deploying capital into goals"])
+    immediate_count = sum(1 for _, _, score in scored if _num(score, 0) < 40)
+    high_count = sum(1 for _, _, score in scored if 40 <= _num(score, 0) < 75)
+    if immediate_count > 0:
+        overall_note = f"{immediate_count} area{'s' if immediate_count != 1 else ''} require{'s' if immediate_count == 1 else ''} immediate action before deploying capital into goals"
+    elif high_count > 0:
+        overall_note = f"{high_count} area{'s' if high_count != 1 else ''} need{'s' if high_count == 1 else ''} attention — address alongside goal investing"
+    else:
+        overall_note = "All six dimensions healthy — maintain discipline and review quarterly"
+    priority_rows.append([Paragraph("<b>Overall Score</b>", styles["table"]), Paragraph(f"<b><font color='{overall_color}'>{overall}/100</font></b>", styles["table"]), _tag(overall_label.title() if overall_label != "-" else "-", bg_tint=True), overall_note])
 
     blocks = [
         Paragraph("SIX CRITICAL DIMENSIONS", ParagraphStyle("six_dim", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=4)),
@@ -7102,10 +7174,16 @@ def build_page_protection(client_facts, allocation_output):
     gap = max(0, required_life - current_life)
     coverage_pct = (current_life / required_life * 100) if required_life > 0 else 100
 
-    life_status = _urgency(_ihs_component_score(analysis, "protection"))
-    health_tag = "UPGRADE RECOMMENDED"
+    life_verdict = str(allocation_output.get("life_cover_status") or life_cover_status(current_life, required_life)).upper()
+    life_status = life_verdict if life_verdict in ("ADEQUATE", "OVER-INSURED") else _urgency(_ihs_component_score(analysis, "protection"))
+    current_health = _num(insurance.get("healthCover"), 0)
+    rec_health = _num(allocation_output.get("recommended_health_cover"), 0) or recommended_health_cover(
+        (client_facts.get("income") or {}).get("annualIncome"), (client_facts.get("personal") or {}).get("dependents_count"))
+    health_tag = str(allocation_output.get("health_cover_status") or health_cover_status(current_health, rec_health)).upper()
+    health_ok = health_tag in ("ADEQUATE", "OVER-INSURED")
     est_premium = _num(allocation_output.get("insurance_provision"), 0)
     life_gap_pct = (gap / required_life * 100) if required_life > 0 else 0
+    life_surplus = max(0, current_life - required_life)
     life_header = Table(
         [[Paragraph("LIFE INSURANCE", ParagraphStyle("li", parent=styles["label"], textColor=colors.HexColor("#C0392B"))),
           TagFlowable(life_status, bg_tint=True)]],
@@ -7128,12 +7206,21 @@ def build_page_protection(client_facts, allocation_output):
         Spacer(1, 8),
         CanvasBlock(220, 14, lambda c, x, y, w, h: draw_coverage_bar(c, 0, 0, 220, coverage_pct, _fmt_rs(current_life), bar_color=(0.75, 0.22, 0.17))),
         Spacer(1, 8),
-        Paragraph(f"Coverage gap: <b><font color='#C0392B'>{life_gap_pct:.0f}% underinsured</font></b> · Basis: {int(LIFE_COVER_MULTIPLE)}x annual income", styles["small"]),
+        Paragraph(
+            (f"Coverage gap: <b><font color='#C0392B'>{life_gap_pct:.0f}% underinsured</font></b> · Basis: {int(LIFE_COVER_MULTIPLE)}x annual income")
+            if gap > 0 else
+            (f"Cover exceeds the {int(LIFE_COVER_MULTIPLE)}x-income benchmark by <b>{_fmt_rs(life_surplus)}</b>"
+             + (" — <b><font color='#2A557E'>over-insured</font></b>" if life_verdict == "OVER-INSURED" else "")),
+            styles["small"]),
         Spacer(1, 16),
         Table(
             [[ [Paragraph("PROTECTION GAP", ParagraphStyle("gap_lbl", parent=styles["label"], textColor=colors.HexColor("#C0392B"), spaceAfter=6)),
                 Paragraph(f"<b>{_fmt_rs(gap)}</b>", ParagraphStyle("gap_val", parent=styles["h2"], fontSize=26, textColor=colors.HexColor("#C0392B"), leading=30, spaceAfter=4)),
-                Paragraph(f"Est. premium ~{_fmt_rs(est_premium, False)}/month · Tenure until age 55", ParagraphStyle("gap_sub", parent=styles["small"], textColor=colors.HexColor("#4A5568")))] ]],
+                Paragraph(
+                    (f"Est. premium ~{_fmt_rs(est_premium, False)}/month · Tenure until age 55") if gap > 0 else
+                    ("No additional term cover needed — existing cover already exceeds the benchmark."
+                     + (" Review sum assured at renewal; the extra cover carries extra premium." if life_verdict == "OVER-INSURED" else "")),
+                    ParagraphStyle("gap_sub", parent=styles["small"], textColor=colors.HexColor("#4A5568")))] ]],
             colWidths=[200],
             style=TableStyle([
                 ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F6EAE6")),
@@ -7166,23 +7253,41 @@ def build_page_protection(client_facts, allocation_output):
         ]),
     )
     
+    if health_tag == "OVER-INSURED":
+        health_note = f"Cover exceeds the <b>{_fmt_rs(rec_health)}</b> recommendation — <b><font color='#2A557E'>over-insured</font></b>"
+        health_status_line = "Cover Above Requirement"
+        health_status_sub = f"Current cover exceeds the recommended {_fmt_rs(rec_health)} — review premium vs benefit at renewal"
+    elif health_tag == "ADEQUATE":
+        health_note = f"Meets the <b>{_fmt_rs(rec_health)}</b> recommendation — <b><font color='#27AE60'>no upgrade needed</font></b>"
+        health_status_line = "Cover Adequate"
+        health_status_sub = f"Current cover meets the recommended {_fmt_rs(rec_health)} for your profile — maintain and review annually"
+    elif health_tag == "UPGRADE RECOMMENDED":
+        health_note = f"Below the <b>{_fmt_rs(rec_health)}</b> recommendation — <b><font color='#E67E22'>upgrade recommended</font></b>"
+        health_status_line = "Upgrade Recommended"
+        health_status_sub = f"Upgrade to a {_fmt_rs(rec_health)} family floater for your income and dependents"
+    else:  # NOT COVERED
+        health_note = f"No health cover found — <b><font color='#C0392B'>get a {_fmt_rs(rec_health)} floater now</font></b>"
+        health_status_line = "Not Covered"
+        health_status_sub = f"Buy a {_fmt_rs(rec_health)} family floater before deploying capital into goals"
+    health_bar_pct = min(200, (_num(insurance.get("healthCover"), 0) / rec_health * 100) if rec_health > 0 and _num(insurance.get("healthCover"), 0) > 0 else 0)
+
     health_card_content = [
         health_header,
         Spacer(1, 12),
         Table(
-            [[Paragraph(f"<font color='#555555'>Current:</font> <b>{_fmt_rs(insurance.get('healthCover'))}</b>", styles["body"]), Paragraph("Recommended: <b><font color='#27AE60'>Rs. 10-15 L</font></b>", styles["body"])]],
+            [[Paragraph(f"<font color='#555555'>Current:</font> <b>{_fmt_rs(insurance.get('healthCover'))}</b>", styles["body"]), Paragraph(f"Recommended: <b><font color='#27AE60'>{_fmt_rs(rec_health)}</font></b>", styles["body"])]],
             colWidths=[110, 110],
             style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)])
         ),
         Spacer(1, 8),
-        CanvasBlock(220, 14, lambda c, x, y, w, h: draw_coverage_bar(c, 0, 0, 220, min(200, (_num(insurance.get("healthCover"), 0) / 1000000 * 100) if _num(insurance.get("healthCover"), 0) > 0 else 0), _fmt_rs(insurance.get("healthCover")), bar_color=(0.9, 0.49, 0.13))),
+        CanvasBlock(220, 14, lambda c, x, y, w, h: draw_coverage_bar(c, 0, 0, 220, health_bar_pct, _fmt_rs(insurance.get("healthCover")), bar_color=(0.15, 0.65, 0.38) if health_ok else (0.9, 0.49, 0.13))),
         Spacer(1, 8),
-        Paragraph("Adequate base — <b><font color='#E67E22'>upgrade recommended</font></b>", styles["small"]),
+        Paragraph(health_note, styles["small"]),
         Spacer(1, 16),
         Table(
-            [[ [Paragraph("STATUS", ParagraphStyle("stat_lbl", parent=styles["label"], textColor=colors.HexColor("#27AE60"), spaceAfter=6)), 
-                Paragraph("Adequate Base Cover", ParagraphStyle("stat_val", parent=styles["h2"], fontSize=20, textColor=colors.HexColor("#27AE60"), leading=24, spaceAfter=4)),
-                Paragraph("Upgrade to Rs. 10-15L family floater recommended", ParagraphStyle("stat_sub", parent=styles["body"], textColor=colors.HexColor("#4A5568")))] ]],
+            [[ [Paragraph("STATUS", ParagraphStyle("stat_lbl", parent=styles["label"], textColor=colors.HexColor("#27AE60"), spaceAfter=6)),
+                Paragraph(health_status_line, ParagraphStyle("stat_val", parent=styles["h2"], fontSize=20, textColor=colors.HexColor("#27AE60" if health_ok else "#E67E22"), leading=24, spaceAfter=4)),
+                Paragraph(health_status_sub, ParagraphStyle("stat_sub", parent=styles["body"], textColor=colors.HexColor("#4A5568")))] ]],
             colWidths=[200],
             style=TableStyle([
                 ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EDF7F0")),
@@ -7198,7 +7303,7 @@ def build_page_protection(client_facts, allocation_output):
         Paragraph("WHAT TO LOOK FOR", ParagraphStyle("wtlf", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=8)),
         _styled_table([
             [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Family floater plan covering all dependents", styles["body"])],
-            [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Rs. 10-15 lakh sum insured minimum", styles["body"])],
+            [Paragraph(f"<font color='#27AE60'>✓</font> &nbsp; {_fmt_rs(rec_health)} sum insured for your profile", styles["body"])],
             [Paragraph("<font color='#27AE60'>✓</font> &nbsp; Cashless facility at major hospitals", styles["body"])],
             [Paragraph("<font color='#27AE60'>✓</font> &nbsp; No room rent capping", styles["body"])],
         ], [220], header=False, style_type="light"),
@@ -7611,14 +7716,22 @@ def build_page_goal_feasibility(client_facts, allocation_output):
             ("TOPPADDING", (0, 0), (-1, -1), 2),
         ]))
 
-        # Funded bar = how much of Required is met by Current + Coverage today.
+        # Bar = share of Required met by Current SIP + surplus Coverage. "Funded"
+        # only when the running SIP alone covers the goal; a gap the surplus can
+        # absorb is "Feasible" — money that isn't flowing yet.
+        if gap <= 0:
+            fund_label, fund_color = "Funded", '#27AE60'
+        elif coverage_used >= gap:
+            fund_label, fund_color = "Feasible", '#2A557E'
+        else:
+            fund_label = "Partial" if (curr + coverage_used) > 0 else "Unfunded"
+            fund_color = '#E67E22' if funded_pct >= 50 else '#C0392B'
         fund_val = f"{funded_pct:.0f}%"
-        fund_color = '#27AE60' if funded_pct >= 80 else ('#E67E22' if funded_pct >= 50 else '#C0392B')
 
         cov_tbl = Table(
             [[CoverageFlowable(min(funded_pct, 100), width=74, height=8)],
              [Spacer(1, 4)],
-             [Table([[Paragraph("<font color='#666666' size='7'>Funded</font>"), Paragraph(f"<b><font color='{fund_color}' size='8'>{fund_val}</font></b>", ParagraphStyle("r", alignment=TA_RIGHT))]], colWidths=[40, 34], style=TableStyle([("PADDING", (0, 0), (-1, -1), 0)]))]],
+             [Table([[Paragraph(f"<font color='#666666' size='7'>{fund_label}</font>"), Paragraph(f"<b><font color='{fund_color}' size='8'>{fund_val}</font></b>", ParagraphStyle("r", alignment=TA_RIGHT))]], colWidths=[40, 34], style=TableStyle([("PADDING", (0, 0), (-1, -1), 0)]))]],
             colWidths=[74]
         )
         cov_tbl.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
@@ -7845,8 +7958,10 @@ def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
         coverage_used = _num(g.get("coverage_used"), 0)
         tot_req += ideal; tot_curr += curr; tot_cov += coverage_used; tot_gap += gap
 
-        if gap <= 0 or coverage_used >= gap:
-            status_label = "Funded"
+        if gap <= 0:
+            status_label = "Funded"           # current SIP already covers it
+        elif coverage_used >= gap:
+            status_label = "Feasible"         # surplus can cover it, SIP not set up yet
         elif coverage_used > 0:
             status_label = "Partial"
         else:
@@ -8022,11 +8137,29 @@ def build_page_action_plan(client_facts, allocation_output):
         Paragraph("Secure your family before deploying capital into goals.", ParagraphStyle("p1b", parent=styles["body"], fontSize=9, textColor=colors.HexColor("#64748B"), spaceAfter=12)),
     ]
     
+    ins_verdicts = {
+        "Term Insurance": str(allocation_output.get("life_cover_status") or "").upper(),
+        "Health Insurance": str(allocation_output.get("health_cover_status") or "").upper(),
+    }
     for p in _as_list(allocation_output.get("priority_breakdown")):
         p = _as_dict(p)
-        if "Insurance" in p.get("name", ""):
-            p1_items.append(Paragraph(f"→ {p.get('name')}: <b>{_fmt_rs(p.get('monthly_amount'), False)}/month</b>", styles["body"]))
-            
+        name = p.get("name", "")
+        if "Insurance" in name:
+            monthly = _num(p.get("monthly_amount"), 0)
+            if monthly > 0:
+                p1_items.append(Paragraph(f"→ {name}: <b>{_fmt_rs(monthly, False)}/month</b>", styles["body"]))
+            else:
+                verdict = ins_verdicts.get(name, "")
+                if verdict == "OVER-INSURED":
+                    note = "over-insured — no new premium"
+                elif verdict in ("ADEQUATE", ""):
+                    note = "adequate — no new premium"
+                elif str(p.get("status") or "").lower().startswith(("use savings", "partial")):
+                    note = "fund this year's premium from savings"
+                else:
+                    note = "cover gap — see protection page"
+                p1_items.append(Paragraph(f"→ {name}: <b>{note}</b>", styles["body"]))
+
     p1_items.append(Spacer(1, 12))
     p1_items.append(Paragraph(f"→ Surplus after insurance: <b>{_fmt_rs(surplus_after_ins, False)}/month</b> available for goals", styles["body"]))
     
@@ -8040,23 +8173,31 @@ def build_page_action_plan(client_facts, allocation_output):
         ("RIGHTPADDING", (0, 0), (-1, -1), 12),
     ]))
 
-    # Phase 2 Card
+    # Phase 2 Card. Allocation per goal = Current SIP + gap-proportional surplus
+    # coverage (capped at the goal's requirement) — the same numbers as the Goals
+    # and Cash Flow pages, never an equal split that overshoots a small goal.
+    p2_goal_rows = _as_list(allocation_output.get("goal_sip_table"))[:5]
+    total_deploy = sum(
+        _num(_as_dict(g).get("current_sip"), 0) + _num(_as_dict(g).get("coverage_used"), 0)
+        for g in p2_goal_rows
+    )
     p2_head = [
         Paragraph("PHASE 2 — MONTH 7 ONWARDS", ParagraphStyle("p2", parent=styles["label"], textColor=colors.HexColor("#27AE60"), fontSize=7)),
         Paragraph("Goal-Based SIPs", ParagraphStyle("p2t", parent=styles["h2"], fontSize=14, spaceBefore=4, spaceAfter=8)),
-        Paragraph(f"Deploy {_fmt_rs(surplus_after_ins, False)}/month across goals proportionally.", ParagraphStyle("p2b", parent=styles["body"], fontSize=9, textColor=colors.HexColor("#64748B"), spaceAfter=12)),
+        Paragraph(f"Deploy {_fmt_rs(total_deploy, False)}/month across goals, capped at each goal's requirement.", ParagraphStyle("p2b", parent=styles["body"], fontSize=9, textColor=colors.HexColor("#64748B"), spaceAfter=12)),
     ]
-    
+
     p2_rows = [[
-        Paragraph("GOAL", styles["table_head_dark"]), 
-        Paragraph("ALLOC", styles["table_head_dark"]), 
+        Paragraph("GOAL", styles["table_head_dark"]),
+        Paragraph("ALLOC", styles["table_head_dark"]),
         Paragraph("REQ", styles["table_head_dark"])
     ]]
-    for g in _as_list(allocation_output.get("goal_sip_table"))[:5]:
+    for g in p2_goal_rows:
         g = _as_dict(g)
+        alloc = _num(g.get("current_sip"), 0) + _num(g.get("coverage_used"), 0)
         p2_rows.append([
             Paragraph(g.get("name") or "Goal", styles["table"]),
-            Paragraph(f"<b>{_fmt_rs(g.get('allocated_sip'), False)}</b>", ParagraphStyle("ts", parent=styles["table"], textColor=colors.HexColor("#27AE60"))),
+            Paragraph(f"<b>{_fmt_rs(alloc, False)}</b>", ParagraphStyle("ts", parent=styles["table"], textColor=colors.HexColor("#27AE60"))),
             Paragraph(_fmt_rs(g.get("ideal_sip"), False), styles["table"])
         ])
     
@@ -8099,10 +8240,28 @@ def build_page_action_plan(client_facts, allocation_output):
         return res
 
     required_life = _num((_as_dict(client_facts.get("analysis")).get("_diagnostics") or {}).get("requiredLifeCover"), 0)
-    term_action = (f"Get term insurance — {_fmt_rs(required_life)} cover"
-                   if required_life > 0 else "Review term insurance need with an advisor")
+    current_life = _num((client_facts.get("insurance") or {}).get("lifeCover"), 0)
+    life_verdict = str(allocation_output.get("life_cover_status") or "").upper()
+    if life_verdict == "OVER-INSURED":
+        term_action = f"Term cover {_fmt_rs(current_life)} exceeds {_fmt_rs(required_life)} needed — over-insured; review premium at renewal"
+    elif life_verdict == "ADEQUATE" and current_life > 0:
+        term_action = f"Maintain term cover — {_fmt_rs(current_life)} meets the {_fmt_rs(required_life)} requirement"
+    elif required_life > 0 and current_life > 0:
+        term_action = f"Top up term cover by {_fmt_rs(max(0, required_life - current_life))} to reach {_fmt_rs(required_life)}"
+    elif required_life > 0:
+        term_action = f"Get term insurance — {_fmt_rs(required_life)} cover"
+    else:
+        term_action = "Review term insurance need with an advisor"
+
+    rec_health = _num(allocation_output.get("recommended_health_cover"), 0)
+    current_health = _num((client_facts.get("insurance") or {}).get("healthCover"), 0)
+    health_verdict = str(allocation_output.get("health_cover_status") or "").upper()
+    if health_verdict in ("ADEQUATE", "OVER-INSURED"):
+        health_action = f"Health cover adequate — maintain the {_fmt_rs(current_health)} floater"
+    else:
+        health_action = f"Upgrade health to a {_fmt_rs(rec_health)} family floater"
     col1 = [
-        _timeline_item("WEEK 1", "Protection", [term_action, "Upgrade health to Rs. 10-15L floater"]),
+        _timeline_item("WEEK 1", "Protection", [term_action, health_action]),
         Spacer(1, 8),
         _timeline_item("WEEK 2", "Liquidity", ["Assess savings + FD vs target", "Set up Tier 1/2/3 structure"]),
         Spacer(1, 8),
@@ -8176,9 +8335,20 @@ def build_page_review(client_facts, allocation_output):
         ("PADDING", (0, 0), (-1, -1), 16),
     ]))
     
-    # Right Card
+    # Right Card. IMMEDIATE line reflects the actual open gaps — a client with
+    # adequate cover and a full emergency fund shouldn't be told to set them up.
+    immediate_items = []
+    life_ok = str(allocation_output.get("life_cover_status") or "").upper() in ("ADEQUATE", "OVER-INSURED")
+    health_ok = str(allocation_output.get("health_cover_status") or "").upper() in ("ADEQUATE", "OVER-INSURED")
+    if not life_ok:
+        immediate_items.append("Term insurance")
+    if not health_ok:
+        immediate_items.append("Health cover")
+    if str((_as_dict(client_facts.get("analysis")).get("liquidity") or "")).lower() != "adequate":
+        immediate_items.append("Emergency Fund setup")
+    immediate_text = " + ".join(immediate_items) if immediate_items else "Goal-wise SIP setup from surplus"
     schedule_rows = [
-        ("IMMEDIATE", "Term insurance + Emergency Fund setup", "#C0392B"),
+        ("IMMEDIATE", immediate_text, "#C0392B"),
         ("30 DAYS", "Portfolio rebalancing + Tax regime switch + SIP setup", "#A8813C"),
         ("90 DAYS", "Full progress review + recalculate Health Score", "#A8813C"),
         ("QUARTERLY", "Score review + SIP check + rebalance if equity drifts >5%", "#27AE60"),
@@ -8567,7 +8737,7 @@ def _build_dashboard_snapshot(analysis: dict, questionnaire: dict, doc_insights:
     life_cover_required = _safe_float(diagnostics.get("requiredLifeCover"), 0)
     life_cover_gap = max(0, life_cover_required - life_cover_current)
     health_cover_current = _safe_float(facts_insurance.get("healthCover"), 0)
-    recommended_health = 1500000 if _safe_float(facts_personal.get("dependents_count"), 0) > 0 else 1000000
+    recommended_health = recommended_health_cover(facts_income.get("annualIncome"), facts_personal.get("dependents_count"))
     health_cover_gap = max(0, recommended_health - health_cover_current)
 
     # Emergency fund details in rupees
@@ -8694,7 +8864,7 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
 
     # ---- 2. PROTECTION: Health Insurance ----
     health_cover_current = _safe_float(facts_insurance.get("healthCover"), 0)
-    recommended_health = 1500000 if _safe_float(facts_personal.get("dependents_count"), 0) > 0 else 1000000
+    recommended_health = recommended_health_cover(facts_income.get("annualIncome"), facts_personal.get("dependents_count"))
     health_cover_gap = max(0, recommended_health - health_cover_current)
 
     if health_cover_gap > 0:
