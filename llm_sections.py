@@ -57,6 +57,9 @@ from assumptions import (
     WITHDRAWAL_RATE_RETIREMENT,
     LIFE_COVER_MULTIPLE,
     OVER_INSURED_THRESHOLD,
+    PRIORITY_SURPLUS_SHARE,
+    SIP_ROUND_STEP,
+    EMERGENCY_FUND_BUILD_MONTHS,
     recommended_health_cover,
 )
 
@@ -536,16 +539,27 @@ def generate_bridge_recommendations(shortfall: float, current_surplus: float) ->
 class PriorityAllocationEngine:
     """
     Allocates available monthly surplus following priority order:
-    
+
     Priority 1: Term Insurance Premium (if gap exists & has dependents)
     Priority 2: Health Insurance Premium (if gap exists)
-    Priority 3+: Emergency Fund + Goals (remaining surplus distributed EQUALLY)
-    
-    NEW Features (Manager feedback):
-    - Use available savings for insurance purchase first (lump sum from savings)
+    Priority 3+: Emergency Fund + Goals via the surplus waterfall below
+
+    Surplus waterfall (founder spec, Jul 2026 — supersedes the Jan 2026
+    "divide remaining surplus EQUALLY" instruction):
+    - PRIORITY_SURPLUS_SHARE (70%) of the post-insurance pool goes to
+      Emergency Fund + Retirement, each capped at its monthly need,
+      EF (nearest horizon) filling before retirement.
+    - The rest goes to the remaining goals, nearest horizon first, each
+      capped at its need.
+    - Unused budget spills between the buckets in both directions; whatever
+      survives every cap is reported as unallocated (parked in savings).
+    - Every allocation is locked DOWN to a Rs. SIP_ROUND_STEP step
+      (3,653 -> 3,500); the freed remainder stays in the pool.
+
+    Retained from the Jan 2026 round (Manager feedback):
+    - Provision the full insurance premium monthly from surplus (deducted before goals)
     - If user confirms having insurance (tickmark), skip that allocation
     - Treat Emergency Fund as a goal with low-risk allocation
-    - Divide remaining surplus EQUALLY among Emergency Fund + Goals
     - Generate per-goal SIP table with corpus created and shortfall columns
     - Allocate existing investments equally among goals, rebalance per goal risk
     """
@@ -596,9 +610,11 @@ class PriorityAllocationEngine:
         
         NEW Logic:
         1. If user confirmed having insurance (tickmark), set that gap to zero
-        2. Use available savings for insurance purchase first (lump sum)
-        3. Only create insurance SIP for next year's premium if savings don't cover it
-        4. Divide remaining surplus EQUALLY among Emergency Fund + Goals
+        2. Provision the full yearly premium as a monthly amount from surplus,
+           deducted before the goal split (never from the emergency fund)
+        3. available_savings is the client's current balance (a one-time lump sum),
+           kept separate and not spent on premiums
+        4. Split the remaining surplus 70/30 (Emergency Fund + Retirement first)
         5. Generate per-goal table with corpus created vs required SIP
         6. Existing investments divided equally among goals and rebalanced per goal risk
         
@@ -609,7 +625,7 @@ class PriorityAllocationEngine:
             goals: List of goal dicts with 'ideal_sip', 'name', 'priority_rank', 'risk_category', 'horizon_years'
             age: Client age for premium estimation
             has_dependents: Whether client has financial dependents
-            available_savings: One-time savings that can be used for insurance purchase (NEW)
+            available_savings: Client's current balance — a one-time lump sum, kept separate (not spent on premiums)
             has_term_insurance_confirmed: Frontend checkbox - user confirms having term insurance (NEW)
             has_health_insurance_confirmed: Frontend checkbox - user confirms having health insurance (NEW)
             emergency_fund_target: Target emergency fund amount (6 months expenses) (NEW)
@@ -640,12 +656,16 @@ class PriorityAllocationEngine:
         health_premium_yearly = PriorityAllocationEngine.estimate_health_premium(effective_health_gap, age)
         total_insurance_yearly = term_premium_yearly + health_premium_yearly
         
-        # --- Step 2: Use savings for insurance purchase ---
-        insurance_from_savings = min(available_savings, total_insurance_yearly)
-        remaining_savings_after_insurance = available_savings - insurance_from_savings
-        insurance_shortfall_yearly = max(0, total_insurance_yearly - insurance_from_savings)
-        monthly_insurance_sip = insurance_shortfall_yearly / 12  # SIP for next year's premium
-        
+        # --- Step 2: Recurring premiums are provisioned monthly from surplus ---
+        # Founder decision (Jul 2026): the full yearly premium is set aside as a
+        # monthly provision out of the surplus and deducted before the 70/30 split,
+        # every year. The client's current balance (available_savings) is a separate
+        # one-time lump sum that is NOT spent on premiums, and premiums are never
+        # drawn from the emergency fund.
+        insurance_from_savings = 0.0
+        remaining_savings_after_insurance = available_savings
+        monthly_insurance_sip = total_insurance_yearly / 12  # full monthly provision from surplus
+
         # Build priority items for insurance
         if has_term_insurance_confirmed:
             term_status = "Already Covered"
@@ -653,10 +673,10 @@ class PriorityAllocationEngine:
             term_monthly = 0
             term_from_savings = 0
         elif term_premium_yearly > 0:
-            term_from_savings = min(insurance_from_savings, term_premium_yearly)
-            term_status = "Use Savings" if term_from_savings >= term_premium_yearly else "Partial from Savings"
-            term_note = f"Use Rs. {term_from_savings:,.0f} from savings for this year. Cover gap: Rs. {effective_term_gap:,.0f}"
-            term_monthly = max(0, (term_premium_yearly - term_from_savings) / 12)
+            term_from_savings = 0
+            term_monthly = term_premium_yearly / 12
+            term_status = "Provision from Surplus"
+            term_note = f"Provision Rs. {term_monthly:,.0f}/month from surplus for the premium. Cover gap: Rs. {effective_term_gap:,.0f}"
         else:
             term_status = "Not Required" if not has_dependents else "Adequate"
             term_note = "Adequate coverage" if not has_dependents else "No gap exists"
@@ -679,11 +699,10 @@ class PriorityAllocationEngine:
             health_monthly = 0
             health_from_savings = 0
         elif health_premium_yearly > 0:
-            savings_left_for_health = max(0, insurance_from_savings - term_from_savings)
-            health_from_savings = min(savings_left_for_health, health_premium_yearly)
-            health_status = "Use Savings" if health_from_savings >= health_premium_yearly else "Partial from Savings"
-            health_note = f"Use Rs. {health_from_savings:,.0f} from savings for this year. Cover gap: Rs. {effective_health_gap:,.0f}"
-            health_monthly = max(0, (health_premium_yearly - health_from_savings) / 12)
+            health_from_savings = 0
+            health_monthly = health_premium_yearly / 12
+            health_status = "Provision from Surplus"
+            health_note = f"Provision Rs. {health_monthly:,.0f}/month from surplus for the premium. Cover gap: Rs. {effective_health_gap:,.0f}"
         else:
             health_status = "Adequate"
             health_note = "Adequate coverage"
@@ -711,51 +730,31 @@ class PriorityAllocationEngine:
         # --- Step 4: Emergency Fund as a goal ---
         emergency_fund_gap = max(0, emergency_fund_target - emergency_fund_current)
         has_emergency_gap = emergency_fund_gap > 0
-        
-        # Count total items to divide equally: emergency fund (if gap) + goals
-        num_allocation_buckets = len(goals) + (1 if has_emergency_gap else 0)
-        per_bucket_sip = remaining_for_goals_and_emergency / num_allocation_buckets if num_allocation_buckets > 0 else 0
-        
-        # --- Step 5: Generate per-goal SIP table ---
-        goal_sip_table = []
-        total_ideal_sip = 0.0
-        total_allocated_sip = 0.0
-        
-        # Emergency Fund Entry (if gap exists)
+
+        # --- Step 5: Per-goal SIP table via the priority waterfall ---
+        # Build the allocation rows first: EF (if a gap exists) + every goal,
+        # each with its monthly need = required SIP minus its share of SIPs
+        # already running (same proration the report pages use).
+        alloc_rows = []
         if has_emergency_gap:
-            emergency_sip = per_bucket_sip
-            emergency_risk = "Low"
-            # Corpus created in 1 year with this SIP (conservative return)
-            corpus_1_year = compute_realistic_target(emergency_sip, 1, "Conservative") or 0
-            # Calculate months to reach target
-            if emergency_sip > 0:
-                months_to_target = emergency_fund_gap / (emergency_sip * 1.005)  # ~6% annual
-                years_to_target = round(months_to_target / 12, 1)
-            else:
-                years_to_target = None
-            
-            goal_sip_table.append({
+            alloc_rows.append({
                 "name": "Emergency Fund",
                 "is_emergency": True,
-                "allocated_sip": round(emergency_sip, 0),
-                "risk_category": emergency_risk,
-                "corpus_created_1yr": round(corpus_1_year, 0),
-                "ideal_sip": round(emergency_sip, 0),
-                "shortfall": 0,
-                "target_amount": round(emergency_fund_gap, 0),
-                "years_to_target": years_to_target,
+                "risk_category": "Low",
+                # Build the fund at the Liquidity page's recommended pace rather
+                # than a self-justifying equal share.
+                "ideal_sip": emergency_fund_gap / max(1.0, EMERGENCY_FUND_BUILD_MONTHS),
+                "target_amount": emergency_fund_gap,
+                "horizon_years": 0.0,
                 "fund_type": "Liquid Fund / Savings Account",
             })
-            total_allocated_sip += emergency_sip
-        
-        # Regular Goals with equal SIP allocation
         for g in goals:
             goal_name = g.get("name") or "Goal"
             risk_cat = g.get("risk_category") or "Moderate"
             horizon = g.get("horizon_years")
             target_amount = _coerce_float(g.get("target_amount"), 0.0)
             ideal_sip = _coerce_float(g.get("ideal_sip"), 0.0)
-            
+
             # [FOUNDER LOGIC] Double check retirement target derivation in engine
             if "retirement" in goal_name.lower() and monthly_expenses > 0:
                 net_expense = max(0.0, monthly_expenses - expected_pension)
@@ -766,44 +765,115 @@ class PriorityAllocationEngine:
                 target_amount = (inflated_monthly * 12) / WITHDRAWAL_RATE_RETIREMENT
                 # Re-calculate ideal SIP with step-up if it was derived incorrectly elsewhere
                 ideal_sip = compute_goal_sip(target_amount, years, risk_cat, use_step_up=True)
-            
-            allocated_sip = per_bucket_sip
-            shortfall = max(0, ideal_sip - allocated_sip)
-            
-            # Calculate corpus created with allocated SIP
-            corpus_created = compute_realistic_target(allocated_sip, horizon, risk_cat) if horizon else None
-            
-            # Fund type recommendation based on risk
-            fund_type = _get_fund_type_recommendation(risk_cat)
-            
-            goal_sip_table.append({
+
+            alloc_rows.append({
                 "name": goal_name,
                 "is_emergency": False,
-                "allocated_sip": round(allocated_sip, 0),
                 "risk_category": risk_cat,
-                "corpus_created": round(corpus_created, 0) if corpus_created else None,
-                "ideal_sip": round(ideal_sip, 0),
-                "shortfall": round(shortfall, 0),
-                "target_amount": round(target_amount, 0),
+                "ideal_sip": _coerce_float(ideal_sip, 0.0),
+                "target_amount": target_amount,
                 "horizon_years": horizon,
-                "fund_type": fund_type,
+                "fund_type": _get_fund_type_recommendation(risk_cat),
             })
-            
-            total_ideal_sip += ideal_sip
-            total_allocated_sip += allocated_sip
-        
+
+        total_ideal_sip = sum(r["ideal_sip"] for r in alloc_rows)
+        for r in alloc_rows:
+            existing_share = (
+                existing_sip_commitments * r["ideal_sip"] / total_ideal_sip
+                if existing_sip_commitments > 0 and total_ideal_sip > 0 else 0.0
+            )
+            r["need"] = max(0.0, r["ideal_sip"] - existing_share)
+            r["allocated_sip"] = 0.0
+            # Waterfall bucket: EF + retirement are priority; everything else is term-ordered.
+            r["_priority_bucket"] = r["is_emergency"] or "retirement" in str(r["name"]).lower()
+
+        def _lock_step(amount: float) -> float:
+            """Lock an allocation DOWN to the nearest SIP_ROUND_STEP (3,653 -> 3,500)."""
+            step = SIP_ROUND_STEP
+            if step <= 0:
+                return round(max(0.0, amount), 0)
+            return math.floor(max(0.0, amount) / step) * step
+
+        def _horizon_key(row):
+            if row["is_emergency"]:
+                return 0.0
+            h = _coerce_float(row.get("horizon_years"), 0.0)
+            return h if h > 0 else float("inf")
+
+        def _fill_bucket(rows_in_order, budget):
+            """Fill each row up to its need, in the given order; returns the leftover budget."""
+            for row in rows_in_order:
+                remaining_need = row["need"] - row["allocated_sip"]
+                alloc = _lock_step(min(remaining_need, budget))
+                row["allocated_sip"] += alloc
+                budget -= alloc
+            return budget
+
+        priority_rows = sorted([r for r in alloc_rows if r["_priority_bucket"]], key=_horizon_key)
+        term_rows = sorted([r for r in alloc_rows if not r["_priority_bucket"]], key=_horizon_key)
+
+        pool = max(0.0, remaining_for_goals_and_emergency)
+        priority_budget = pool * PRIORITY_SURPLUS_SHARE if priority_rows else 0.0
+        # P1: Emergency Fund + Retirement, capped at need (EF first);
+        # unspent P1 budget spills down to the term goals.
+        leftover = _fill_bucket(priority_rows, priority_budget)
+        # P2: remaining goals, nearest horizon first, capped at need.
+        leftover = _fill_bucket(term_rows, (pool - priority_budget) + leftover)
+        # If the term goals needed less than their share, top EF/retirement back up.
+        leftover = _fill_bucket(priority_rows, leftover)
+        # What survives every cap stays with the client (savings account).
+        unallocated_to_savings = max(0.0, leftover)
+
+        goal_sip_table = []
+        total_allocated_sip = 0.0
+        for r in alloc_rows:
+            alloc = r["allocated_sip"]
+            shortfall = max(0.0, r["need"] - alloc)
+            if shortfall < SIP_ROUND_STEP:
+                # Sub-step residue exists only because SIPs are locked to clean
+                # numbers; it sits in the savings buffer, not a real gap.
+                shortfall = 0.0
+            entry = {
+                "name": r["name"],
+                "is_emergency": r["is_emergency"],
+                "allocated_sip": round(alloc, 0),
+                "risk_category": r["risk_category"],
+                "ideal_sip": round(r["ideal_sip"], 0),
+                "shortfall": round(shortfall, 0),
+                "target_amount": round(_coerce_float(r.get("target_amount"), 0.0), 0),
+                "fund_type": r["fund_type"],
+            }
+            if r["is_emergency"]:
+                # Corpus created in 1 year with this SIP (conservative return)
+                entry["corpus_created_1yr"] = round(compute_realistic_target(alloc, 1, "Conservative") or 0, 0)
+                if alloc > 0:
+                    months_to_target = emergency_fund_gap / (alloc * 1.005)  # ~6% annual
+                    entry["years_to_target"] = round(months_to_target / 12, 1)
+                else:
+                    entry["years_to_target"] = None
+            else:
+                horizon = r.get("horizon_years")
+                corpus_created = compute_realistic_target(alloc, horizon, r["risk_category"]) if horizon else None
+                entry["corpus_created"] = round(corpus_created, 0) if corpus_created else None
+                entry["horizon_years"] = horizon
+            goal_sip_table.append(entry)
+            total_allocated_sip += alloc
+
         # Add goals summary as priority 3
         goal_achievement_pct = min(100.0, (total_allocated_sip / total_ideal_sip) * 100) if total_ideal_sip > 0 else 100.0
-        total_shortfall = max(0, total_ideal_sip - total_allocated_sip)
-        
-        goal_status = "Full" if goal_achievement_pct >= 100 else ("Partial" if goal_achievement_pct > 0 else "Cannot Fund")
+        total_shortfall = max(0, sum(_coerce_float(r.get("shortfall"), 0.0) for r in goal_sip_table))
+
+        goal_status = "Full" if total_shortfall <= 0 else ("Partial" if total_allocated_sip > 0 else "Cannot Fund")
         priority_items.append({
             "priority": 3,
             "name": "Emergency Fund + Goal SIPs",
             "monthly_amount": round(remaining_for_goals_and_emergency, 0),
             "ideal_amount": round(total_ideal_sip, 0),
             "status": goal_status,
-            "note": f"Divided equally: Rs. {per_bucket_sip:,.0f}/month each for {num_allocation_buckets} items"
+            "note": (
+                f"{PRIORITY_SURPLUS_SHARE:.0%} of surplus to Emergency Fund + Retirement first, "
+                f"rest to other goals nearest-horizon-first, locked to Rs. {SIP_ROUND_STEP:,.0f} steps"
+            )
         })
         
         # --- Step 6: Existing Investments Allocation ---
@@ -838,8 +908,8 @@ class PriorityAllocationEngine:
             "insurance_from_savings": round(insurance_from_savings, 0),
             "insurance_sip_monthly": round(total_insurance_sip_monthly, 0),
             "remaining_for_goals": round(remaining_for_goals_and_emergency, 0),
-            "per_goal_sip": round(per_bucket_sip, 0),
-            "num_allocation_buckets": num_allocation_buckets,
+            "num_allocation_buckets": len(alloc_rows),
+            "unallocated_to_savings": round(unallocated_to_savings, 0),
             "goal_sip_table": goal_sip_table,
             "total_ideal_sip_needed": round(total_ideal_sip, 0),
             "total_allocated_sip": round(total_allocated_sip, 0),
@@ -860,11 +930,11 @@ class PriorityAllocationEngine:
                 + f"Total investing: Rs. {total_investing:,.0f}/month ({goal_funding_pct:.1f}% of goal requirement)."
             ),
             "insurance_recommendation": {
-                "use_savings": insurance_from_savings > 0,
-                "savings_used": round(insurance_from_savings, 0),
+                "use_savings": False,
+                "savings_used": 0,
                 "savings_remaining": round(remaining_savings_after_insurance, 0),
                 "monthly_sip_for_next_year": round(total_insurance_sip_monthly, 0),
-                "note": f"Use Rs. {insurance_from_savings:,.0f} from savings for this year's insurance. Set up Rs. {total_insurance_sip_monthly:,.0f}/month SIP for next year's premium." if insurance_from_savings > 0 else None
+                "note": f"Provision Rs. {total_insurance_sip_monthly:,.0f}/month from surplus for insurance premiums." if total_insurance_sip_monthly > 0 else None
             },
             # Keep backward compatibility
             "allocated_to_insurance": round(total_insurance_sip_monthly, 0),
@@ -1342,9 +1412,10 @@ class GoalsStrategyRunner(SectionRunner):
         # --- NEW: Extract additional data for enhanced allocation ---
         lifestyle = facts.get("lifestyle") or {}
         
-        # Available one-time savings that can be used for insurance
-        available_savings = _coerce_float(lifestyle.get("available_savings") or 
-                                          lifestyle.get("emergency_fund") or 0.0, 0.0)
+        # Available one-time savings that can be used for insurance. The
+        # emergency fund is deliberately NOT a fallback here — it is not
+        # spendable money for premiums.
+        available_savings = _coerce_float(lifestyle.get("available_savings"), 0.0)
         
         # Check if user confirmed having insurance (frontend tickmark)
         has_term_insurance_confirmed = insurance.get("has_term_insurance_confirmed", False) or \

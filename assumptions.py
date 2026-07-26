@@ -62,6 +62,23 @@ HEALTH_COVER_MAX = _env_float("HEALTH_COVER_MAX", 10000000.0)
 # the benchmark, not a protection defect).
 OVER_INSURED_THRESHOLD = _env_float("OVER_INSURED_THRESHOLD", 1.25)
 
+# Surplus allocation waterfall (founder spec, Jul 2026):
+# PRIORITY_SURPLUS_SHARE of the post-insurance pool goes to Emergency Fund +
+# Retirement first (each capped at its monthly need); the rest goes to the
+# remaining goals nearest-horizon-first. Unused money spills between the two
+# buckets in both directions; what survives every cap stays in savings.
+PRIORITY_SURPLUS_SHARE = _env_float("PRIORITY_SURPLUS_SHARE", 0.70)
+
+# Every recommended SIP is locked DOWN to this step so clients get clean,
+# executable numbers (3,653 -> 3,500). The freed remainder stays in the pool
+# for the next goal in the waterfall.
+SIP_ROUND_STEP = _env_float("SIP_ROUND_STEP", 500.0)
+
+# Emergency-fund build pace used when converting the EF gap into a monthly need —
+# matches the Liquidity page's recommended "Balanced" option. Fixed at 18 months
+# per founder confirmation (Jul 2026); intentionally not env-overridable.
+EMERGENCY_FUND_BUILD_MONTHS = 18.0
+
 
 def recommended_health_cover(annual_income, dependents_count=0) -> float:
     """Recommended health sum insured for this profile, rounded to the lakh."""

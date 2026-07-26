@@ -35,6 +35,7 @@ from assumptions import (
     health_cover_status,
     life_cover_status,
     OVER_INSURED_THRESHOLD,
+    SIP_ROUND_STEP,
 )
 from db import (
     list_sections,
@@ -6723,6 +6724,9 @@ def _allocation_output(client_facts):
             has_dependents=_num(personal.get("dependents_count"), 0) > 0,
             emergency_fund_target=ef_target,
             emergency_fund_current=ef_current,
+            # Client's current balance — a one-time lump sum kept separate from the
+            # waterfall. Premiums are provisioned monthly from surplus, not from this.
+            available_savings=_num(lifestyle_facts.get("available_savings"), 0),
             existing_sip_commitments=_num(portfolio.get("total_monthly_sip") or portfolio.get("monthly_sip"), 0),
             manual_sip=_num((client_facts.get("lifestyle") or {}).get("manual_sip"), 0),
             manual_corpus=_num((client_facts.get("lifestyle") or {}).get("manual_corpus"), 0),
@@ -6769,29 +6773,40 @@ def _allocation_output(client_facts):
 
     # ── Single source of truth for the goal cards / cashflow plan ──────────────
     # Per goal: Current SIP (existing SIP shared by need), Gap = Required − Current,
-    # and Coverage = the client's spare surplus directed at that gap. The surplus
-    # pool (Σ allocated_sip) is redistributed proportionally to each goal's gap and
-    # capped at it, so no cash is wasted on a small-gap goal and the "extra savings
-    # needed" total is honest (= max(0, total_gap − pool)). When the pool covers
-    # every gap, each goal's Coverage equals its Gap.
+    # and Coverage = the new money the waterfall directed at that goal (70% of the
+    # pool to EF + Retirement, rest nearest-horizon-first, capped at each need and
+    # locked to Rs.500 steps — see PriorityAllocationEngine). "Extra savings
+    # needed" = whatever gaps survive the waterfall; leftover pool money stays in
+    # the savings account (unallocated_to_savings).
     rows = out.get("goal_sip_table") or []
     existing = _num(out.get("existing_sip_running"), 0)
     total_ideal = sum(_num(r.get("ideal_sip"), 0) for r in rows)
-    pool = sum(_num(r.get("allocated_sip"), 0) for r in rows)
     total_gap = 0.0
+    total_cov = 0.0
+    total_savings_increase = 0.0
     for r in rows:
         ideal = _num(r.get("ideal_sip"), 0)
         curr = existing * ideal / total_ideal if existing > 0 and total_ideal > 0 and ideal > 0 else 0
         gap = max(0, ideal - curr)
+        cov = min(_num(r.get("allocated_sip"), 0), gap)
         r["current_sip"] = round(curr, 0)
         r["gap_mo"] = round(gap, 0)
+        # Coverage stays the Rs.500-locked figure the client should actually set
+        # up; a sub-step residue lives in the savings buffer, so the goal still
+        # counts as covered for status purposes.
+        r["coverage_used"] = round(cov, 0)
+        r["surplus_covers_gap"] = (gap - cov) < SIP_ROUND_STEP
         total_gap += gap
-    cover_ratio = min(1.0, pool / total_gap) if total_gap > 0 else 0.0
-    for r in rows:
-        r["coverage_used"] = round(_num(r.get("gap_mo"), 0) * cover_ratio, 0)
+        total_cov += cov
+        if not r["surplus_covers_gap"]:
+            total_savings_increase += gap - cov
     out["goal_total_gap"] = round(total_gap, 0)
-    out["goal_total_coverage"] = round(total_gap * cover_ratio, 0)   # = min(pool, total_gap)
-    out["goal_savings_increase"] = round(max(0, total_gap - pool), 0)
+    out["goal_total_coverage"] = round(total_cov, 0)
+    out["goal_savings_increase"] = round(total_savings_increase, 0)
+    # Total required SIP across all rows — the "requirement" the cashflow page
+    # compares against (combined_shortfall is the unmet remainder, not the need).
+    out["goal_total_required"] = round(sum(_num(r.get("ideal_sip"), 0) for r in rows), 0)
+    out.setdefault("unallocated_to_savings", 0)
 
     # Insurance verdicts shared by the snapshot, protection page and roadmap so
     # "recommended" amounts and adequate/over-insured tags can't disagree.
@@ -6957,7 +6972,7 @@ def build_page_snapshot(client_facts, allocation_output):
         g_gap = _num(g.get("gap_mo"), 0)
         if g_gap <= 0:
             funded_goals += 1
-        elif _num(g.get("coverage_used"), 0) >= g_gap:
+        elif g.get("surplus_covers_gap") or _num(g.get("coverage_used"), 0) >= g_gap:
             feasible_goals += 1
     all_funded = funded_goals >= total_goals and total_goals > 0
     all_feasible = (funded_goals + feasible_goals) >= total_goals and total_goals > 0
@@ -6979,7 +6994,7 @@ def build_page_snapshot(client_facts, allocation_output):
         ["Emergency Fund", ctext(f"{_num(diag.get('liquidityMonths'), 0):.1f} months", blue), ctext(f"6 months expenses ({kpi_fmt(_fmt_rs(ef_target))})", green), _tag(analysis.get("liquidity") or "-")],
         ["Equity Allocation", ctext(f"{_portfolio_equity(portfolio):.0f}%", red), ctext(_recommended_band_text(ar), green), _tag("HIGH")],
         ["EMI / Income", ctext(f"{_num(diag.get('emiPct'), 0):.1f}%", blue), ctext("<40%", green), _tag(analysis.get("debtStress") or "-")],
-        ["Active SIP", ctext(active_sip_text, active_sip_color), ctext(f"Need {kpi_fmt(_fmt_rs(allocation_output.get('combined_shortfall'), False))}/mo", green), _tag("HIGH" if active_sip <= 0 else "GOOD")],
+        ["Active SIP", ctext(active_sip_text, active_sip_color), ctext(f"Need {kpi_fmt(_fmt_rs(allocation_output.get('goal_total_required'), False))}/mo", green), _tag("HIGH" if active_sip <= 0 else "GOOD")],
         ["Goals Funded", ctext(f"{funded_goals} of {total_goals}", funded_color), ctext(f"{total_goals} of {total_goals}", green), _tag(goals_tag)],
     ]
     profile = [
@@ -7016,7 +7031,7 @@ def build_page_snapshot(client_facts, allocation_output):
         {"label": "Annual Income (Gross)", "value": kpi_fmt(_fmt_rs(income.get("annualIncome"))), "note": f"{kpi_fmt(_fmt_rs(monthly_inc, False))}/month" if monthly_inc > 0 else ""},
         {"label": "Monthly Surplus", "value": kpi_fmt(_fmt_rs(monthly_surplus)), "note": f"Savings rate: {savings_rate:.0f}%" if savings_rate > 0 else ""},
         {"label": "Current Portfolio", "value": kpi_fmt(_fmt_rs(portfolio_val)) if portfolio_val > 0 else "—", "note": portfolio_note},
-        {"label": "Active SIP", "value": f"Rs.{active_sip_val:,.0f}/mo" if active_sip_val > 0 else "Rs.0", "note": f"Need {kpi_fmt(_fmt_rs(allocation_output.get('combined_shortfall'), False))}/mo" if active_sip_val <= 0 else "On track", "note_color": "orange" if active_sip_val <= 0 else "green"},
+        {"label": "Active SIP", "value": f"Rs.{active_sip_val:,.0f}/mo" if active_sip_val > 0 else "Rs.0", "note": f"Need {kpi_fmt(_fmt_rs(allocation_output.get('goal_total_required'), False))}/mo" if active_sip_val <= 0 else "On track", "note_color": "orange" if active_sip_val <= 0 else "green"},
     ]
     current_vs_ideal = _styled_table(rows, [74, 56, 76, 104], style_type="light")
     profile_tbl = _styled_table(profile, [64, 96], header=False, style_type="light_right")
@@ -7676,7 +7691,8 @@ def build_page_goal_feasibility(client_facts, allocation_output):
         curr = _num(g.get("current_sip"), 0)
         gap = _num(g.get("gap_mo"), 0)
         coverage_used = _num(g.get("coverage_used"), 0)
-        savings_gap = max(0, gap - coverage_used)
+        surplus_covers = bool(g.get("surplus_covers_gap")) or coverage_used >= gap
+        savings_gap = 0 if surplus_covers else max(0, gap - coverage_used)
         # Bar = share of Required already fundable from Current + Coverage.
         funded_pct = min(100, (curr + coverage_used) / ideal * 100) if ideal > 0 else 100
         goal_metrics.append({"name": name, "gap": gap})
@@ -7721,10 +7737,10 @@ def build_page_goal_feasibility(client_facts, allocation_output):
         # absorb is "Feasible" — money that isn't flowing yet.
         if gap <= 0:
             fund_label, fund_color = "Funded", '#27AE60'
-        elif coverage_used >= gap:
+        elif surplus_covers:
             fund_label, fund_color = "Feasible", '#2A557E'
         else:
-            fund_label = "Partial" if (curr + coverage_used) > 0 else "Unfunded"
+            fund_label = "Partial" if (curr + coverage_used) > 0 else "Pending"
             fund_color = '#E67E22' if funded_pct >= 50 else '#C0392B'
         fund_val = f"{funded_pct:.0f}%"
 
@@ -7840,8 +7856,10 @@ def build_page_goal_feasibility(client_facts, allocation_output):
     )
     right_side.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
 
-    # Action plan: raise SIP by what surplus allows now, then grow savings to close the rest.
-    savings_increase = max(0, total_gap - total_raisable)
+    # Action plan: raise SIP by what surplus allows now, then grow savings to
+    # close the rest. goal_savings_increase already ignores sub-500 rounding
+    # residue (that money sits in the savings buffer by design).
+    savings_increase = _num(allocation_output.get("goal_savings_increase"), 0)
     if savings_increase > 0:
         plan_label = "ADDITIONAL MONTHLY SAVINGS NEEDED"
         plan_amount = savings_increase
@@ -7898,7 +7916,7 @@ def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
     income = client_facts.get("income") or {}
     monthly_income = _num(income.get("annualIncome"), 0) / 12
     monthly_surplus = _display_monthly_surplus(client_facts)
-    total_req = _num(allocation_output.get("combined_shortfall"), 0)
+    total_req = _num(allocation_output.get("goal_total_required"), 0) or _num(allocation_output.get("combined_shortfall"), 0)
     available = _num(allocation_output.get("available_for_goals"), 0)
     coverage = available / total_req * 100 if total_req else 100
     
@@ -7960,7 +7978,7 @@ def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
 
         if gap <= 0:
             status_label = "Funded"           # current SIP already covers it
-        elif coverage_used >= gap:
+        elif g.get("surplus_covers_gap") or coverage_used >= gap:
             status_label = "Feasible"         # surplus can cover it, SIP not set up yet
         elif coverage_used > 0:
             status_label = "Partial"
@@ -8154,8 +8172,8 @@ def build_page_action_plan(client_facts, allocation_output):
                     note = "over-insured — no new premium"
                 elif verdict in ("ADEQUATE", ""):
                     note = "adequate — no new premium"
-                elif str(p.get("status") or "").lower().startswith(("use savings", "partial")):
-                    note = "fund this year's premium from savings"
+                elif str(p.get("status") or "").lower().startswith("provision"):
+                    note = "provision premium monthly from surplus"
                 else:
                     note = "cover gap — see protection page"
                 p1_items.append(Paragraph(f"→ {name}: <b>{note}</b>", styles["body"]))
@@ -8181,10 +8199,19 @@ def build_page_action_plan(client_facts, allocation_output):
         _num(_as_dict(g).get("current_sip"), 0) + _num(_as_dict(g).get("coverage_used"), 0)
         for g in p2_goal_rows
     )
+    has_running_sip = any(_num(_as_dict(g).get("current_sip"), 0) > 0 for g in p2_goal_rows)
+    if has_running_sip:
+        # ALLOC includes running SIPs, which may legitimately exceed a goal's
+        # requirement — only NEW money is capped at need.
+        p2_sub = (f"Deploy {_fmt_rs(total_deploy, False)}/month — continue existing SIPs; "
+                  "new money fills emergency & retirement first, then nearest goals, up to each goal's need.")
+    else:
+        p2_sub = (f"Deploy {_fmt_rs(total_deploy, False)}/month — emergency & retirement first, "
+                  "then nearest goals — capped at each goal's requirement.")
     p2_head = [
         Paragraph("PHASE 2 — MONTH 7 ONWARDS", ParagraphStyle("p2", parent=styles["label"], textColor=colors.HexColor("#27AE60"), fontSize=7)),
         Paragraph("Goal-Based SIPs", ParagraphStyle("p2t", parent=styles["h2"], fontSize=14, spaceBefore=4, spaceAfter=8)),
-        Paragraph(f"Deploy {_fmt_rs(total_deploy, False)}/month across goals, capped at each goal's requirement.", ParagraphStyle("p2b", parent=styles["body"], fontSize=9, textColor=colors.HexColor("#64748B"), spaceAfter=12)),
+        Paragraph(p2_sub, ParagraphStyle("p2b", parent=styles["body"], fontSize=9, textColor=colors.HexColor("#64748B"), spaceAfter=12)),
     ]
 
     p2_rows = [[
@@ -8212,6 +8239,12 @@ def build_page_action_plan(client_facts, allocation_output):
     ]))
     
     p2_items = p2_head + [p2_table]
+    unallocated = _num(allocation_output.get("unallocated_to_savings"), 0)
+    if unallocated > 0:
+        p2_items.append(Spacer(1, 8))
+        p2_items.append(Paragraph(
+            f"Leftover {_fmt_rs(unallocated, False)}/month stays in your savings account.",
+            ParagraphStyle("p2left", parent=styles["small"], textColor=colors.HexColor("#64748B"))))
     p2_card = Table([[item] for item in p2_items], colWidths=[240])
     p2_card.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F0F9F1")),
