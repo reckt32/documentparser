@@ -121,6 +121,23 @@ def init_db():
     )
     _exec("CREATE INDEX IF NOT EXISTS idx_questionnaires_user ON questionnaires(user_id, created_at)")
 
+    # Retirement is an independent flow. Its complete draft is stored as one
+    # versionable JSON contract so the MVP can evolve without coupling it to
+    # the wealth questionnaire's section tables.
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS retirement_questionnaires (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'in_progress',
+          data_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    _exec("CREATE INDEX IF NOT EXISTS idx_retirement_q_user ON retirement_questionnaires(user_id, updated_at)")
+
     # Questionnaire sections (normalized per section, JSON blob per row)
     _exec(
         """
@@ -281,6 +298,11 @@ def init_db():
     )
     _exec("CREATE INDEX IF NOT EXISTS idx_dashboard_reports_pan ON dashboard_reports(client_pan)")
     _exec("CREATE INDEX IF NOT EXISTS idx_dashboard_reports_mfd ON dashboard_reports(mfd_firebase_uid)")
+    try:
+        _exec("ALTER TABLE dashboard_reports ADD COLUMN report_type TEXT DEFAULT 'wealth'")
+    except Exception:
+        pass
+    _exec("CREATE INDEX IF NOT EXISTS idx_dashboard_reports_type ON dashboard_reports(mfd_firebase_uid, client_pan, report_type)")
 
     # Aggregate Actions Table
     _exec(
@@ -483,6 +505,53 @@ def get_latest_questionnaire_for_user(user_id: str) -> Optional[int]:
         (user_id,),
     )
     return rows[0]["id"] if rows else None
+
+
+def create_retirement_questionnaire(user_id: str, data: Optional[Dict[str, Any]] = None) -> int:
+    cur = _exec(
+        "INSERT INTO retirement_questionnaires (user_id, data_json) VALUES (?, ?)",
+        (user_id, json.dumps(data or {})),
+    )
+    return cur.lastrowid
+
+
+def save_retirement_questionnaire(qid: int, user_id: str, data: Dict[str, Any], status: str = "in_progress") -> bool:
+    result = _exec(
+        """
+        UPDATE retirement_questionnaires
+        SET data_json = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+        """,
+        (json.dumps(data or {}), status, qid, user_id),
+    )
+    return result.rowcount > 0
+
+
+def get_retirement_questionnaire(qid: int, user_id: str) -> Dict[str, Any]:
+    rows = _query(
+        """
+        SELECT id, user_id, status, data_json, created_at, updated_at
+        FROM retirement_questionnaires WHERE id = ? AND user_id = ?
+        """,
+        (qid, user_id),
+    )
+    if not rows:
+        return {}
+    row = dict(rows[0])
+    try:
+        row["data"] = json.loads(row.pop("data_json") or "{}")
+    except Exception:
+        row["data"] = {}
+        row.pop("data_json", None)
+    return row
+
+
+def get_latest_retirement_questionnaire(user_id: str) -> Dict[str, Any]:
+    rows = _query(
+        "SELECT id FROM retirement_questionnaires WHERE user_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+        (user_id,),
+    )
+    return get_retirement_questionnaire(rows[0]["id"], user_id) if rows else {}
 
 def link_questionnaire_upload(
     questionnaire_id: int,
@@ -767,13 +836,13 @@ def get_user_count() -> Dict[str, int]:
 
 # --- Dashboard & Aggregate Helpers ---
 
-def insert_dashboard_report(mfd_firebase_uid: str, client_pan: str, client_name: str, expires_at: str, pdf_filename: str, status: str, snapshot_json: str, action_items_json: str) -> int:
+def insert_dashboard_report(mfd_firebase_uid: str, client_pan: str, client_name: str, expires_at: str, pdf_filename: str, status: str, snapshot_json: str, action_items_json: str, report_type: str = "wealth") -> int:
     cur = _exec(
         """
-        INSERT INTO dashboard_reports (mfd_firebase_uid, client_pan, client_name, expires_at, pdf_filename, status, snapshot_json, action_items_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO dashboard_reports (mfd_firebase_uid, client_pan, client_name, expires_at, pdf_filename, status, snapshot_json, action_items_json, report_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (mfd_firebase_uid, client_pan, client_name, expires_at, pdf_filename, status, snapshot_json, action_items_json)
+        (mfd_firebase_uid, client_pan, client_name, expires_at, pdf_filename, status, snapshot_json, action_items_json, report_type)
     )
     return cur.lastrowid
 
@@ -794,22 +863,33 @@ def update_action_status(item_id: str, final_status: str) -> bool:
     return result.rowcount > 0
 
 
-def get_active_dashboard_report_by_pan(mfd_firebase_uid: str, client_pan: str) -> Optional[Dict[str, Any]]:
+def get_active_dashboard_report_by_pan(mfd_firebase_uid: str, client_pan: str, report_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Return the most recent ACTIVE dashboard report for the given MFD + client PAN,
     or None if no active report exists.
     """
-    rows = _query(
-        """
-        SELECT id, mfd_firebase_uid, client_pan, client_name, generated_at,
-               expires_at, pdf_filename, status, snapshot_json, action_items_json
-        FROM dashboard_reports
-        WHERE mfd_firebase_uid = ? AND client_pan = ? AND status = 'ACTIVE'
-        ORDER BY generated_at DESC
-        LIMIT 1
-        """,
-        (mfd_firebase_uid, client_pan),
-    )
+    if report_type:
+        rows = _query(
+            """
+            SELECT id, mfd_firebase_uid, client_pan, client_name, generated_at,
+                   expires_at, pdf_filename, status, snapshot_json, action_items_json, report_type
+            FROM dashboard_reports
+            WHERE mfd_firebase_uid = ? AND client_pan = ? AND report_type = ? AND status = 'ACTIVE'
+            ORDER BY generated_at DESC LIMIT 1
+            """,
+            (mfd_firebase_uid, client_pan, report_type),
+        )
+    else:
+        rows = _query(
+            """
+            SELECT id, mfd_firebase_uid, client_pan, client_name, generated_at,
+                   expires_at, pdf_filename, status, snapshot_json, action_items_json, report_type
+            FROM dashboard_reports
+            WHERE mfd_firebase_uid = ? AND client_pan = ? AND status = 'ACTIVE'
+            ORDER BY generated_at DESC LIMIT 1
+            """,
+            (mfd_firebase_uid, client_pan),
+        )
     if not rows:
         return None
     return dict(rows[0])
@@ -849,7 +929,7 @@ def list_active_dashboard_reports(mfd_firebase_uid: str):
     rows = _query(
         """
         SELECT id, mfd_firebase_uid, client_pan, client_name, generated_at,
-               expires_at, pdf_filename, status, snapshot_json, action_items_json
+               expires_at, pdf_filename, status, snapshot_json, action_items_json, report_type
         FROM dashboard_reports
         WHERE mfd_firebase_uid = ? AND status = 'ACTIVE'
         ORDER BY

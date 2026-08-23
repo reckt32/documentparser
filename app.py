@@ -72,7 +72,13 @@ from db import (
     get_active_dashboard_report_by_pan,
     mark_dashboard_report_status,
     mark_aggregate_actions_status_by_report,
+    create_retirement_questionnaire,
+    save_retirement_questionnaire,
+    get_retirement_questionnaire,
+    get_latest_retirement_questionnaire,
 )
+from retirement_engine import analyze_retirement, dashboard_action_items, validate_retirement_input
+from retirement_report import generate_retirement_pdf
 
 # Auth and Payment modules
 from auth import require_auth, require_payment, consume_credit, verify_firebase_token, optional_auth, require_admin
@@ -8582,7 +8588,7 @@ def report_generate():
 
     # --- 3. Duplicate Check: supersede any existing ACTIVE report for same MFD + PAN ---
     try:
-        existing_active = get_active_dashboard_report_by_pan(firebase_uid, client_pan)
+        existing_active = get_active_dashboard_report_by_pan(firebase_uid, client_pan, "wealth")
     except Exception as e:
         logger.error(f"Failed to query active dashboard report: {e}")
         existing_active = None
@@ -10085,6 +10091,206 @@ def free_retirement_calc():
         _autosave_free_tool_to_questionnaire(user_id, data, 'retirement')
 
     return jsonify(result), 200
+
+
+# --- Retirement corpus-deployment MVP -------------------------------------
+
+def _retirement_user_id() -> str:
+    return str(getattr(g, "user_id", "") or "")
+
+
+@app.route("/retirement/questionnaire/start", methods=["POST"])
+@require_auth
+def retirement_questionnaire_start():
+    user_id = _retirement_user_id()
+    initial = request.get_json(silent=True) or {}
+    qid = create_retirement_questionnaire(user_id, initial.get("data") or {})
+    return jsonify({"questionnaire_id": qid, "status": "in_progress"}), 201
+
+
+@app.route("/retirement/questionnaire/latest", methods=["GET"])
+@require_auth
+def retirement_questionnaire_latest():
+    draft = get_latest_retirement_questionnaire(_retirement_user_id())
+    return jsonify(draft or {"data": None}), 200
+
+
+@app.route("/retirement/questionnaire/<int:qid>", methods=["GET", "PUT"])
+@require_auth
+def retirement_questionnaire_detail(qid: int):
+    user_id = _retirement_user_id()
+    if request.method == "GET":
+        draft = get_retirement_questionnaire(qid, user_id)
+        if not draft:
+            return jsonify({"error": "Retirement questionnaire not found"}), 404
+        return jsonify(draft), 200
+
+    payload = request.get_json(force=True) or {}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    status = str(payload.get("status") or "in_progress")
+    if status not in {"in_progress", "completed", "archived"}:
+        return jsonify({"error": "Invalid questionnaire status"}), 400
+    if not get_retirement_questionnaire(qid, user_id):
+        return jsonify({"error": "Retirement questionnaire not found"}), 404
+    save_retirement_questionnaire(qid, user_id, data, status=status)
+    return jsonify({"questionnaire_id": qid, "status": status}), 200
+
+
+def _retirement_payload_from_request() -> tuple[dict, int | None, tuple | None]:
+    body = request.get_json(force=True) or {}
+    qid = body.get("questionnaire_id")
+    data = body.get("data") if isinstance(body.get("data"), dict) else None
+    if qid is not None:
+        try:
+            qid = int(qid)
+        except (TypeError, ValueError):
+            return {}, None, (jsonify({"error": "Invalid questionnaire_id"}), 400)
+        draft = get_retirement_questionnaire(qid, _retirement_user_id())
+        if not draft:
+            return {}, None, (jsonify({"error": "Retirement questionnaire not found"}), 404)
+        data = data or draft.get("data") or {}
+    if not isinstance(data, dict):
+        data = body if isinstance(body, dict) else {}
+    return data, qid, None
+
+
+@app.route("/retirement/analyze", methods=["POST"])
+@require_auth
+def retirement_analyze():
+    payload, qid, error = _retirement_payload_from_request()
+    if error:
+        return error
+    validation_errors = validate_retirement_input(payload)
+    if validation_errors:
+        return jsonify({"error": "validation_failed", "fields": validation_errors}), 400
+    analysis = analyze_retirement(payload)
+    if qid:
+        save_retirement_questionnaire(qid, _retirement_user_id(), payload, status="in_progress")
+    return jsonify({"questionnaire_id": qid, "analysis": analysis}), 200
+
+
+def _retirement_dashboard_snapshot(analysis: dict) -> dict:
+    scores = analysis.get("scores") or {}
+    allocation = analysis.get("allocation") or {}
+    cashflow = analysis.get("cashflow") or {}
+    protection = analysis.get("protection") or {}
+    flags = analysis.get("flags") or []
+    return {
+        "module": "retirement",
+        "overall_health": {
+            "score": scores.get("overall"),
+            "label": str(scores.get("band") or "").replace("_", " ").title(),
+        },
+        "retirement": {
+            "score": scores.get("overall"),
+            "swp_status": (analysis.get("swp") or {}).get("status"),
+            "top_flag": flags[0].get("message") if flags else None,
+            "usable_corpus": (analysis.get("net_worth") or {}).get("usable_corpus"),
+            "pension_corpus_available": allocation.get("pension_corpus_available"),
+            "corpus_adequacy_pct": allocation.get("corpus_adequacy_pct"),
+            "effective_monthly_expense": cashflow.get("effective_monthly_expense"),
+            "permanent_gap": cashflow.get("permanent_gap"),
+        },
+        "protection": {
+            "health_cover_current": protection.get("health_cover"),
+            "health_cover_recommended": protection.get("recommended_health_cover"),
+            "health_cover_gap": protection.get("health_cover_gap"),
+        },
+        "goal_summary": analysis.get("goals") or [],
+        "scores": scores,
+    }
+
+
+@app.route("/retirement/report/generate", methods=["POST"])
+@require_auth
+@require_payment
+def retirement_report_generate():
+    payload, qid, error = _retirement_payload_from_request()
+    if error:
+        return error
+    validation_errors = validate_retirement_input(payload)
+    if validation_errors:
+        return jsonify({"error": "validation_failed", "fields": validation_errors}), 400
+
+    user_id = _retirement_user_id()
+    credits = get_user_credits(user_id)
+    if credits <= 0:
+        return jsonify({"error": "Insufficient credits", "remaining_credits": 0}), 403
+
+    analysis = analyze_retirement(payload)
+    profile = analysis["profile"]
+    client_pan = profile["pan"]
+    existing = get_active_dashboard_report_by_pan(user_id, client_pan, "retirement")
+    if existing:
+        mark_dashboard_report_status(existing["id"], "SUPERSEDED")
+        mark_aggregate_actions_status_by_report(existing["id"], "PENDING", "SUPERSEDED")
+
+    pdf_filename = f"RetirementPlan_{os.urandom(8).hex()}.pdf"
+    pdf_path = os.path.join(OUTPUT_DIR, pdf_filename)
+    actions = dashboard_action_items(analysis)
+    report_id = None
+    pdf_created = False
+    try:
+        generate_retirement_pdf(analysis, pdf_path, logo_path=os.path.join(os.path.dirname(__file__), "logo.png"))
+        if not os.path.exists(pdf_path) or os.path.getsize(pdf_path) <= 0:
+            raise RuntimeError("Generated retirement PDF was not saved")
+        pdf_created = True
+        generated_at = datetime.utcnow()
+        expires_at = (generated_at + timedelta(days=90)).isoformat()
+        snapshot = _retirement_dashboard_snapshot(analysis)
+        report_id = insert_dashboard_report(
+            mfd_firebase_uid=user_id,
+            client_pan=client_pan,
+            client_name=profile["client_name"],
+            expires_at=expires_at,
+            pdf_filename=pdf_filename,
+            status="ACTIVE",
+            snapshot_json=json.dumps(snapshot, default=str),
+            action_items_json=json.dumps(actions, default=str),
+            report_type="retirement",
+        )
+        for item in actions:
+            insert_aggregate_action(
+                id=str(uuid.uuid4()),
+                mfd_firebase_uid=user_id,
+                client_pan=client_pan,
+                report_id=report_id,
+                item_id=item["item_id"],
+                dimension=item["dimension"],
+                urgency=item["urgency"],
+                value_type=item["value_type"],
+                value_num=item["value_num"],
+                final_status="PENDING",
+                report_generated_at=generated_at.isoformat(),
+            )
+        if not consume_user_credit(user_id):
+            raise RuntimeError("Failed to consume report credit")
+        if qid:
+            save_retirement_questionnaire(qid, user_id, payload, status="completed")
+    except Exception as exc:
+        logger.exception("Retirement report generation failed")
+        if report_id:
+            mark_dashboard_report_status(report_id, "FAILED")
+            mark_aggregate_actions_status_by_report(report_id, "PENDING", "FAILED")
+        if pdf_created and os.path.exists(pdf_path):
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
+        return jsonify({"error": "Failed to generate retirement report", "message": str(exc)}), 500
+
+    url = url_for("download_file", filename=pdf_filename, _external=True)
+    return jsonify(
+        {
+            "retirement_plan_pdf_url": url,
+            "financial_plan_pdf_url": url,
+            "report_type": "retirement",
+            "report_id": report_id,
+            "questionnaire_id": qid,
+            "analysis": analysis,
+            "remaining_credits": get_user_credits(user_id),
+        }
+    ), 200
 
 
 # ─── Register Blueprints ────────────────────────────────────────────────────

@@ -225,6 +225,8 @@ def overview():
     for r in reports:
         entry = {
             "id": r.get("id"),
+            "module": (r.get("report_type") or "wealth").upper(),
+            "report_type": r.get("report_type") or "wealth",
             "client_pan": r.get("client_pan"),
             "client_name": r.get("client_name"),
             "generated_at": r.get("generated_at"),
@@ -250,6 +252,11 @@ def overview():
                 entry["goal_achievement_pct"] = alloc_sum.get("goal_achievement_pct")
                 # Goal count
                 entry["goal_count"] = len(snap.get("goal_summary") or [])
+                if (r.get("report_type") or "wealth") == "retirement":
+                    retirement = snap.get("retirement") or {}
+                    entry["retirement_score"] = retirement.get("score")
+                    entry["retirement_swp_status"] = retirement.get("swp_status")
+                    entry["retirement_top_flag"] = retirement.get("top_flag")
             except Exception:
                 pass
         active_reports.append(entry)
@@ -329,7 +336,10 @@ def client_detail(pan: str):
     if not PAN_PATTERN.match(normalized_pan):
         return _bad_request("Invalid PAN format. Expected ABCDE1234F.")
 
-    report = get_active_dashboard_report_by_pan(mfd_uid, normalized_pan)
+    requested_type = (request.args.get("report_type") or "").strip().lower()
+    if requested_type and requested_type not in {"wealth", "retirement"}:
+        return _bad_request("Invalid report_type.")
+    report = get_active_dashboard_report_by_pan(mfd_uid, normalized_pan, requested_type or None)
     if not report:
         return jsonify({
             "client_pan": normalized_pan,
@@ -349,6 +359,8 @@ def client_detail(pan: str):
 
     return jsonify({
         "report_id": report.get("id"),
+        "module": (report.get("report_type") or "wealth").upper(),
+        "report_type": report.get("report_type") or "wealth",
         "client_pan": report.get("client_pan"),
         "client_name": report.get("client_name"),
         "generated_at": report.get("generated_at"),
