@@ -10170,34 +10170,32 @@ def retirement_analyze():
 
 
 def _retirement_dashboard_snapshot(analysis: dict) -> dict:
-    scores = analysis.get("scores") or {}
-    allocation = analysis.get("allocation") or {}
+    solver = analysis.get("solver") or {}
     cashflow = analysis.get("cashflow") or {}
-    protection = analysis.get("protection") or {}
+    net_worth = analysis.get("net_worth") or {}
     flags = analysis.get("flags") or []
+    feasible = solver.get("selected_feasible") is True
     return {
         "module": "retirement",
         "overall_health": {
-            "score": scores.get("overall"),
-            "label": str(scores.get("band") or "").replace("_", " ").title(),
+            "score": None,
+            "label": "Plan Feasible" if feasible else "Requires Adjustment",
         },
         "retirement": {
-            "score": scores.get("overall"),
-            "swp_status": (analysis.get("swp") or {}).get("status"),
+            "status": solver.get("status"),
+            "selected_feasible": feasible,
+            "selected_rate": solver.get("selected_rate"),
+            "minimum_feasible_rate": solver.get("minimum_feasible_rate"),
             "top_flag": flags[0].get("message") if flags else None,
-            "usable_corpus": (analysis.get("net_worth") or {}).get("usable_corpus"),
-            "pension_corpus_available": allocation.get("pension_corpus_available"),
-            "corpus_adequacy_pct": allocation.get("corpus_adequacy_pct"),
+            "available_corpus": net_worth.get("available_corpus"),
+            "income_bucket": solver.get("income_bucket"),
+            "legacy_residual": solver.get("legacy_residual"),
+            "shortfall": solver.get("shortfall_at_selected_rate"),
             "effective_monthly_expense": cashflow.get("effective_monthly_expense"),
-            "permanent_gap": cashflow.get("permanent_gap"),
-        },
-        "protection": {
-            "health_cover_current": protection.get("health_cover"),
-            "health_cover_recommended": protection.get("recommended_health_cover"),
-            "health_cover_gap": protection.get("health_cover_gap"),
+            "design_gap": cashflow.get("design_gap"),
         },
         "goal_summary": analysis.get("goals") or [],
-        "scores": scores,
+        "flags": flags,
     }
 
 
@@ -10218,6 +10216,14 @@ def retirement_report_generate():
         return jsonify({"error": "Insufficient credits", "remaining_credits": 0}), 403
 
     analysis = analyze_retirement(payload)
+    if not (analysis.get("solver") or {}).get("selected_feasible"):
+        return jsonify(
+            {
+                "error": "plan_not_settled",
+                "message": "Adjust the retirement plan until it is feasible before generating the report.",
+                "analysis": analysis,
+            }
+        ), 409
     profile = analysis["profile"]
     client_pan = profile["pan"]
     existing = get_active_dashboard_report_by_pan(user_id, client_pan, "retirement")

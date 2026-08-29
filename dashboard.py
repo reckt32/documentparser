@@ -254,8 +254,10 @@ def overview():
                 entry["goal_count"] = len(snap.get("goal_summary") or [])
                 if (r.get("report_type") or "wealth") == "retirement":
                     retirement = snap.get("retirement") or {}
-                    entry["retirement_score"] = retirement.get("score")
-                    entry["retirement_swp_status"] = retirement.get("swp_status")
+                    entry["retirement_status"] = retirement.get("status")
+                    entry["retirement_selected_feasible"] = retirement.get("selected_feasible")
+                    entry["retirement_selected_rate"] = retirement.get("selected_rate")
+                    entry["retirement_shortfall"] = retirement.get("shortfall")
                     entry["retirement_top_flag"] = retirement.get("top_flag")
             except Exception:
                 pass
