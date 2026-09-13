@@ -228,6 +228,85 @@ def test_retained_scss_interest_uses_flat_twenty_two_percent_tax_assumption():
     assert scss["assumed_tax_rate"] == 0.22
 
 
+def test_client_income_at_or_below_twelve_lakh_has_no_tax_adjustment():
+    payload = retirement_payload()
+    payload["assets"] = {
+        "holdings": [
+            {
+                "id": "proceeds",
+                "name": "Retirement proceeds",
+                "instrument_type": "retirement_proceeds",
+                "current_value": 30_000_000,
+                "deployable_amount": 30_000_000,
+            }
+        ]
+    }
+    payload["income"] = {"employer_pension": 100_000}
+
+    result = analyze_retirement(payload)
+    pension = result["cashflow"]["income_sources"][0]
+
+    assert result["tax"]["current_client_gross_annual_income"] == 1_200_000
+    assert result["tax"]["current_threshold_exceeded"] is False
+    assert pension["monthly_amount"] == 100_000
+    assert pension["tax_adjustment_monthly"] == 0
+
+
+def test_above_threshold_adjustment_applies_to_all_client_income_sources():
+    payload = retirement_payload()
+    payload["assets"] = {
+        "holdings": [
+            {
+                "id": "proceeds",
+                "name": "Retirement proceeds",
+                "instrument_type": "retirement_proceeds",
+                "current_value": 30_000_000,
+                "deployable_amount": 30_000_000,
+            }
+        ]
+    }
+    payload["income"] = {
+        "employer_pension": 80_000,
+        "other_sources": [
+            {"id": "consulting", "name": "Consulting", "monthly_amount": 30_000, "nature": "lifelong"}
+        ],
+    }
+
+    result = analyze_retirement(payload)
+    sources = {row["id"]: row for row in result["cashflow"]["income_sources"]}
+
+    assert result["tax"]["current_client_gross_annual_income"] == 1_320_000
+    assert result["tax"]["current_threshold_exceeded"] is True
+    assert sources["employer_pension"]["monthly_amount"] == 62_400
+    assert sources["consulting"]["monthly_amount"] == 23_400
+    assert result["tax"]["current_estimated_annual_adjustment"] == 290_400
+
+
+def test_spouse_income_is_separate_from_client_threshold():
+    payload = retirement_payload()
+    payload["assets"] = {
+        "holdings": [
+            {
+                "id": "proceeds",
+                "name": "Retirement proceeds",
+                "instrument_type": "retirement_proceeds",
+                "current_value": 30_000_000,
+                "deployable_amount": 30_000_000,
+            }
+        ]
+    }
+    payload["income"] = {"employer_pension": 60_000, "spouse_pension": 100_000}
+
+    result = analyze_retirement(payload)
+    sources = {row["id"]: row for row in result["cashflow"]["income_sources"]}
+
+    assert result["tax"]["current_client_gross_annual_income"] == 720_000
+    assert result["tax"]["current_threshold_exceeded"] is False
+    assert sources["employer_pension"]["monthly_amount"] == 60_000
+    assert sources["spouse_pension"]["owner"] == "spouse"
+    assert sources["spouse_pension"]["monthly_amount"] == 100_000
+
+
 def test_adviser_acceptance_is_explicit():
     payload = retirement_payload()
     assert retirement_plan_is_accepted(payload) is False
@@ -323,7 +402,10 @@ def test_retirement_pdf_is_eight_readable_pages(tmp_path):
     assert "Current Status" in text
     assert "Corpus Reconciliation" in text
     assert "Accepted for report generation" in text
-    assert "22% assumed tax" in text
+    assert "Tax Implications" in text
+    assert "22% indicative" in text
+    assert "Rs 12 lakh test uses only client-owned recurring gross income" in text
+    assert "SWP withdrawals are not entirely treated as income" in text
     assert "Term insurance cover" in text
     assert "10 times annual health premium" in text
     assert "Viability Score" not in text

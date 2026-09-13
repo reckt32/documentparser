@@ -246,7 +246,14 @@ def main() -> None:
             text = "\n".join(page.get_text() for page in document)
         if not 6 <= pages <= 8:
             raise RuntimeError(f"{filename} generated {pages} pages")
-        required_text = ["Adviser decision", "Accepted for report generation", "22% assumed tax", "Health premium reserve"]
+        required_text = [
+            "Adviser decision",
+            "Accepted for report generation",
+            "Tax Implications",
+            "22% indicative",
+            "SWP withdrawals are not entirely treated as income",
+            "Health premium reserve",
+        ]
         missing = [item for item in required_text if item not in text]
         if missing:
             raise RuntimeError(f"{filename} is missing expected text: {missing}")

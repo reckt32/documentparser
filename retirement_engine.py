@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Tuple
 
 @dataclass(frozen=True)
 class RetirementAssumptions:
-    version: str = "retirement_solver_v4_2026_09"
+    version: str = "retirement_solver_v5_2026_09"
     planning_age: int = 85
     expense_inflation: float = 0.06
     pension_indexation: float = 0.06
@@ -23,7 +23,8 @@ class RetirementAssumptions:
     withdrawal_cap: float = 0.07
     scss_rate: float = 0.082
     fd_rate: float = 0.075
-    interest_tax_rate: float = 0.22
+    income_tax_threshold: float = 1_200_000
+    income_tax_rate: float = 0.22
 
 
 ASSUMPTIONS = RetirementAssumptions()
@@ -82,7 +83,7 @@ def retirement_plan_is_accepted(payload: Dict[str, Any]) -> bool:
     return _mapping(payload.get("planning")).get("adviser_accepted") is True
 
 
-def _uses_interest_tax_assumption(instrument_type: Any) -> bool:
+def _is_interest_asset(instrument_type: Any) -> bool:
     return _slug(instrument_type, "") in {"scss", "fixed_deposit", "fd"}
 
 
@@ -147,7 +148,6 @@ def _asset_row(
 ) -> Dict[str, Any]:
     deployable_amount = min(value, max(0.0, deployable_amount))
     instrument_rate = max(0.0, _number(extra.get("rate")))
-    assumed_tax_rate = ASSUMPTIONS.interest_tax_rate if _uses_interest_tax_assumption(instrument_type) else 0.0
     return {
         "id": asset_id,
         "name": name,
@@ -156,10 +156,9 @@ def _asset_row(
         "deployable_amount": round(deployable_amount, 2),
         "retained_amount": round(value - deployable_amount, 2),
         "protected": extra.get("protected", False),
-        "held_by": extra.get("held_by", "client"),
+        "held_by": _slug(extra.get("held_by"), "client"),
         "rate": instrument_rate,
-        "assumed_tax_rate": assumed_tax_rate,
-        "post_tax_rate": round(instrument_rate * (1 - assumed_tax_rate), 6),
+        "taxable_interest": _is_interest_asset(instrument_type),
         "goal_id": extra.get("goal_id"),
         "maturity_years": max(0, _integer(extra.get("maturity_years"))),
         "lock_in_years": max(0, _integer(extra.get("lock_in_years"))),
@@ -194,6 +193,7 @@ def _legacy_asset_rows(assets: Dict[str, Any]) -> List[Dict[str, Any]]:
                 value,
                 value if deployable else 0.0,
                 protected=protected,
+                held_by=str(assets.get(f"{key}_held_by") or "client"),
                 rate=rate,
             )
         )
@@ -270,16 +270,20 @@ def _normalized_income(income: Dict[str, Any], assets: List[Dict[str, Any]]) -> 
         amount = _money(income.get(key))
         if amount <= 0:
             continue
+        owner = "spouse" if key == "spouse_pension" else _slug(income.get(f"{key}_owner"), "client")
         rows.append(
             {
                 "id": key,
                 "name": name,
                 "monthly_amount": amount,
+                "gross_monthly_amount": amount,
                 "nature": "lifelong",
                 "years_remaining": 0,
                 "indexed": income.get(f"{key}_indexed", indexed_default) is True,
                 "index_rate": max(0.0, _number(income.get(f"{key}_index_rate"), ASSUMPTIONS.pension_indexation)),
                 "linked_asset_id": None,
+                "owner": owner,
+                "taxable": owner == "client",
             }
         )
     for index, item in enumerate(_records(income.get("other_sources"))):
@@ -287,16 +291,20 @@ def _normalized_income(income: Dict[str, Any], assets: List[Dict[str, Any]]) -> 
         if amount <= 0:
             continue
         years = max(0, _integer(item.get("years_remaining")))
+        owner = _slug(item.get("owner"), "")
         rows.append(
             {
                 "id": str(item.get("id") or f"income_{index + 1}"),
                 "name": str(item.get("name") or f"Other income {index + 1}").strip(),
                 "monthly_amount": amount,
+                "gross_monthly_amount": amount,
                 "nature": _slug(item.get("nature"), "fixed_term" if years > 0 else "lifelong"),
                 "years_remaining": years,
                 "indexed": item.get("indexed_to_inflation", item.get("indexed", False)) is True,
                 "index_rate": max(0.0, _number(item.get("index_rate"), ASSUMPTIONS.pension_indexation)),
                 "linked_asset_id": item.get("linked_asset_id"),
+                "owner": owner,
+                "taxable": item.get("taxable", True) is not False,
             }
         )
     assets_by_id = {item["id"]: item for item in assets}
@@ -310,17 +318,11 @@ def _normalized_income(income: Dict[str, Any], assets: List[Dict[str, Any]]) -> 
             if asset and asset["retained_amount"] <= 0:
                 exclusions.append(f"{row['name']} excluded because {asset['name']} is fully deployable")
                 continue
-            if asset and _uses_interest_tax_assumption(asset["instrument_type"]):
-                gross_amount = row["monthly_amount"]
-                row["gross_monthly_amount"] = gross_amount
-                row["assumed_tax_rate"] = ASSUMPTIONS.interest_tax_rate
-                row["monthly_amount"] = round(gross_amount * (1 - ASSUMPTIONS.interest_tax_rate), 2)
-            else:
-                row["gross_monthly_amount"] = row["monthly_amount"]
-                row["assumed_tax_rate"] = 0.0
-        else:
-            row["gross_monthly_amount"] = row["monthly_amount"]
-            row["assumed_tax_rate"] = 0.0
+            if asset and not row.get("owner"):
+                row["owner"] = asset["held_by"]
+        if not row.get("owner"):
+            row["owner"] = "client"
+        row["taxable"] = row.get("taxable", True) is True and row["owner"] == "client"
         included.append(row)
     for asset in assets:
         if asset["id"] in linked_assets or asset["retained_amount"] <= 0:
@@ -329,19 +331,21 @@ def _normalized_income(income: Dict[str, Any], assets: List[Dict[str, Any]]) -> 
             continue
         rate = asset["rate"] or (ASSUMPTIONS.scss_rate if asset["instrument_type"] == "scss" else ASSUMPTIONS.fd_rate)
         gross_monthly = round(asset["retained_amount"] * rate / 12, 2)
-        assumed_tax_rate = ASSUMPTIONS.interest_tax_rate
+        owner = _slug(asset.get("held_by"), "client")
         included.append(
             {
                 "id": f"asset_income_{asset['id']}",
                 "name": f"{asset['name']} interest",
                 "gross_monthly_amount": gross_monthly,
-                "monthly_amount": round(gross_monthly * (1 - assumed_tax_rate), 2),
-                "assumed_tax_rate": assumed_tax_rate,
+                "monthly_amount": gross_monthly,
+                "assumed_tax_rate": 0.0,
                 "nature": "lifelong",
                 "years_remaining": 0,
                 "indexed": False,
                 "index_rate": 0.0,
                 "linked_asset_id": asset["id"],
+                "owner": owner,
+                "taxable": owner == "client",
             }
         )
     return included, exclusions
@@ -382,8 +386,8 @@ def _normalized_liabilities(payload: Dict[str, Any], assets: Dict[str, Any], exp
     return rows
 
 
-def _income_for_year(row: Dict[str, Any], year: int) -> float:
-    amount = row["monthly_amount"]
+def _gross_income_for_year(row: Dict[str, Any], year: int) -> float:
+    amount = row["gross_monthly_amount"]
     nature = row["nature"]
     years = row["years_remaining"]
     if nature == "fixed_term" and years > 0 and year >= years:
@@ -393,6 +397,43 @@ def _income_for_year(row: Dict[str, Any], year: int) -> float:
     if row["indexed"]:
         amount *= (1 + row["index_rate"]) ** year
     return round(amount, 2)
+
+
+def _tax_summary_for_year(income_rows: List[Dict[str, Any]], year: int) -> Dict[str, Any]:
+    sources: List[Dict[str, Any]] = []
+    client_gross_monthly = sum(
+        _gross_income_for_year(row, year)
+        for row in income_rows
+        if row.get("owner") == "client" and row.get("taxable") is True
+    )
+    client_gross_annual = round(client_gross_monthly * 12, 2)
+    threshold_exceeded = client_gross_annual > ASSUMPTIONS.income_tax_threshold
+    for row in income_rows:
+        gross_monthly = _gross_income_for_year(row, year)
+        rate = (
+            ASSUMPTIONS.income_tax_rate
+            if threshold_exceeded and row.get("owner") == "client" and row.get("taxable") is True
+            else 0.0
+        )
+        adjustment = round(gross_monthly * rate, 2)
+        sources.append(
+            {
+                "id": row["id"],
+                "gross_monthly": gross_monthly,
+                "tax_adjustment_monthly": adjustment,
+                "net_monthly": round(gross_monthly - adjustment, 2),
+                "assumed_tax_rate": rate,
+            }
+        )
+    return {
+        "year": year,
+        "client_gross_annual_income": client_gross_annual,
+        "threshold_exceeded": threshold_exceeded,
+        "gross_monthly_income": round(sum(item["gross_monthly"] for item in sources), 2),
+        "tax_adjustment_monthly": round(sum(item["tax_adjustment_monthly"] for item in sources), 2),
+        "net_monthly_income": round(sum(item["net_monthly"] for item in sources), 2),
+        "sources": sources,
+    }
 
 
 def _emi_for_year(liability: Dict[str, Any], year: int, planning_years: int) -> float:
@@ -475,6 +516,13 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
     assets = _normalized_assets(assets_input)
     income_rows, income_exclusions = _normalized_income(income_input, assets)
     liabilities = _normalized_liabilities(payload, assets_input, expenses)
+    tax_timeline = [_tax_summary_for_year(income_rows, year) for year in range(planning_years)]
+    current_tax_sources = {item["id"]: item for item in tax_timeline[0]["sources"]}
+    for row in income_rows:
+        current_tax = current_tax_sources[row["id"]]
+        row["monthly_amount"] = current_tax["net_monthly"]
+        row["assumed_tax_rate"] = current_tax["assumed_tax_rate"]
+        row["tax_adjustment_monthly"] = current_tax["tax_adjustment_monthly"]
 
     total_assets = round(sum(item["current_value"] for item in assets), 2)
     total_liabilities = round(sum(item["outstanding"] for item in liabilities), 2)
@@ -495,7 +543,8 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
     timeline: List[Dict[str, Any]] = []
     for year in range(planning_years):
         expense_for_year = effective_monthly * ((1 + expense_inflation) ** year)
-        income_for_year = sum(_income_for_year(row, year) for row in income_rows)
+        tax_for_year = tax_timeline[year]
+        income_for_year = tax_for_year["net_monthly_income"]
         emi_for_year = sum(_emi_for_year(item, year, planning_years) for item in liabilities)
         gap = max(0.0, expense_for_year + emi_for_year - income_for_year)
         timeline.append(
@@ -504,6 +553,10 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "age": age + year,
                 "monthly_expense": round(expense_for_year, 2),
                 "monthly_income": round(income_for_year, 2),
+                "gross_monthly_income": tax_for_year["gross_monthly_income"],
+                "tax_adjustment_monthly": tax_for_year["tax_adjustment_monthly"],
+                "client_gross_annual_income": tax_for_year["client_gross_annual_income"],
+                "tax_threshold_exceeded": tax_for_year["threshold_exceeded"],
                 "monthly_emi": round(emi_for_year, 2),
                 "monthly_gap": round(gap, 2),
             }
@@ -601,8 +654,14 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
     if dependents and insurance.get("has_term_insurance") is not True:
         flag("high", "term_missing", "Dependants are recorded but no term cover is available.", "Review whether term cover remains necessary for outstanding obligations.")
     retained_fd = sum(item["retained_amount"] for item in assets if item["instrument_type"] in {"fixed_deposit", "fd"})
-    if retained_fd > 0:
-        flag("high", "fd_tax_review", "Retained fixed-deposit income is reduced by the agreed 22% tax assumption.", "Review whether the retained FD remains appropriate after the assumed post-tax return.", retained_fd)
+    current_tax = tax_timeline[0]
+    if retained_fd > 0 and current_tax["threshold_exceeded"]:
+        flag("high", "fd_tax_review", "Retained fixed-deposit income is reduced by the agreed 22% tax assumption because client income exceeds Rs 12 lakh.", "Review whether the retained FD remains appropriate after the indicative tax adjustment.", retained_fd)
+    elif retained_fd > 0:
+        flag("maintain", "fd_tax_threshold", "No tax adjustment is applied to retained fixed-deposit income because current client income does not exceed Rs 12 lakh.", "Recheck the threshold when income changes.", retained_fd)
+    if not current_tax["threshold_exceeded"] and any(item["threshold_exceeded"] for item in tax_timeline[1:]):
+        first_tax_year = next(item["year"] for item in tax_timeline[1:] if item["threshold_exceeded"])
+        flag("high", "tax_threshold_future", f"Indexed client income first exceeds Rs 12 lakh in plan year {first_tax_year}.", "Review the indicative tax adjustment when the threshold is first crossed.")
     sip_monthly = _money(assets_input.get("existing_sip_monthly"))
     sip_count = max(0, _integer(assets_input.get("existing_sip_count")))
     if sip_monthly > 0 or sip_count > 0:
@@ -631,8 +690,8 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
     actionables = []
     if available_corpus > 0:
         actionables.append({"type": "fresh_deployment", "amount": available_corpus, "description": "Deploy the settled retirement corpus by goal and risk category."})
-    if retained_fd > 0:
-        actionables.append({"type": "restructure", "amount": retained_fd, "description": "Review retained fixed deposits for category-level tax drag and goal fit."})
+    if retained_fd > 0 and current_tax["threshold_exceeded"]:
+        actionables.append({"type": "restructure", "amount": retained_fd, "description": "Review retained fixed deposits after the indicative client-income tax adjustment."})
     if not has_health:
         actionables.append({"type": "insurance", "amount": 0.0, "description": "Complete the health-cover review."})
     if sip_monthly > 0 or sip_count > 0:
@@ -648,6 +707,18 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
         "solver": {"status": status, "current_gap": current_gap, "design_gap": design_gap, "design_gap_year": design_row["year"], "annual_design_gap": annual_design_gap, "income_capacity": income_capacity, "natural_rate": round(natural_rate, 4) if natural_rate is not None else None, "minimum_feasible_rate": round(minimum_rate, 4) if minimum_rate is not None else None, "selected_rate": round(selected_rate, 4), "withdrawal_floor": floor, "withdrawal_cap": cap, "selected_feasible": selected_feasible, "income_bucket": selected_income_corpus, "monthly_swp": design_gap, "shortfall_at_selected_rate": selected_shortfall, "shortfall_at_cap": shortfall_at_cap, "legacy_residual": legacy_residual},
         "allocation": {"reconciliation": reconciliation, "by_risk": by_risk, "blended_return": blended_return, "allocated_total": round(allocated_total, 2)},
         "protection": {"has_health_insurance": has_health, "health_cover": _money(insurance.get("health_cover")), "spouse_covered": insurance.get("spouse_covered") is True, "annual_health_premium": annual_health_premium, "has_term_insurance": insurance.get("has_term_insurance") is True, "term_cover": _money(insurance.get("term_cover")), "annual_term_premium": annual_term_premium, "annual_motor_premium": annual_motor_premium},
+        "tax": {
+            "threshold": ASSUMPTIONS.income_tax_threshold,
+            "rate": ASSUMPTIONS.income_tax_rate,
+            "current_client_gross_annual_income": current_tax["client_gross_annual_income"],
+            "current_threshold_exceeded": current_tax["threshold_exceeded"],
+            "current_gross_annual_income": round(current_tax["gross_monthly_income"] * 12, 2),
+            "current_estimated_annual_adjustment": round(current_tax["tax_adjustment_monthly"] * 12, 2),
+            "current_net_annual_income": round(current_tax["net_monthly_income"] * 12, 2),
+            "timeline": tax_timeline,
+            "swp_included": False,
+            "spouse_included_in_client_threshold": False,
+        },
         "decision": {"adviser_accepted": retirement_plan_is_accepted(payload)},
         "flags": flags,
         "actionables": actionables,
@@ -671,6 +742,8 @@ def dashboard_action_items(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
         "health_missing": "protection",
         "term_missing": "protection",
         "fd_tax_review": "portfolio",
+        "fd_tax_threshold": "portfolio",
+        "tax_threshold_future": "tax",
         "sip_review": "portfolio",
         "opportunity_declined": "portfolio",
         "asset_income_excluded": "portfolio",

@@ -224,17 +224,17 @@ def _current_status(story: List[Any], analysis: Dict[str, Any], styles: Dict[str
         )
     )
     story.append(_p("Income Timeline", styles["h2"]))
-    income_rows = [["Source", "Net monthly", "Nature", "Ends / tax basis"]]
+    income_rows = [["Source", "Owner", "Net monthly", "Nature", "Ends / tax basis"]]
     for source in cash["income_sources"]:
         end = "Lifelong" if source["nature"] == "lifelong" else f"{source['years_remaining']} yrs"
         if source["indexed"]:
             end += f"; indexed {_pct(source['index_rate'])}"
         if source.get("assumed_tax_rate"):
-            end += f"; {_pct(source['assumed_tax_rate'], 0)} assumed tax"
-        income_rows.append([source["name"], _inr(source["monthly_amount"]), _status_label(source["nature"]), end])
+            end += f"; {_pct(source['assumed_tax_rate'], 0)} indicative tax"
+        income_rows.append([source["name"], _status_label(source.get("owner", "client")), _inr(source["monthly_amount"]), _status_label(source["nature"]), end])
     if len(income_rows) == 1:
-        income_rows.append(["No recorded income", _inr(0), "-", "-"])
-    story.append(_table(income_rows, [55 * mm, 30 * mm, 35 * mm, 54 * mm], styles))
+        income_rows.append(["No recorded income", "-", _inr(0), "-", "-"])
+    story.append(_table(income_rows, [42 * mm, 22 * mm, 31 * mm, 29 * mm, 50 * mm], styles))
     story.append(_p("Expense and Protection Position", styles["h2"]))
     status_rows = [
         ["Item", "Current position", "Planning treatment"],
@@ -306,19 +306,20 @@ def _investments(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, P
         )
     )
     story.append(_p("Existing Holding Classification", styles["h2"]))
-    holding_rows = [["Category", "Current", "Deployable", "Retained", "Goal", "Tax basis"]]
+    holding_rows = [["Category", "Owner", "Current", "Deployable", "Retained", "Goal", "Tax basis"]]
     for holding in net["holdings"]:
         holding_rows.append(
             [
                 _status_label(holding["instrument_type"]),
+                _status_label(holding.get("held_by", "client")),
                 _inr(holding["current_value"], True),
                 _inr(holding["deployable_amount"], True),
                 _inr(holding["retained_amount"], True),
                 holding.get("goal_id") or "Unassigned",
-                f"{_pct(holding['assumed_tax_rate'], 0)} on interest" if holding.get("assumed_tax_rate") else "No engine tax rule",
+                "Client threshold rule" if holding.get("taxable_interest") and holding.get("held_by") == "client" else "Spouse tax separate" if holding.get("taxable_interest") else "No engine tax rule",
             ]
         )
-    story.append(_table(holding_rows, [40 * mm, 27 * mm, 27 * mm, 27 * mm, 25 * mm, 28 * mm], styles))
+    story.append(_table(holding_rows, [32 * mm, 18 * mm, 24 * mm, 24 * mm, 24 * mm, 22 * mm, 30 * mm], styles))
     story.append(_rich("Existing holdings are shown only by category. The adviser selects schemes and reviews whether each holding's risk profile remains appropriate; the engine makes no scheme-level judgement.", styles["body"]))
     story.append(_p("Settled Allocation by Risk Category", styles["h2"]))
     risk_rows = [["Category", "Fund type", "Amount", "Share", "Expected return"]]
@@ -374,10 +375,80 @@ def _plan(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, Paragrap
     story.append(PageBreak())
 
 
+def _tax_implications(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, ParagraphStyle]) -> None:
+    tax = analysis["tax"]
+    cash = analysis["cashflow"]
+    profile = analysis["profile"]
+    status = "22% adjustment applied" if tax["current_threshold_exceeded"] else "No adjustment at current income"
+    _section(story, "05", "Tax Implications", styles)
+    story.append(
+        _metric_strip(
+            [
+                ("Client gross income", _inr(tax["current_client_gross_annual_income"], True)),
+                ("Threshold", _inr(tax["threshold"], True)),
+                ("Indicative adjustment", _inr(tax["current_estimated_annual_adjustment"], True)),
+                ("Current treatment", status),
+            ],
+            styles,
+        )
+    )
+    story.append(_p("Current Income Calculation", styles["h2"]))
+    source_rows = [["Source", "Owner", "Gross annual", "Adjustment", "Net annual", "Treatment"]]
+    for source in cash["income_sources"]:
+        owner = source.get("owner", "client")
+        if owner == "spouse":
+            treatment = "Separate from client threshold"
+        elif source.get("assumed_tax_rate"):
+            treatment = f"{_pct(source['assumed_tax_rate'], 0)} indicative"
+        else:
+            treatment = "Below threshold"
+        source_rows.append(
+            [
+                source["name"],
+                _status_label(owner),
+                _inr(source["gross_monthly_amount"] * 12, True),
+                _inr(source.get("tax_adjustment_monthly", 0) * 12, True),
+                _inr(source["monthly_amount"] * 12, True),
+                treatment,
+            ]
+        )
+    if len(source_rows) == 1:
+        source_rows.append(["No recorded income", "-", _inr(0), _inr(0), _inr(0), "-"])
+    story.append(_table(source_rows, [38 * mm, 20 * mm, 29 * mm, 27 * mm, 29 * mm, 31 * mm], styles))
+
+    story.append(_p("Planning-Year Threshold Check", styles["h2"]))
+    tax_timeline = tax["timeline"]
+    milestone_indexes = {0, cash["design_gap_year"], len(tax_timeline) - 1}
+    for index in range(1, len(tax_timeline)):
+        if tax_timeline[index]["threshold_exceeded"] != tax_timeline[index - 1]["threshold_exceeded"]:
+            milestone_indexes.add(index)
+    timeline_rows = [["Year", "Age", "Client gross", "Threshold status", "Annual adjustment"]]
+    for index in sorted(milestone_indexes)[:6]:
+        row = tax_timeline[index]
+        timeline_rows.append(
+            [
+                row["year"],
+                profile["age"] + row["year"],
+                _inr(row["client_gross_annual_income"], True),
+                "Above" if row["threshold_exceeded"] else "At or below",
+                _inr(row["tax_adjustment_monthly"] * 12, True),
+            ]
+        )
+    story.append(_table(timeline_rows, [20 * mm, 20 * mm, 42 * mm, 47 * mm, 45 * mm], styles))
+    story.append(_p("Important Tax Note", styles["h2"]))
+    story.append(
+        _rich(
+            "Tax calculations are indicative and not absolute. The Rs 12 lakh test uses only client-owned recurring gross income; spouse income is treated separately. SWP withdrawals are not entirely treated as income and are excluded because taxable gains cannot be determined without cost-basis data. Please consult your tax adviser for actual tax implications.",
+            styles["body"],
+        )
+    )
+    story.append(PageBreak())
+
+
 def _actionables(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, ParagraphStyle]) -> None:
     flags = analysis["flags"]
     actions = analysis["actionables"]
-    _section(story, "05", "Actionables", styles)
+    _section(story, "06", "Actionables", styles)
     if flags:
         flag_rows = [["Priority", "Finding", "Adviser action"]]
         for item in flags:
@@ -412,7 +483,7 @@ def _actionables(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, P
 
 def _assumptions(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, ParagraphStyle]) -> None:
     assumptions = analysis["assumptions"]
-    _section(story, "06", "Assumptions and Important Notes", styles)
+    _section(story, "07", "Assumptions and Important Notes", styles)
     rows = [
         ["Assumption", "Value", "Use"],
         ["Assumption version", assumptions["version"], "Reproduces the calculation contract"],
@@ -422,7 +493,8 @@ def _assumptions(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, P
         ["Withdrawal cap", _pct(assumptions["withdrawal_cap"]), "Hard ceiling"],
         ["Emergency reserve", f"{assumptions['emergency_months']} months", "Liquid No Risk reserve"],
         ["Premium reserve", f"{assumptions['premium_reserve_multiple']} times", "Annual health premium only"],
-        ["SCSS / FD tax", _pct(assumptions["interest_tax_rate"], 0), "Gross interest multiplied by 78%"],
+        ["Income tax threshold", _inr(assumptions["income_tax_threshold"]), "Client-owned recurring gross income only"],
+        ["Indicative tax rate", _pct(assumptions["income_tax_rate"], 0), "Applied to client taxable income above threshold"],
         ["Opportunity selection", _pct(assumptions["opportunity_selected_pct"]), "Adviser-adjustable from zero to 10%"],
         ["Goal inflation", "None", "Goal inputs are fixed nominal requirements"],
     ]
@@ -437,7 +509,7 @@ def _assumptions(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, P
         "This is a deterministic planning output based only on the inputs and selected adviser decisions. It is not an account statement, tax opinion or guarantee.",
         "Risk labels are plain-English relative indicators within this portfolio and are not SEBI riskometer categories.",
         "No mutual fund scheme is selected or recommended. Exact schemes remain exclusively within the adviser's purview.",
-        "The only tax calculation used is the agreed 22% assumption on SCSS and fixed-deposit interest. No personal tax liability is calculated.",
+        "Tax calculations are indicative and not absolute. SWP withdrawals are not entirely treated as income. Please consult your tax adviser for actual tax implications.",
         "Insurance placement remains subject to underwriting, waiting periods, exclusions and full disclosure.",
         "Review this plan at least annually and whenever income, expenses, liabilities, health, family responsibilities or goals materially change.",
     ]
@@ -464,6 +536,7 @@ def generate_retirement_pdf(analysis: Dict[str, Any], output_path: str, logo_pat
     _goals(story, analysis, styles)
     _investments(story, analysis, styles)
     _plan(story, analysis, styles)
+    _tax_implications(story, analysis, styles)
     _actionables(story, analysis, styles)
     _assumptions(story, analysis, styles)
 
