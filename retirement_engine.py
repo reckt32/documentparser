@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Tuple
 
 @dataclass(frozen=True)
 class RetirementAssumptions:
-    version: str = "retirement_solver_v3_2026_08"
+    version: str = "retirement_solver_v4_2026_09"
     planning_age: int = 85
     expense_inflation: float = 0.06
     pension_indexation: float = 0.06
@@ -23,6 +23,7 @@ class RetirementAssumptions:
     withdrawal_cap: float = 0.07
     scss_rate: float = 0.082
     fd_rate: float = 0.075
+    interest_tax_rate: float = 0.22
 
 
 ASSUMPTIONS = RetirementAssumptions()
@@ -74,6 +75,15 @@ def _bounded(value: Any, minimum: float, maximum: float, default: float) -> floa
 def _slug(value: Any, fallback: str) -> str:
     text = "_".join(str(value or "").strip().lower().replace("-", " ").split())
     return text or fallback
+
+
+def retirement_plan_is_accepted(payload: Dict[str, Any]) -> bool:
+    """Return the explicit adviser approval submitted with the current plan."""
+    return _mapping(payload.get("planning")).get("adviser_accepted") is True
+
+
+def _uses_interest_tax_assumption(instrument_type: Any) -> bool:
+    return _slug(instrument_type, "") in {"scss", "fixed_deposit", "fd"}
 
 
 def validate_retirement_input(payload: Dict[str, Any]) -> List[str]:
@@ -136,6 +146,8 @@ def _asset_row(
     **extra: Any,
 ) -> Dict[str, Any]:
     deployable_amount = min(value, max(0.0, deployable_amount))
+    instrument_rate = max(0.0, _number(extra.get("rate")))
+    assumed_tax_rate = ASSUMPTIONS.interest_tax_rate if _uses_interest_tax_assumption(instrument_type) else 0.0
     return {
         "id": asset_id,
         "name": name,
@@ -145,7 +157,9 @@ def _asset_row(
         "retained_amount": round(value - deployable_amount, 2),
         "protected": extra.get("protected", False),
         "held_by": extra.get("held_by", "client"),
-        "rate": max(0.0, _number(extra.get("rate"))),
+        "rate": instrument_rate,
+        "assumed_tax_rate": assumed_tax_rate,
+        "post_tax_rate": round(instrument_rate * (1 - assumed_tax_rate), 6),
         "goal_id": extra.get("goal_id"),
         "maturity_years": max(0, _integer(extra.get("maturity_years"))),
         "lock_in_years": max(0, _integer(extra.get("lock_in_years"))),
@@ -296,6 +310,17 @@ def _normalized_income(income: Dict[str, Any], assets: List[Dict[str, Any]]) -> 
             if asset and asset["retained_amount"] <= 0:
                 exclusions.append(f"{row['name']} excluded because {asset['name']} is fully deployable")
                 continue
+            if asset and _uses_interest_tax_assumption(asset["instrument_type"]):
+                gross_amount = row["monthly_amount"]
+                row["gross_monthly_amount"] = gross_amount
+                row["assumed_tax_rate"] = ASSUMPTIONS.interest_tax_rate
+                row["monthly_amount"] = round(gross_amount * (1 - ASSUMPTIONS.interest_tax_rate), 2)
+            else:
+                row["gross_monthly_amount"] = row["monthly_amount"]
+                row["assumed_tax_rate"] = 0.0
+        else:
+            row["gross_monthly_amount"] = row["monthly_amount"]
+            row["assumed_tax_rate"] = 0.0
         included.append(row)
     for asset in assets:
         if asset["id"] in linked_assets or asset["retained_amount"] <= 0:
@@ -303,11 +328,15 @@ def _normalized_income(income: Dict[str, Any], assets: List[Dict[str, Any]]) -> 
         if asset["instrument_type"] not in {"scss", "fixed_deposit", "fd"}:
             continue
         rate = asset["rate"] or (ASSUMPTIONS.scss_rate if asset["instrument_type"] == "scss" else ASSUMPTIONS.fd_rate)
+        gross_monthly = round(asset["retained_amount"] * rate / 12, 2)
+        assumed_tax_rate = ASSUMPTIONS.interest_tax_rate
         included.append(
             {
                 "id": f"asset_income_{asset['id']}",
                 "name": f"{asset['name']} interest",
-                "monthly_amount": round(asset["retained_amount"] * rate / 12, 2),
+                "gross_monthly_amount": gross_monthly,
+                "monthly_amount": round(gross_monthly * (1 - assumed_tax_rate), 2),
+                "assumed_tax_rate": assumed_tax_rate,
                 "nature": "lifelong",
                 "years_remaining": 0,
                 "indexed": False,
@@ -456,7 +485,11 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     monthly_core = _money(expenses.get("monthly_core"))
     annual_items = _records(expenses.get("annual_items"))
-    annual_expenses = round(sum(_money(item.get("amount")) for item in annual_items), 2)
+    annual_item_expenses = round(sum(_money(item.get("amount")) for item in annual_items), 2)
+    annual_term_premium = _money(insurance.get("annual_term_premium"))
+    annual_motor_premium = _money(insurance.get("annual_motor_premium"))
+    annual_insurance_expenses = round(annual_term_premium + annual_motor_premium, 2)
+    annual_expenses = round(annual_item_expenses + annual_insurance_expenses, 2)
     dependent_cost = round(sum(_money(item.get("monthly_cost")) for item in dependents), 2)
     effective_monthly = round(monthly_core + annual_expenses / 12 + dependent_cost, 2)
     timeline: List[Dict[str, Any]] = []
@@ -479,15 +512,10 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
     current_gap = timeline[0]["monthly_gap"]
     design_gap = design_row["monthly_gap"]
 
-    premium_total = round(
-        _money(insurance.get("annual_health_premium"))
-        + _money(insurance.get("annual_term_premium"))
-        + _money(insurance.get("annual_motor_premium")),
-        2,
-    )
+    annual_health_premium = _money(insurance.get("annual_health_premium"))
     emergency_months = min(6, max(3, _integer(planning.get("emergency_months"), ASSUMPTIONS.emergency_months)))
     emergency_reserve = round(effective_monthly * emergency_months, 2)
-    premium_reserve = round(premium_total * ASSUMPTIONS.premium_reserve_multiple, 2)
+    premium_reserve = round(annual_health_premium * ASSUMPTIONS.premium_reserve_multiple, 2)
     opportunity_enabled = planning.get("opportunity_enabled", True) is not False
     opportunity_pct = _bounded(planning.get("opportunity_pct"), 0.0, 0.10, ASSUMPTIONS.opportunity_default_pct)
     if not opportunity_enabled:
@@ -574,7 +602,7 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
         flag("high", "term_missing", "Dependants are recorded but no term cover is available.", "Review whether term cover remains necessary for outstanding obligations.")
     retained_fd = sum(item["retained_amount"] for item in assets if item["instrument_type"] in {"fixed_deposit", "fd"})
     if retained_fd > 0:
-        flag("high", "fd_tax_review", "Retained fixed deposits may create annual tax drag.", "Review the category-level post-tax position with a qualified tax adviser.", retained_fd)
+        flag("high", "fd_tax_review", "Retained fixed-deposit income is reduced by the agreed 22% tax assumption.", "Review whether the retained FD remains appropriate after the assumed post-tax return.", retained_fd)
     sip_monthly = _money(assets_input.get("existing_sip_monthly"))
     sip_count = max(0, _integer(assets_input.get("existing_sip_count")))
     if sip_monthly > 0 or sip_count > 0:
@@ -614,12 +642,13 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
         "module": "retirement",
         "profile": {"client_name": str(profile.get("client_name") or "").strip(), "pan": str(profile.get("pan") or "").strip().upper(), "age": age, "planning_age": planning_age, "planning_years": planning_years, "will_in_place": profile.get("will_in_place") is True},
         "net_worth": {"holdings": assets, "total_assets": total_assets, "total_liabilities": total_liabilities, "net_worth": net_worth, "gross_deployable": gross_deployable, "settle_liabilities": settle_liabilities, "available_corpus": available_corpus},
-        "cashflow": {"monthly_core_expense": monthly_core, "annual_expenses": annual_expenses, "annual_items": annual_items, "dependent_cost": dependent_cost, "effective_monthly_expense": effective_monthly, "income_sources": income_rows, "income_exclusions": income_exclusions, "liabilities": liabilities, "current_gap": current_gap, "design_gap": design_gap, "design_gap_year": design_row["year"], "design_gap_age": design_row["age"], "timeline": timeline},
-        "reserves": {"emergency_months": emergency_months, "emergency_fund": emergency_reserve, "annual_premiums": premium_total, "premium_multiple": ASSUMPTIONS.premium_reserve_multiple, "premium_reserve": premium_reserve, "opportunity_pct": opportunity_pct, "opportunity_bucket": opportunity_bucket},
+        "cashflow": {"monthly_core_expense": monthly_core, "annual_item_expenses": annual_item_expenses, "annual_insurance_expenses": annual_insurance_expenses, "annual_expenses": annual_expenses, "annual_items": annual_items, "dependent_cost": dependent_cost, "effective_monthly_expense": effective_monthly, "income_sources": income_rows, "income_exclusions": income_exclusions, "liabilities": liabilities, "current_gap": current_gap, "design_gap": design_gap, "design_gap_year": design_row["year"], "design_gap_age": design_row["age"], "timeline": timeline},
+        "reserves": {"emergency_months": emergency_months, "emergency_fund": emergency_reserve, "annual_health_premium": annual_health_premium, "premium_multiple": ASSUMPTIONS.premium_reserve_multiple, "premium_reserve": premium_reserve, "opportunity_pct": opportunity_pct, "opportunity_bucket": opportunity_bucket},
         "goals": goals,
         "solver": {"status": status, "current_gap": current_gap, "design_gap": design_gap, "design_gap_year": design_row["year"], "annual_design_gap": annual_design_gap, "income_capacity": income_capacity, "natural_rate": round(natural_rate, 4) if natural_rate is not None else None, "minimum_feasible_rate": round(minimum_rate, 4) if minimum_rate is not None else None, "selected_rate": round(selected_rate, 4), "withdrawal_floor": floor, "withdrawal_cap": cap, "selected_feasible": selected_feasible, "income_bucket": selected_income_corpus, "monthly_swp": design_gap, "shortfall_at_selected_rate": selected_shortfall, "shortfall_at_cap": shortfall_at_cap, "legacy_residual": legacy_residual},
         "allocation": {"reconciliation": reconciliation, "by_risk": by_risk, "blended_return": blended_return, "allocated_total": round(allocated_total, 2)},
-        "protection": {"has_health_insurance": has_health, "health_cover": _money(insurance.get("health_cover")), "spouse_covered": insurance.get("spouse_covered") is True, "has_term_insurance": insurance.get("has_term_insurance") is True, "term_cover": _money(insurance.get("term_cover")), "annual_premiums": premium_total},
+        "protection": {"has_health_insurance": has_health, "health_cover": _money(insurance.get("health_cover")), "spouse_covered": insurance.get("spouse_covered") is True, "annual_health_premium": annual_health_premium, "has_term_insurance": insurance.get("has_term_insurance") is True, "term_cover": _money(insurance.get("term_cover")), "annual_term_premium": annual_term_premium, "annual_motor_premium": annual_motor_premium},
+        "decision": {"adviser_accepted": retirement_plan_is_accepted(payload)},
         "flags": flags,
         "actionables": actionables,
         "assumptions": {

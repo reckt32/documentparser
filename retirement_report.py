@@ -198,6 +198,7 @@ def _cover(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, Paragra
         ["PAN", profile["pan"]],
         ["Plan date", datetime.now().strftime("%d %B %Y")],
         ["Planning horizon", f"Age {profile['age']} to {profile['planning_age']}"],
+        ["Adviser decision", "Accepted for report generation" if analysis.get("decision", {}).get("adviser_accepted") else "Draft scenario"],
     ]
     story.append(_table(details, [47 * mm, 93 * mm], styles, header=False))
     story.append(Spacer(1, 9 * mm))
@@ -209,6 +210,7 @@ def _current_status(story: List[Any], analysis: Dict[str, Any], styles: Dict[str
     cash = analysis["cashflow"]
     solver = analysis["solver"]
     protection = analysis["protection"]
+    reserves = analysis["reserves"]
     _section(story, "01", "Current Status", styles)
     story.append(
         _metric_strip(
@@ -222,11 +224,13 @@ def _current_status(story: List[Any], analysis: Dict[str, Any], styles: Dict[str
         )
     )
     story.append(_p("Income Timeline", styles["h2"]))
-    income_rows = [["Source", "Monthly", "Nature", "Ends / indexation"]]
+    income_rows = [["Source", "Net monthly", "Nature", "Ends / tax basis"]]
     for source in cash["income_sources"]:
         end = "Lifelong" if source["nature"] == "lifelong" else f"{source['years_remaining']} yrs"
         if source["indexed"]:
             end += f"; indexed {_pct(source['index_rate'])}"
+        if source.get("assumed_tax_rate"):
+            end += f"; {_pct(source['assumed_tax_rate'], 0)} assumed tax"
         income_rows.append([source["name"], _inr(source["monthly_amount"]), _status_label(source["nature"]), end])
     if len(income_rows) == 1:
         income_rows.append(["No recorded income", _inr(0), "-", "-"])
@@ -235,10 +239,12 @@ def _current_status(story: List[Any], analysis: Dict[str, Any], styles: Dict[str
     status_rows = [
         ["Item", "Current position", "Planning treatment"],
         ["Core monthly expenses", _inr(cash["monthly_core_expense"]), "Inflated through planning age"],
-        ["Annual / periodic expenses", _inr(cash["annual_expenses"]), "Converted to monthly equivalent"],
+        ["Annual / periodic expenses", _inr(cash["annual_item_expenses"]), "Converted to monthly equivalent"],
+        ["Term and motor premiums", _inr(cash["annual_insurance_expenses"]), "Included as recurring annual expenses"],
         ["Dependent support", _inr(cash["dependent_cost"]), "Included in effective expense"],
-        ["Health insurance", _inr(protection["health_cover"]), "Adviser review; no automated suitability verdict"],
-        ["Annual insurance premiums", _inr(protection["annual_premiums"]), "Reserved at 10 times annual premium"],
+        ["Health insurance cover", _inr(protection["health_cover"]), f"Annual premium {_inr(protection['annual_health_premium'])}"],
+        ["Term insurance cover", _inr(protection["term_cover"]), f"Annual premium {_inr(protection['annual_term_premium'])}"],
+        ["Health premium reserve", _inr(reserves["premium_reserve"]), "10 times annual health premium only"],
         ["Selected SWP", _inr(solver["monthly_swp"]), f"{_pct(solver['selected_rate'])} from income bucket"],
     ]
     story.append(_table(status_rows, [55 * mm, 40 * mm, 79 * mm], styles))
@@ -275,7 +281,7 @@ def _goals(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, Paragra
     reserve_rows = [
         ["Bucket", "Rule", "Corpus", "Category"],
         ["Emergency fund", f"{reserves['emergency_months']} months of effective expense", _inr(reserves["emergency_fund"]), "No Risk"],
-        ["Insurance premium reserve", f"{reserves['premium_multiple']} x all annual premiums", _inr(reserves["premium_reserve"]), "No Risk"],
+        ["Health premium reserve", f"{reserves['premium_multiple']} x annual health premium", _inr(reserves["premium_reserve"]), "No Risk"],
         ["Market-opportunity bucket", f"{reserves['opportunity_pct'] * 100:.1f}% of available corpus", _inr(reserves["opportunity_bucket"]), "Low Risk"],
     ]
     story.append(_table(reserve_rows, [52 * mm, 64 * mm, 34 * mm, 24 * mm], styles))
@@ -300,7 +306,7 @@ def _investments(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, P
         )
     )
     story.append(_p("Existing Holding Classification", styles["h2"]))
-    holding_rows = [["Category", "Current value", "Deployable", "Retained", "Goal mapping"]]
+    holding_rows = [["Category", "Current", "Deployable", "Retained", "Goal", "Tax basis"]]
     for holding in net["holdings"]:
         holding_rows.append(
             [
@@ -309,9 +315,10 @@ def _investments(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, P
                 _inr(holding["deployable_amount"], True),
                 _inr(holding["retained_amount"], True),
                 holding.get("goal_id") or "Unassigned",
+                f"{_pct(holding['assumed_tax_rate'], 0)} on interest" if holding.get("assumed_tax_rate") else "No engine tax rule",
             ]
         )
-    story.append(_table(holding_rows, [52 * mm, 31 * mm, 31 * mm, 31 * mm, 29 * mm], styles))
+    story.append(_table(holding_rows, [40 * mm, 27 * mm, 27 * mm, 27 * mm, 25 * mm, 28 * mm], styles))
     story.append(_rich("Existing holdings are shown only by category. The adviser selects schemes and reviews whether each holding's risk profile remains appropriate; the engine makes no scheme-level judgement.", styles["body"]))
     story.append(_p("Settled Allocation by Risk Category", styles["h2"]))
     risk_rows = [["Category", "Fund type", "Amount", "Share", "Expected return"]]
@@ -414,7 +421,8 @@ def _assumptions(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, P
         ["Withdrawal floor", _pct(assumptions["withdrawal_floor"]), "Minimum selected planning rate"],
         ["Withdrawal cap", _pct(assumptions["withdrawal_cap"]), "Hard ceiling"],
         ["Emergency reserve", f"{assumptions['emergency_months']} months", "Liquid No Risk reserve"],
-        ["Premium reserve", f"{assumptions['premium_reserve_multiple']} times", "All recorded annual insurance premiums"],
+        ["Premium reserve", f"{assumptions['premium_reserve_multiple']} times", "Annual health premium only"],
+        ["SCSS / FD tax", _pct(assumptions["interest_tax_rate"], 0), "Gross interest multiplied by 78%"],
         ["Opportunity selection", _pct(assumptions["opportunity_selected_pct"]), "Adviser-adjustable from zero to 10%"],
         ["Goal inflation", "None", "Goal inputs are fixed nominal requirements"],
     ]
@@ -429,7 +437,7 @@ def _assumptions(story: List[Any], analysis: Dict[str, Any], styles: Dict[str, P
         "This is a deterministic planning output based only on the inputs and selected adviser decisions. It is not an account statement, tax opinion or guarantee.",
         "Risk labels are plain-English relative indicators within this portfolio and are not SEBI riskometer categories.",
         "No mutual fund scheme is selected or recommended. Exact schemes remain exclusively within the adviser's purview.",
-        "Tax flags are category-level prompts. Tax rules and individual eligibility must be checked with an appropriate professional before implementation.",
+        "The only tax calculation used is the agreed 22% assumption on SCSS and fixed-deposit interest. No personal tax liability is calculated.",
         "Insurance placement remains subject to underwriting, waiting periods, exclusions and full disclosure.",
         "Review this plan at least annually and whenever income, expenses, liabilities, health, family responsibilities or goals materially change.",
     ]

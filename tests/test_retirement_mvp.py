@@ -6,7 +6,12 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from retirement_engine import analyze_retirement, dashboard_action_items, validate_retirement_input
+from retirement_engine import (
+    analyze_retirement,
+    dashboard_action_items,
+    retirement_plan_is_accepted,
+    validate_retirement_input,
+)
 from retirement_report import generate_retirement_pdf
 
 
@@ -107,7 +112,7 @@ def test_deployable_fd_is_not_also_counted_as_income():
     ]
 
 
-def test_partial_asset_deployment_retains_linked_income():
+def test_partial_asset_deployment_retains_linked_income_after_tax():
     payload = retirement_payload()
     payload["assets"] = {
         "holdings": [
@@ -142,6 +147,10 @@ def test_partial_asset_deployment_retains_linked_income():
 
     names = [row["name"] for row in result["cashflow"]["income_sources"]]
     assert "Retained FD interest" in names
+    retained_income = next(row for row in result["cashflow"]["income_sources"] if row["name"] == "Retained FD interest")
+    assert retained_income["gross_monthly_amount"] == 6_250
+    assert retained_income["monthly_amount"] == 4_875
+    assert retained_income["assumed_tax_rate"] == 0.22
     split_fd = next(row for row in result["net_worth"]["holdings"] if row["id"] == "split_fd")
     assert split_fd["deployable_amount"] == 1_000_000
     assert split_fd["retained_amount"] == 1_000_000
@@ -162,6 +171,8 @@ def test_design_gap_uses_maximum_year_after_fixed_income_ends():
         ],
     }
     payload["expenses"] = {"monthly_core": 80_000, "annual_items": []}
+    payload["insurance"]["annual_term_premium"] = 0
+    payload["insurance"]["annual_motor_premium"] = 0
     payload["dependents"] = []
     payload["assets"] = {
         "holdings": [
@@ -197,12 +208,33 @@ def test_goal_amounts_are_not_inflated_and_follow_type_tenure_mapping():
     assert education["expected_return"] == 0.10
 
 
-def test_all_recorded_premiums_receive_a_ten_times_reserve():
+def test_only_health_premium_receives_reserve_and_other_premiums_are_expenses():
     result = analyze_retirement(retirement_payload())
 
-    assert result["reserves"]["annual_premiums"] == 80_000
-    assert result["reserves"]["premium_reserve"] == 800_000
+    assert result["reserves"]["annual_health_premium"] == 45_000
+    assert result["reserves"]["premium_reserve"] == 450_000
     assert result["reserves"]["premium_multiple"] == 10
+    assert result["cashflow"]["annual_expenses"] == 215_000
+    assert result["cashflow"]["annual_insurance_expenses"] == 35_000
+    assert result["cashflow"]["effective_monthly_expense"] == pytest.approx(102_916.67, abs=0.01)
+
+
+def test_retained_scss_interest_uses_flat_twenty_two_percent_tax_assumption():
+    result = analyze_retirement(retirement_payload())
+    scss = next(row for row in result["cashflow"]["income_sources"] if row["name"] == "SCSS interest")
+
+    assert scss["gross_monthly_amount"] == 20_500
+    assert scss["monthly_amount"] == 15_990
+    assert scss["assumed_tax_rate"] == 0.22
+
+
+def test_adviser_acceptance_is_explicit():
+    payload = retirement_payload()
+    assert retirement_plan_is_accepted(payload) is False
+
+    payload["planning"]["adviser_accepted"] = True
+    assert retirement_plan_is_accepted(payload) is True
+    assert analyze_retirement(payload)["decision"]["adviser_accepted"] is True
 
 
 def test_exact_rate_solver_and_selected_rate_create_legacy_residual():
@@ -277,7 +309,9 @@ def test_validation_reports_stable_field_paths():
 
 
 def test_retirement_pdf_is_eight_readable_pages(tmp_path):
-    result = analyze_retirement(retirement_payload())
+    payload = retirement_payload()
+    payload["planning"]["adviser_accepted"] = True
+    result = analyze_retirement(payload)
     output = tmp_path / "retirement-plan.pdf"
     generate_retirement_pdf(result, str(output))
 
@@ -288,5 +322,9 @@ def test_retirement_pdf_is_eight_readable_pages(tmp_path):
     assert "Retirement Advisory Plan" in text
     assert "Current Status" in text
     assert "Corpus Reconciliation" in text
+    assert "Accepted for report generation" in text
+    assert "22% assumed tax" in text
+    assert "Term insurance cover" in text
+    assert "10 times annual health premium" in text
     assert "Viability Score" not in text
     assert "SWP Adequacy Spectrum" not in text

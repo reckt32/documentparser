@@ -77,7 +77,7 @@ from db import (
     get_retirement_questionnaire,
     get_latest_retirement_questionnaire,
 )
-from retirement_engine import analyze_retirement, dashboard_action_items, validate_retirement_input
+from retirement_engine import analyze_retirement, dashboard_action_items, retirement_plan_is_accepted, validate_retirement_input
 from retirement_report import generate_retirement_pdf
 
 # Auth and Payment modules
@@ -10209,6 +10209,14 @@ def retirement_report_generate():
     validation_errors = validate_retirement_input(payload)
     if validation_errors:
         return jsonify({"error": "validation_failed", "fields": validation_errors}), 400
+
+    if not retirement_plan_is_accepted(payload):
+        return jsonify(
+            {
+                "error": "plan_not_accepted",
+                "message": "The adviser must review and accept the settled plan before generating the report.",
+            }
+        ), 409
 
     user_id = _retirement_user_id()
     credits = get_user_credits(user_id)
