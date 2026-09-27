@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Tuple
 
 @dataclass(frozen=True)
 class RetirementAssumptions:
-    version: str = "retirement_solver_v5_2026_09"
+    version: str = "retirement_solver_v6_2026_09"
     planning_age: int = 85
     expense_inflation: float = 0.06
     pension_indexation: float = 0.06
@@ -258,6 +258,7 @@ def _normalized_income(income: Dict[str, Any], assets: List[Dict[str, Any]]) -> 
     rows: List[Dict[str, Any]] = []
     exclusions: List[str] = []
     fixed_sources = (
+        ("client_pension", "Client pension", False),
         ("government_pension", "Government pension", True),
         ("employer_pension", "Employer pension", False),
         ("family_pension", "Family pension", False),

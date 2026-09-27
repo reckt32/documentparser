@@ -307,6 +307,29 @@ def test_spouse_income_is_separate_from_client_threshold():
     assert sources["spouse_pension"]["monthly_amount"] == 100_000
 
 
+def test_simplified_client_pension_field_is_supported():
+    payload = retirement_payload()
+    payload["assets"] = {
+        "holdings": [
+            {
+                "id": "proceeds",
+                "name": "Retirement proceeds",
+                "instrument_type": "retirement_proceeds",
+                "current_value": 30_000_000,
+                "deployable_amount": 30_000_000,
+            }
+        ]
+    }
+    payload["income"] = {"client_pension": 75_000}
+
+    result = analyze_retirement(payload)
+    pension = result["cashflow"]["income_sources"][0]
+
+    assert pension["id"] == "client_pension"
+    assert pension["name"] == "Client pension"
+    assert pension["monthly_amount"] == 75_000
+
+
 def test_adviser_acceptance_is_explicit():
     payload = retirement_payload()
     assert retirement_plan_is_accepted(payload) is False
