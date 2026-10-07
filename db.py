@@ -1102,9 +1102,11 @@ def get_aggregate_metrics_for_period(
           COALESCE(SUM(value_num), 0) AS total_identified_value,
           COALESCE(SUM(CASE WHEN final_status = 'CONVERTED' THEN value_num ELSE 0 END), 0) AS converted_value,
           COALESCE(SUM(CASE WHEN final_status = 'CONVERTED' THEN 1 ELSE 0 END), 0) AS converted_count,
-          COALESCE(SUM(CASE WHEN final_status = 'PENDING' THEN value_num ELSE 0 END), 0) AS pending_value
+          COALESCE(SUM(CASE WHEN final_status = 'PENDING' THEN value_num ELSE 0 END), 0) AS pending_value,
+          COALESCE(SUM(CASE WHEN final_status = 'PENDING' THEN 1 ELSE 0 END), 0) AS pending_count
         FROM aggregate_actions
         WHERE mfd_firebase_uid = ?
+          AND final_status IN ('PENDING', 'CONVERTED')
           AND report_generated_at >= ?
           AND report_generated_at <  ?
         """,
@@ -1116,9 +1118,18 @@ def get_aggregate_metrics_for_period(
         "converted_value": 0,
         "converted_count": 0,
         "pending_value": 0,
+        "pending_count": 0,
     }
-    total_value = float(summary.get("total_identified_value") or 0)
     converted_value = float(summary.get("converted_value") or 0)
+    pending_value = float(summary.get("pending_value") or 0)
+    converted_count = int(summary.get("converted_count") or 0)
+    pending_count = int(summary.get("pending_count") or 0)
+    # Keep the headline mathematically tied to its two visible buckets. Older
+    # versions counted SUPERSEDED/FAILED rows as identified while excluding
+    # them from both Converted and Pending.
+    total_value = converted_value + pending_value
+    summary["total_identified_value"] = total_value
+    summary["total_identified_count"] = converted_count + pending_count
     summary["conversion_pct"] = (
         round((converted_value / total_value) * 100.0, 2) if total_value > 0 else 0.0
     )

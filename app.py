@@ -6295,6 +6295,45 @@ def _portfolio_equity(portfolio):
     return _num(portfolio.get("equity_pct") or portfolio.get("equity") or portfolio.get("equity_percentage"), 0)
 
 
+def _portfolio_value(portfolio, lifestyle=None):
+    """Return the normalized portfolio corpus used on every report page."""
+    portfolio = _as_dict(portfolio)
+    lifestyle = _as_dict(lifestyle)
+    for key in ("total_value", "current_value", "total"):
+        value = _num(portfolio.get(key), 0)
+        if value > 0:
+            return value
+    return _num(lifestyle.get("manual_corpus"), 0)
+
+
+def _emergency_fund_metrics(client_facts):
+    """Preserve the distinction between an explicit zero and missing data."""
+    income = _as_dict(_as_dict(client_facts).get("income"))
+    lifestyle = _as_dict(_as_dict(client_facts).get("lifestyle"))
+    expenses = _num(income.get("monthlyExpenses"), 0)
+    raw_current = lifestyle.get("emergency_fund")
+    known = raw_current not in (None, "")
+    current = _num(raw_current, 0) if known else 0.0
+    months = (current / expenses) if known and expenses > 0 else None
+    target = expenses * 6
+    return {
+        "known": known,
+        "current": current,
+        "months": months,
+        "target": target,
+        "gap": max(0, target - current),
+    }
+
+
+def _priority_monthly_amount(allocation_output, priority_name):
+    """Read one premium from the allocation engine's canonical split."""
+    for item in _as_list(_as_dict(allocation_output).get("priority_breakdown")):
+        item = _as_dict(item)
+        if str(item.get("name") or "").strip().lower() == priority_name.strip().lower():
+            return _num(item.get("monthly_amount"), 0)
+    return 0.0
+
+
 def _display_monthly_surplus(client_facts):
     income = client_facts.get("income") or {}
     bank = client_facts.get("bank") or {}
@@ -6340,7 +6379,7 @@ def draw_tag(canvas, x, y, label, font_size=8, bg_tint=False):
     rect_h = font_size + pad_y * 2
     colour_map = {
         'IMMEDIATE': '#C0392B', 'CRITICAL': '#C0392B', 'UNDERINSURED': '#C0392B', 'URGENT': '#C0392B', 'INSUFFICIENT': '#C0392B',
-        'STRESSED': '#E67E22', 'NEEDS ATTENTION': '#E67E22', 'ATTENTION': '#E67E22', 'ASSESS & IMPROVE': '#E67E22', 'MODERATE': '#E67E22', 'GAP': '#E67E22', 'LOW': '#E67E22', 'UPGRADE RECOMMENDED': '#E67E22', 'REVIEW': '#E67E22', 'AVERAGE': '#E67E22', 'POOR': '#E67E22',
+        'STRESSED': '#E67E22', 'NEEDS ATTENTION': '#E67E22', 'ATTENTION': '#E67E22', 'ASSESS & IMPROVE': '#E67E22', 'MODERATE': '#E67E22', 'GAP': '#E67E22', 'LOW': '#E67E22', 'UPGRADE': '#E67E22', 'UPGRADE RECOMMENDED': '#E67E22', 'REVIEW': '#E67E22', 'AVERAGE': '#E67E22', 'POOR': '#E67E22',
         'GOOD': '#27AE60', 'MAINTAIN': '#27AE60', 'WELL OPTIMISED': '#27AE60', 'ADEQUATE': '#27AE60', 'HEALTHY': '#27AE60', 'FUNDED': '#27AE60', 'COMFORTABLE': '#27AE60', 'EXCELLENT': '#27AE60',
         'FEASIBLE': '#2A557E', 'OVER-INSURED': '#2A557E', 'NOT COVERED': '#C0392B', 'PENDING': '#C0392B', 'PARTIAL': '#E67E22',
     }
@@ -6809,6 +6848,9 @@ def _allocation_output(client_facts):
     out["goal_total_gap"] = round(total_gap, 0)
     out["goal_total_coverage"] = round(total_cov, 0)
     out["goal_savings_increase"] = round(total_savings_increase, 0)
+    # Existing SIP + newly allocated coverage is the amount the roadmap calls
+    # "Deploy". Store it once so the cash-flow and roadmap pages cannot drift.
+    out["goal_total_deployment"] = round(existing + total_cov, 0)
     # Total required SIP across all rows — the "requirement" the cashflow page
     # compares against (combined_shortfall is the unmet remainder, not the need).
     out["goal_total_required"] = round(sum(_num(r.get("ideal_sip"), 0) for r in rows), 0)
@@ -6950,6 +6992,7 @@ def build_page_snapshot(client_facts, allocation_output):
     expenses = _num(income.get("monthlyExpenses"), 0)
     monthly_surplus = _display_monthly_surplus(client_facts)
     ef_target = expenses * 6
+    ef_metrics = _emergency_fund_metrics(client_facts)
     s_body = styles["table"]
     green = colors.HexColor("#1FA55B")
     red = colors.HexColor("#CB3E2D")
@@ -6992,13 +7035,21 @@ def build_page_snapshot(client_facts, allocation_output):
     life_ok = life_status in ("ADEQUATE", "OVER-INSURED")
     health_ok = health_status in ("ADEQUATE", "OVER-INSURED")
     life_tag = life_status if life_ok else _urgency(_ihs_component_score(analysis, "protection"))
+    health_display_tag = "UPGRADE" if health_status == "UPGRADE RECOMMENDED" else health_status
+    equity = _portfolio_equity(portfolio)
+    band_min, band_max = _recommended_equity_band(ar)
+    equity_in_band = band_min <= equity <= band_max
+    equity_color = green if equity_in_band else red
+    equity_tag = "GOOD" if equity_in_band else _urgency(_ihs_component_score(analysis, "portfolio_health"))
+    emergency_text = "Unknown" if not ef_metrics["known"] else f"{ef_metrics['months'] or 0:.1f} months"
+    emergency_tag = "ASSESS" if not ef_metrics["known"] else (analysis.get("liquidity") or "-")
 
     rows = [["AREA", "CURRENT", "IDEAL", "PRIORITY"]]
     rows += [
         ["Life Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("lifeCover"))), green if life_ok else red), ctext(kpi_fmt(_fmt_rs(diag.get("requiredLifeCover"))), green), _tag(life_tag)],
-        ["Health Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("healthCover"))), green if health_ok else orange), ctext(kpi_fmt(_fmt_rs(rec_health)), green), _tag(health_status)],
-        ["Emergency Fund", ctext(f"{_num(diag.get('liquidityMonths'), 0):.1f} months", blue), ctext(f"6 months expenses ({kpi_fmt(_fmt_rs(ef_target))})", green), _tag(analysis.get("liquidity") or "-")],
-        ["Equity Allocation", ctext(f"{_portfolio_equity(portfolio):.0f}%", red), ctext(_recommended_band_text(ar), green), _tag("HIGH")],
+        ["Health Cover", ctext(kpi_fmt(_fmt_rs(insurance.get("healthCover"))), green if health_ok else orange), ctext(kpi_fmt(_fmt_rs(rec_health)), green), _tag(health_display_tag)],
+        ["Emergency Fund", ctext(emergency_text, orange if not ef_metrics["known"] else blue), ctext(f"6 months expenses ({kpi_fmt(_fmt_rs(ef_target))})", green), _tag(emergency_tag)],
+        ["Equity Allocation", ctext(f"{equity:.0f}%", equity_color), ctext(_recommended_band_text(ar), green), _tag(equity_tag)],
         ["EMI / Income", ctext(f"{_num(diag.get('emiPct'), 0):.1f}%", blue), ctext("<40%", green), _tag(analysis.get("debtStress") or "-")],
         ["Active SIP", ctext(active_sip_text, active_sip_color), ctext(f"Need {kpi_fmt(_fmt_rs(allocation_output.get('goal_total_required'), False))}/mo", green), _tag("HIGH" if active_sip <= 0 else "GOOD")],
         ["Goals Funded", ctext(f"{funded_goals} of {total_goals}", funded_color), ctext(f"{total_goals} of {total_goals}", green), _tag(goals_tag)],
@@ -7024,9 +7075,7 @@ def build_page_snapshot(client_facts, allocation_output):
     savings_rate = (monthly_surplus / monthly_inc * 100) if monthly_inc > 0 else 0
 
     # Portfolio value: CAS data first, then manual_corpus fallback
-    portfolio_val = _num(portfolio.get("total_value") or portfolio.get("current_value"), 0)
-    if portfolio_val <= 0:
-        portfolio_val = _num((client_facts.get("lifestyle") or {}).get("manual_corpus"), 0)
+    portfolio_val = _portfolio_value(portfolio, client_facts.get("lifestyle"))
     equity_pct = _portfolio_equity(portfolio)
     portfolio_note = f"{equity_pct:.0f}% equity" if portfolio_val > 0 else "No data"
 
@@ -7108,13 +7157,31 @@ def build_page_executive_summary(client_facts, allocation_output, narratives=Non
     styles = _report_styles()
     analysis = client_facts.get("analysis") or {}
     breakdown = _ihs_breakdown(analysis)
+    portfolio = _as_dict(client_facts.get("portfolio"))
+    ar = _as_dict(analysis.get("advancedRisk"))
+    equity = _portfolio_equity(portfolio)
+    band_min, band_max = _recommended_equity_band(ar)
+    ef_metrics = _emergency_fund_metrics(client_facts)
+    emi_pct = _num(_as_dict(analysis.get("_diagnostics")).get("emiPct"), 0)
     why = {
-        "portfolio_health": "Equity allocation far outside your risk band",
-        "goal_readiness": "SIP shortfall across all financial goals",
-        "protection": "Life cover gap is a critical family risk",
-        "liquidity": "Emergency fund unknown or insufficient",
-        "tax_efficiency": "Potential regime saving not yet captured",
-        "debt_management": "EMI/income ratio vs 40% benchmark",
+        "portfolio_health": (
+            f"{equity:.0f}% equity is within the recommended {band_min:.0f}-{band_max:.0f}% band"
+            if band_min <= equity <= band_max else
+            f"{equity:.0f}% equity is outside the recommended {band_min:.0f}-{band_max:.0f}% band"
+        ),
+        "goal_readiness": (
+            "Current SIPs and available surplus cover the goal plan"
+            if _num(allocation_output.get("goal_savings_increase"), 0) <= 0 else
+            f"Additional monthly savings of {_fmt_rs(allocation_output.get('goal_savings_increase'), False)} are needed"
+        ),
+        "protection": f"Protection status: {_format_status(analysis.get('insuranceGap') or 'Unknown')}",
+        "liquidity": (
+            "Emergency-fund amount has not been provided"
+            if not ef_metrics["known"] else
+            f"Emergency fund covers {(ef_metrics['months'] or 0):.1f} months versus the 6-month target"
+        ),
+        "tax_efficiency": "Tax-efficiency score reflects the available filing and deduction data",
+        "debt_management": f"EMIs use {emi_pct:.1f}% of monthly income versus the 40% benchmark",
     }
     canonical = [
         ("portfolio_health", "Portfolio Health"),
@@ -7147,6 +7214,11 @@ def build_page_executive_summary(client_facts, allocation_output, narratives=Non
     else:
         overall_note = "All six dimensions healthy — maintain discipline and review quarterly"
     priority_rows.append([Paragraph("<b>Overall Score</b>", styles["table"]), Paragraph(f"<b><font color='{overall_color}'>{overall}/100</font></b>", styles["table"]), _tag(overall_label.title() if overall_label != "-" else "-", bg_tint=True), overall_note])
+    priority_table = _styled_table(priority_rows, [130, 65, 105, 200], style_type="light")
+    priority_table.setStyle(TableStyle([
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
 
     blocks = [
         Paragraph("SIX CRITICAL DIMENSIONS", ParagraphStyle("six_dim", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=4)),
@@ -7155,11 +7227,11 @@ def build_page_executive_summary(client_facts, allocation_output, narratives=Non
         DrawingFlowable(lambda c, x, y, rows=dimension_rows: _draw_dimension_score_bars(c, 0, 140, 500, rows), 500, 160),
         Spacer(1, 12),
         Paragraph("Color key: <font color='#C0392B'>■</font> Critical &lt;40 &nbsp;&nbsp;&middot;&nbsp;&nbsp; <font color='#E67E22'>■</font> Needs Attention 40-74 &nbsp;&nbsp;&middot;&nbsp;&nbsp; <font color='#27AE60'>■</font> Good &ge;75", ParagraphStyle("ckey", parent=styles["small"], textColor=colors.HexColor("#888888"))),
-        Spacer(1, 24),
+        Spacer(1, 12),
         Paragraph("PRIORITY RANKING", ParagraphStyle("pr", parent=styles["label"], textColor=colors.HexColor("#A8813C"))),
         Spacer(1, 8),
-        _styled_table(priority_rows, [130, 65, 105, 200], style_type="light"),
-        Spacer(1, 16),
+        priority_table,
+        Spacer(1, 6),
     ]
     logic_box = Table(
         [[
@@ -7169,7 +7241,7 @@ def build_page_executive_summary(client_facts, allocation_output, narratives=Non
                 "Score 40-74 → <b>HIGH</b>  ·  "
                 "Score ≥75 → <b>GOOD</b><br/>"
                 "Protection can be overridden to IMMEDIATE when family risk is critical.",
-                styles["body"],
+                ParagraphStyle("urgency_logic", parent=styles["small"], fontSize=7.5, leading=9),
             )
         ]],
         colWidths=[500],
@@ -7177,8 +7249,8 @@ def build_page_executive_summary(client_facts, allocation_output, narratives=Non
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F5F0E8")),
             ("LEFTPADDING", (0, 0), (-1, -1), 16),
             ("RIGHTPADDING", (0, 0), (-1, -1), 16),
-            ("TOPPADDING", (0, 0), (-1, -1), 12),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ]),
     )
     blocks.append(logic_box)
@@ -7202,7 +7274,9 @@ def build_page_protection(client_facts, allocation_output):
         (client_facts.get("income") or {}).get("annualIncome"), (client_facts.get("personal") or {}).get("dependents_count"))
     health_tag = str(allocation_output.get("health_cover_status") or health_cover_status(current_health, rec_health)).upper()
     health_ok = health_tag in ("ADEQUATE", "OVER-INSURED")
-    est_premium = _num(allocation_output.get("insurance_provision"), 0)
+    # This card is specifically for life cover; the combined provision also
+    # contains health insurance and is shown only on the cash-flow page.
+    est_premium = _priority_monthly_amount(allocation_output, "Term Insurance")
     life_gap_pct = (gap / required_life * 100) if required_life > 0 else 0
     life_surplus = max(0, current_life - required_life)
     life_header = Table(
@@ -7264,7 +7338,7 @@ def build_page_protection(client_facts, allocation_output):
     ]
     health_header = Table(
         [[Paragraph("HEALTH INSURANCE", ParagraphStyle("hi", parent=styles["label"], textColor=colors.HexColor("#27AE60"))),
-          TagFlowable(health_tag, bg_tint=True)]],
+          TagFlowable("UPGRADE" if health_tag == "UPGRADE RECOMMENDED" else health_tag, bg_tint=True)]],
         colWidths=[110, 110],
         style=TableStyle([
             ("ALIGN", (1, 0), (1, 0), "RIGHT"), 
@@ -7382,6 +7456,7 @@ def build_page_portfolio_debt(client_facts, allocation_output):
     current_eq = _portfolio_equity(portfolio)
     target_eq = _recommended_band_mid(ar)
     b_min, b_max = _recommended_equity_band(ar)
+    equity_in_band = b_min <= current_eq <= b_max
     
     current_color = "#C0392B" if (current_eq < b_min or current_eq > b_max) else "#27AE60"
     target_color = "#27AE60"
@@ -7408,7 +7483,7 @@ def build_page_portfolio_debt(client_facts, allocation_output):
         Spacer(1, 4),
         Paragraph(f"<font color='{current_color}'>● <b>{int(current_eq)}% Equity</b></font> &nbsp;&nbsp; <font color='#8CA2B5'>● {100-int(current_eq)}% Debt</font>", ParagraphStyle("sub1", parent=styles["body"], alignment=TA_CENTER)),
         Spacer(1, 2),
-        Paragraph(f"Portfolio {_fmt_rs(portfolio.get('total'), False)} · Gains {_fmt_rs(portfolio.get('unrealised_gains'), False)}", ParagraphStyle("sub2", parent=styles["small"], alignment=TA_CENTER, textColor=colors.HexColor("#7F8C8D"))),
+        Paragraph(f"Portfolio {_fmt_rs(_portfolio_value(portfolio, client_facts.get('lifestyle')), False)} · Gains {_fmt_rs(portfolio.get('unrealised_gains'), False)}", ParagraphStyle("sub2", parent=styles["small"], alignment=TA_CENTER, textColor=colors.HexColor("#7F8C8D"))),
     ]
 
     right_block = [
@@ -7425,7 +7500,7 @@ def build_page_portfolio_debt(client_facts, allocation_output):
         Spacer(1, 30),
         CanvasBlock(40, 30, lambda c,x,y,w,h: [c.setStrokeColorRGB(0.8, 0.7, 0.5), c.setLineWidth(1), c.line(x, y+15, x+w, y+15), c.setFillColorRGB(0.8, 0.7, 0.5), c.setFont("Helvetica-Bold", 14), c.drawCentredString(x+w/2, y, "→")]),
         Spacer(1, 2),
-        Paragraph("REBALANCE", ParagraphStyle("reb", parent=styles["label"], alignment=TA_CENTER, textColor=colors.HexColor("#A8813C"))),
+        Paragraph("MAINTAIN" if equity_in_band else "REBALANCE", ParagraphStyle("reb", parent=styles["label"], alignment=TA_CENTER, textColor=colors.HexColor("#27AE60" if equity_in_band else "#A8813C"))),
     ]
 
     gauge_card = Table(
@@ -7483,8 +7558,8 @@ def build_page_portfolio_debt(client_facts, allocation_output):
             ("ROUNDEDCORNERS", [8, 8, 8, 8]),
             ("LEFTPADDING", (0, 0), (-1, -1), 16),
             ("RIGHTPADDING", (0, 0), (-1, -1), 16),
-            ("TOPPADDING", (0, 0), (-1, -1), 14),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
         ])
     )
 
@@ -7497,6 +7572,10 @@ def build_page_portfolio_debt(client_facts, allocation_output):
         ["Debt Score", Paragraph(f"<font color='#27AE60'><b>{int(_num(debt_score, 0))}/100</b></font>", styles["table"]) if _num(debt_score, 0) >= 75 else Paragraph(f"<font color='#C0392B'><b>{int(_num(debt_score, 0))}/100</b></font>", styles["table"]), "≥75 = Good", TagFlowable("GOOD", bg_tint=True) if _num(debt_score, 0) >= 75 else TagFlowable("NEEDS ATTENTION", bg_tint=True), "Well managed" if _num(debt_score, 0) >= 75 else "Needs attention"],
     ]
     debt_table = _styled_table(debt_rows, [110, 85, 95, 100, 110], style_type="light")
+    debt_table.setStyle(TableStyle([
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
 
     return [
         Paragraph("PORTFOLIO REBALANCING", ParagraphStyle("pga", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
@@ -7505,7 +7584,7 @@ def build_page_portfolio_debt(client_facts, allocation_output):
         gauge_card,
         Spacer(1, 6),
         control_card,
-        Spacer(1, 10),
+        Spacer(1, 6),
         Paragraph("DEBT MANAGEMENT", ParagraphStyle("pga", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=2)),
         Spacer(1, 2),
         debt_table
@@ -7524,11 +7603,14 @@ def build_page_liquidity(client_facts, allocation_output):
 
     # Current emergency fund from the questionnaire (Rs.). When provided, show the
     # actual funded status instead of a blanket "Unknown".
-    ef_current = _num((client_facts.get("lifestyle") or {}).get("emergency_fund"), 0)
-    ef_months = (ef_current / expenses) if expenses > 0 else 0
-    ef_gap = max(0, target - ef_current)
-    if ef_current <= 0:
+    ef_metrics = _emergency_fund_metrics(client_facts)
+    ef_current = ef_metrics["current"]
+    ef_months = ef_metrics["months"]
+    ef_gap = ef_metrics["gap"]
+    if not ef_metrics["known"]:
         status_markup = "<font color='#E67E22'><b>Unknown — assess now</b></font>"
+    elif ef_current <= 0:
+        status_markup = "<font color='#C0392B'><b>0.0 months · not funded</b></font>"
     elif ef_current >= target and target > 0:
         status_markup = f"<font color='#27AE60'><b>Fully funded · {_fmt_rs(ef_current, False)} (~{ef_months:.1f} months)</b></font>"
     else:
@@ -7576,7 +7658,7 @@ def build_page_liquidity(client_facts, allocation_output):
     )
     
     # Right Card: Strategy — build the *remaining* gap when some fund already exists.
-    build_base = ef_gap if ef_current > 0 else target
+    build_base = ef_gap if ef_metrics["known"] else target
     strategy = [
         ["OPTION", "DURATION", "MONTHLY", "BEST FOR"],
         [Paragraph("<font color='#27AE60'><b>A — Fast</b></font>", styles["body"]), "12 months", Paragraph(f"<font color='#E67E22'><b>{_fmt_rs(build_base / 12, False)}</b></font>", styles["body"]), Paragraph("<font color='#4A5568'>High surplus period</font>", styles["small"])],
@@ -7923,15 +8005,15 @@ def build_page_cashflow_sip(client_facts, allocation_output, narratives=None):
     monthly_income = _num(income.get("annualIncome"), 0) / 12
     monthly_surplus = _display_monthly_surplus(client_facts)
     total_req = _num(allocation_output.get("goal_total_required"), 0) or _num(allocation_output.get("combined_shortfall"), 0)
-    available = _num(allocation_output.get("available_for_goals"), 0)
-    coverage = available / total_req * 100 if total_req else 100
+    goal_plan = _num(allocation_output.get("goal_total_deployment"), 0)
+    coverage = goal_plan / total_req * 100 if total_req else 100
     
     cashflow_kpis = [
         {"label": "Monthly Income", "value": _fmt_rs(monthly_income)},
         {"label": "Monthly Expenses", "value": _fmt_rs(income.get("monthlyExpenses"))},
         {"label": "Monthly Surplus", "value": _fmt_rs(monthly_surplus)},
-        {"label": "Insurance Provision", "value": _fmt_rs(allocation_output.get("insurance_provision"), False)},
-        {"label": "Available for Goals", "value": _fmt_rs(available, False)},
+        {"label": "Term + Health", "value": _fmt_rs(allocation_output.get("insurance_provision"), False)},
+        {"label": "Total Goal SIP Plan", "value": _fmt_rs(goal_plan, False)},
     ]
     
     cf_label = Paragraph("MONTHLY CASH FLOW", ParagraphStyle("mcf", parent=styles["label"], textColor=colors.HexColor("#A8813C"), spaceAfter=12))
@@ -8201,10 +8283,7 @@ def build_page_action_plan(client_facts, allocation_output):
     # coverage (capped at the goal's requirement) — the same numbers as the Goals
     # and Cash Flow pages, never an equal split that overshoots a small goal.
     p2_goal_rows = _as_list(allocation_output.get("goal_sip_table"))[:5]
-    total_deploy = sum(
-        _num(_as_dict(g).get("current_sip"), 0) + _num(_as_dict(g).get("coverage_used"), 0)
-        for g in p2_goal_rows
-    )
+    total_deploy = _num(allocation_output.get("goal_total_deployment"), 0)
     has_running_sip = any(_num(_as_dict(g).get("current_sip"), 0) > 0 for g in p2_goal_rows)
     if has_running_sip:
         # ALLOC includes running SIPs, which may legitimately exceed a goal's
