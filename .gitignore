@@ -25,3 +25,5 @@ docs/
 serviceAccountKey.json
 *-firebase-adminsdk-*.json
 firebase-*.json
+# Test / tooling caches
+.pytest_cache/
