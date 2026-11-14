@@ -27,3 +27,7 @@ serviceAccountKey.json
 firebase-*.json
 # Test / tooling caches
 .pytest_cache/
+
+# Runtime data (SQLite DB, cached LLM report sections)
+output/index.db
+output/sections/
