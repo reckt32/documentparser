@@ -16,16 +16,16 @@ import os
 
 os.environ.setdefault("OPENAI_API_KEY", "test")
 
-from assumptions import (
+from backend.assumptions import (
     recommended_health_cover,
     health_cover_status,
     life_cover_status,
 )
-from app import (
+from backend.analysis.health import analyze_financial_health
+from backend.analysis.metrics import (
     _band_midpoint,
     declared_savings_percent,
     effective_savings_percent,
-    analyze_financial_health,
 )
 
 

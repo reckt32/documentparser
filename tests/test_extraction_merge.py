@@ -9,7 +9,7 @@ These pin the behavior the questionnaire prefill depends on:
   - build_prefill_from_insights computes monthly_emi / covers / name from
     metadata shaped exactly like the upload route writes it
 
-The LLM is faked (app.client is monkeypatched) so every case is reproducible.
+The LLM is faked (the extractors' OpenAI client is monkeypatched) so every case is reproducible.
 """
 
 import json
@@ -22,15 +22,12 @@ os.environ.setdefault("OPENAI_API_KEY", "test")
 
 import pytest
 
-import app as app_module
-from app import (
-    extract_bank_statement_hybrid,
-    extract_insurance_hybrid,
-    build_prefill_from_insights,
-    _select_text_for_llm,
-    _validate_pdf_file,
-)
-from db import (
+from backend.extraction import bank as bank_module, insurance as insurance_module
+from backend.extraction.bank import extract_bank_statement_hybrid
+from backend.extraction.insights import build_prefill_from_insights
+from backend.extraction.insurance import extract_insurance_hybrid
+from backend.extraction.pdf_text import _select_text_for_llm, _validate_pdf_file
+from backend.db import (
     create_questionnaire,
     upsert_document,
     link_questionnaire_upload,
@@ -39,7 +36,7 @@ from db import (
 
 
 def _fake_llm(payload: dict):
-    """A stand-in for app.client returning a fixed JSON chat completion."""
+    """A stand-in for the OpenAI client returning a fixed JSON chat completion."""
     def create(**kwargs):
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))],
@@ -98,7 +95,7 @@ BANK_LLM_PAYLOAD = {
 
 
 def test_bank_deterministic_wins_llm_fills_gaps(monkeypatch):
-    monkeypatch.setattr(app_module, "client", _fake_llm(BANK_LLM_PAYLOAD))
+    monkeypatch.setattr(bank_module, "client", _fake_llm(BANK_LLM_PAYLOAD))
     data = extract_bank_statement_hybrid(BANK_TEXT, transactions_payload=TX_PAYLOAD)
 
     # Regex identifiers immune to LLM clobbering
@@ -125,7 +122,7 @@ def test_bank_deterministic_wins_llm_fills_gaps(monkeypatch):
 
 
 def test_bank_llm_passthrough_when_no_structured_txns(monkeypatch):
-    monkeypatch.setattr(app_module, "client", _fake_llm(BANK_LLM_PAYLOAD))
+    monkeypatch.setattr(bank_module, "client", _fake_llm(BANK_LLM_PAYLOAD))
     data = extract_bank_statement_hybrid(BANK_TEXT, transactions_payload={"transactions": [], "totals": {}})
     # Fallback contract: with no structured rows, LLM recurring output is untouched
     assert data["recurring_debits"] == BANK_LLM_PAYLOAD["recurring_debits"]
@@ -135,7 +132,7 @@ def test_bank_llm_failure_still_returns_deterministic_fields(monkeypatch):
     def boom(**kwargs):
         raise RuntimeError("context length exceeded")
     monkeypatch.setattr(
-        app_module, "client",
+        bank_module, "client",
         SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=boom))),
     )
     data = extract_bank_statement_hybrid(BANK_TEXT, transactions_payload=TX_PAYLOAD)
@@ -159,7 +156,7 @@ def test_insurance_llm_cannot_clobber_regex_fields(monkeypatch):
         "premium_amount": 12000.0,               # regex found nothing -> may fill
         "coverage_details": {"coverage_type": "Family Floater"},
     }
-    monkeypatch.setattr(app_module, "client", _fake_llm(adversarial))
+    monkeypatch.setattr(insurance_module, "client", _fake_llm(adversarial))
     data = extract_insurance_hybrid(HEALTH_TEXT)
 
     assert data["insurance_type"] == "Health Insurance"
@@ -223,7 +220,7 @@ def test_prefill_consumes_deterministic_recurring_shape():
 # --- statement-period normalization ------------------------------------------
 
 def test_bank_hybrid_records_statement_months(monkeypatch):
-    monkeypatch.setattr(app_module, "client", _fake_llm(BANK_LLM_PAYLOAD))
+    monkeypatch.setattr(bank_module, "client", _fake_llm(BANK_LLM_PAYLOAD))
     data = extract_bank_statement_hybrid(BANK_TEXT, transactions_payload=TX_PAYLOAD)
     # Declared period 01-Apr..30-Jun-2024 -> 3 months
     assert data["account_summary"]["statement_months"] == 3.0
@@ -268,7 +265,7 @@ def test_prefill_income_not_seeded_from_raw_inflows_without_period():
 
 def test_health_policy_with_life_footer_stays_health(monkeypatch):
     text = HEALTH_TEXT + "\nA product of TATA AIG Life Insurance partnership\n"
-    monkeypatch.setattr(app_module, "client", _fake_llm({}))
+    monkeypatch.setattr(insurance_module, "client", _fake_llm({}))
     data = extract_insurance_hybrid(text)
     assert data["insurance_type"] == "Health Insurance"
 
@@ -280,7 +277,7 @@ def test_term_plan_classified_as_life(monkeypatch):
     Death Benefit payable to nominee
     Maturity Benefit: Nil
     """
-    monkeypatch.setattr(app_module, "client", _fake_llm({}))
+    monkeypatch.setattr(insurance_module, "client", _fake_llm({}))
     data = extract_insurance_hybrid(text)
     assert data["insurance_type"] == "Life Insurance"
 

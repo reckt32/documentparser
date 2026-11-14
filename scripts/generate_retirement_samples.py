@@ -15,8 +15,8 @@ WORKSPACE_DIR = BACKEND_DIR.parent
 OUTPUT_DIR = WORKSPACE_DIR / "retirement module" / "sample reports"
 sys.path.insert(0, str(BACKEND_DIR))
 
-from retirement_engine import analyze_retirement  # noqa: E402
-from retirement_report import generate_retirement_pdf  # noqa: E402
+from backend.retirement.engine import analyze_retirement  # noqa: E402
+from backend.retirement.report import generate_retirement_pdf  # noqa: E402
 
 
 def _holding(

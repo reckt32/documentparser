@@ -16,7 +16,7 @@ import unittest
 # Ensure backend root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from financial_calculators import (
+from backend.analysis.financial_calculators import (
     compute_spend_right,
     compute_step_up_sip,
     compute_retirement_gap,

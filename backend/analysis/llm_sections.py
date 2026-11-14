@@ -51,7 +51,7 @@ LLM_OUTPUT_BLOCKLIST = ("in-app", "nudge", "push notification", "mobile alert")
 # Single source of truth lives in assumptions.py; re-exported here under the
 # names this module already uses so SIP/retirement math stays consistent with
 # the rest of the app.
-from assumptions import (
+from backend.assumptions import (
     ASSUMED_RETURNS,
     INFLATION_RATE as ASSUMED_INFLATION_RATE,
     WITHDRAWAL_RATE_RETIREMENT,
@@ -370,7 +370,7 @@ def compute_goal_sip(
             
         if use_step_up:
             # Import from financial_calculators to use the standardized formula
-            from financial_calculators import compute_step_up_sip
+            from backend.analysis.financial_calculators import compute_step_up_sip
             # Step-up SIP uses a fixed 10% return assumption as per founder's chat
             return compute_step_up_sip(target, n_years, annual_return=0.10, step_up_rate=step_up_rate)
             

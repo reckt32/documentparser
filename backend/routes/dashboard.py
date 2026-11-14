@@ -35,8 +35,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from flask import Blueprint, g, jsonify, request
 
-from auth import require_auth
-from db import (
+from backend.auth import require_auth
+from backend.db import (
     get_active_dashboard_report_by_pan,
     get_aggregate_metrics_for_period,
     get_aggregate_metrics_overview,

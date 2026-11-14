@@ -12,7 +12,7 @@ import os
 
 os.environ.setdefault("OPENAI_API_KEY", "test")
 
-from app import compute_financial_health_score
+from backend.analysis.health_score import compute_financial_health_score
 
 
 def _facts(equity=50):

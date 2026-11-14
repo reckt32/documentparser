@@ -6,7 +6,7 @@ for protecting Flask routes. It uses Firebase Admin SDK for server-side token
 verification.
 
 Usage:
-    from auth import require_auth, require_payment
+    from backend.auth import require_auth, require_payment
 
     @app.route("/protected")
     @require_auth
@@ -31,7 +31,7 @@ from typing import Optional, Dict, Any
 import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth
 
-from db import get_user_by_firebase_uid, create_or_update_user, check_user_payment_status
+from backend.db import get_user_by_firebase_uid, create_or_update_user, check_user_payment_status
 
 # Initialize Firebase Admin SDK
 _firebase_app = None
@@ -201,7 +201,7 @@ def consume_credit(f):
     """
     @functools.wraps(f)
     def decorated_function(*args, **kwargs):
-        from db import consume_user_credit, get_user_credits
+        from backend.db import consume_user_credit, get_user_credits
         
         # Ensure require_auth was called first
         if not hasattr(g, 'current_user') or g.current_user is None:

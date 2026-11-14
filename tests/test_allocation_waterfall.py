@@ -19,7 +19,7 @@ import os
 
 os.environ.setdefault("OPENAI_API_KEY", "test")
 
-from llm_sections import PriorityAllocationEngine
+from backend.analysis.llm_sections import PriorityAllocationEngine
 
 
 def _row(alloc, name):

@@ -2,8 +2,11 @@ import os
 
 os.environ.setdefault("OPENAI_API_KEY", "test")
 
-import app
-import db
+from reportlab.platypus import Paragraph, Table
+
+from backend.reports import helpers, pages
+from backend.reports.flowables import KPIFlowable, TagFlowable
+from backend import db
 
 
 def _facts(*, emergency_fund=None):
@@ -81,14 +84,14 @@ def _paragraph_text(flowables):
     parts = []
 
     def visit(value):
-        if isinstance(value, app.Paragraph):
+        if isinstance(value, Paragraph):
             parts.append(value.getPlainText())
-        elif isinstance(value, app.TagFlowable):
+        elif isinstance(value, TagFlowable):
             parts.append(value.label)
-        elif isinstance(value, app.KPIFlowable):
+        elif isinstance(value, KPIFlowable):
             for tile in value.tiles:
                 parts.extend([str(tile.get("label") or ""), str(tile.get("value") or "")])
-        elif isinstance(value, app.Table):
+        elif isinstance(value, Table):
             visit(value._cellvalues)
         elif isinstance(value, (list, tuple)):
             for item in value:
@@ -123,10 +126,10 @@ def test_report_uses_canonical_premiums_goal_plan_and_portfolio_value():
     facts = _facts()
     allocation = _allocation()
 
-    protection_text = _paragraph_text(app.build_page_protection(facts, allocation))
-    cashflow_text = _paragraph_text(app.build_page_cashflow_sip(facts, allocation))
-    roadmap_text = _paragraph_text(app.build_page_action_plan(facts, allocation))
-    portfolio_text = _paragraph_text(app.build_page_portfolio_debt(facts, allocation))
+    protection_text = _paragraph_text(pages.protection.build_page_protection(facts, allocation))
+    cashflow_text = _paragraph_text(pages.cashflow.build_page_cashflow_sip(facts, allocation))
+    roadmap_text = _paragraph_text(pages.action_plan.build_page_action_plan(facts, allocation))
+    portfolio_text = _paragraph_text(pages.portfolio_debt.build_page_portfolio_debt(facts, allocation))
 
     assert "Rs. 3,333/month" in protection_text
     assert "Rs. 4,375/month" not in protection_text
@@ -139,18 +142,18 @@ def test_report_uses_canonical_premiums_goal_plan_and_portfolio_value():
 
 
 def test_missing_and_zero_emergency_funds_are_not_conflated():
-    missing = app._emergency_fund_metrics(_facts(emergency_fund=None))
-    zero = app._emergency_fund_metrics(_facts(emergency_fund=0))
+    missing = helpers._emergency_fund_metrics(_facts(emergency_fund=None))
+    zero = helpers._emergency_fund_metrics(_facts(emergency_fund=0))
 
     assert missing["known"] is False
     assert missing["months"] is None
     assert zero["known"] is True
     assert zero["months"] == 0
 
-    missing_snapshot = _paragraph_text(app.build_page_snapshot(_facts(emergency_fund=None), _allocation()))
-    missing_liquidity = _paragraph_text(app.build_page_liquidity(_facts(emergency_fund=None), _allocation()))
-    zero_snapshot = _paragraph_text(app.build_page_snapshot(_facts(emergency_fund=0), _allocation()))
-    zero_liquidity = _paragraph_text(app.build_page_liquidity(_facts(emergency_fund=0), _allocation()))
+    missing_snapshot = _paragraph_text(pages.snapshot.build_page_snapshot(_facts(emergency_fund=None), _allocation()))
+    missing_liquidity = _paragraph_text(pages.liquidity.build_page_liquidity(_facts(emergency_fund=None), _allocation()))
+    zero_snapshot = _paragraph_text(pages.snapshot.build_page_snapshot(_facts(emergency_fund=0), _allocation()))
+    zero_liquidity = _paragraph_text(pages.liquidity.build_page_liquidity(_facts(emergency_fund=0), _allocation()))
 
     assert "Unknown" in missing_snapshot
     assert "Unknown" in missing_liquidity
@@ -160,8 +163,8 @@ def test_missing_and_zero_emergency_funds_are_not_conflated():
 
 def test_in_band_equity_gets_positive_consistent_copy():
     facts = _facts()
-    snapshot_text = _paragraph_text(app.build_page_snapshot(facts, _allocation()))
-    executive_text = _paragraph_text(app.build_page_executive_summary(facts, _allocation()))
+    snapshot_text = _paragraph_text(pages.snapshot.build_page_snapshot(facts, _allocation()))
+    executive_text = _paragraph_text(pages.executive_summary.build_page_executive_summary(facts, _allocation()))
 
     assert "70%" in snapshot_text
     assert "GOOD" in snapshot_text

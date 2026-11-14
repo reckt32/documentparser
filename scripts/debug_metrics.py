@@ -1,7 +1,8 @@
 import sys, json
-sys.path.insert(0, 'backend')
+sys.path.insert(0, '.')  # run from the repo root
 
-import db, extractors
+from backend import db
+from backend.extraction import extractors
 
 def main():
     docs = db._query("SELECT id, filename FROM documents ORDER BY id")

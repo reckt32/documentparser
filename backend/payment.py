@@ -5,7 +5,7 @@ This module handles Razorpay integration for one-time payment processing.
 It provides order creation, signature verification, and webhook handling.
 
 Usage:
-    from payment import create_razorpay_order, verify_razorpay_signature
+    from backend.payment import create_razorpay_order, verify_razorpay_signature
 
     # Create order
     order = create_razorpay_order(user_id="firebase_uid_123")
@@ -22,7 +22,7 @@ from typing import Optional, Dict, Any
 
 import razorpay
 
-from db import mark_user_as_paid, get_user_by_firebase_uid
+from backend.db import mark_user_as_paid, get_user_by_firebase_uid
 
 # Configure logger
 logger = logging.getLogger(__name__)

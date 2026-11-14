@@ -10,15 +10,15 @@ if __name__ == "__main__":
     if root not in sys.path:
         sys.path.insert(0, root)
 
-# Ensure API key is present to satisfy app.py import-time check (LLM not used in these tests)
+# Ensure API key is present to satisfy the backend.config import-time check (LLM not used in these tests)
 if "OPENAI_API_KEY" not in os.environ:
     os.environ["OPENAI_API_KEY"] = "test"
 
-from app import (
+from backend.extraction.insights import (
     aggregate_doc_insights_for_questionnaire,
     build_prefill_from_insights,
 )
-from db import (
+from backend.db import (
     create_questionnaire,
     upsert_document,
     link_questionnaire_upload,

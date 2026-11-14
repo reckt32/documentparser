@@ -6,7 +6,7 @@ from typing import List, Tuple, Optional
 
 import pdfplumber
 
-from db import (
+from backend.db import (
     upsert_document,
     insert_section,
     insert_table,
@@ -118,7 +118,7 @@ def index_document(pdf_bytes: bytes, filename: str = "upload.pdf") -> Tuple[str,
 
         # Idempotency: skip if sections already exist for this document
         try:
-            from db import _query as _db_query
+            from backend.db import _query as _db_query
             rows = _db_query("SELECT 1 FROM sections WHERE document_id=? LIMIT 1", (document_id,))
             if rows:
                 return sha, document_id

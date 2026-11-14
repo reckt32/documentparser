@@ -4,7 +4,7 @@ import sys
 import json
 sys.path.insert(0, '.')
 
-from llm_sections import TaxOptimizationRunner
+from backend.analysis.llm_sections import TaxOptimizationRunner
 from tests.test_report_generation import SAMPLE_CLIENT_FACTS
 
 # Create dummy LLM

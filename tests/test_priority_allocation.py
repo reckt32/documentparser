@@ -4,7 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from llm_sections import PriorityAllocationEngine, GoalsStrategyRunner
+from backend.analysis.llm_sections import PriorityAllocationEngine, GoalsStrategyRunner
 
 print("=" * 60)
 print(" PRIORITY ALLOCATION ENGINE TEST (ENHANCED)")

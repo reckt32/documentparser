@@ -5,8 +5,9 @@ import os
 import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from app import generate_financial_plan_pdf, compute_term_insurance_need
-from assumptions import LIFE_COVER_MULTIPLE
+from backend.analysis.metrics import compute_term_insurance_need
+from backend.reports.financial_plan import generate_financial_plan_pdf
+from backend.assumptions import LIFE_COVER_MULTIPLE
 import fitz  # PyMuPDF - to read PDF text
 
 print("=" * 70)

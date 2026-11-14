@@ -3,10 +3,10 @@ import json
 from typing import Dict, Optional, Tuple
 
 # Internal DB/index access
-import db
-from indexer import index_document
+from backend import db
+from backend.extraction.indexer import index_document
 
-# --- Local numeric cleaner (kept consistent with app.py) ---
+# --- Local numeric cleaner (kept consistent with backend/utils.py) ---
 def _clean_to_float(value_str: Optional[str]):
     if not value_str or value_str == "N/A":
         return None

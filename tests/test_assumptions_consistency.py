@@ -8,10 +8,10 @@ import os
 
 os.environ.setdefault("OPENAI_API_KEY", "test")
 
-import assumptions
-import financial_calculators
-import llm_sections
-from app import (
+from backend import assumptions
+from backend.analysis import financial_calculators
+from backend.analysis import llm_sections
+from backend.analysis.metrics import (
     compute_insurance_gap,
     compute_term_insurance_need,
     compute_retirement_corpus,

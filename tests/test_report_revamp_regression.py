@@ -2,13 +2,10 @@ import os
 
 os.environ.setdefault("OPENAI_API_KEY", "test")
 
-from app import (
-    _allocation_output,
-    _assemble_financial_inputs,
-    _build_client_facts,
-    _build_dashboard_snapshot,
-    analyze_financial_health,
-)
+from backend.analysis.client_facts import _assemble_financial_inputs, _build_client_facts
+from backend.analysis.dashboard import _build_dashboard_snapshot
+from backend.analysis.health import analyze_financial_health
+from backend.reports.helpers import _allocation_output
 
 
 def _client_questionnaire():

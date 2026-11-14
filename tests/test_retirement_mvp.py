@@ -6,13 +6,13 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from retirement_engine import (
+from backend.retirement.engine import (
     analyze_retirement,
     dashboard_action_items,
     retirement_plan_is_accepted,
     validate_retirement_input,
 )
-from retirement_report import generate_retirement_pdf
+from backend.retirement.report import generate_retirement_pdf
 
 
 def retirement_payload(**overrides):

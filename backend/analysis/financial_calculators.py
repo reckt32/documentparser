@@ -19,7 +19,7 @@ from typing import Dict, Any, Optional
 
 # Single source of truth lives in assumptions.py; re-exported here under the
 # names this module already uses.
-from assumptions import (
+from backend.assumptions import (
     INFLATION_RATE as DEFAULT_INFLATION_RATE,
     DEFAULT_ANNUAL_RETURN,
     STEP_UP_RATE as DEFAULT_STEP_UP_RATE,

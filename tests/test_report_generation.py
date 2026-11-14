@@ -36,7 +36,7 @@ except ImportError:
     pass
 
 # Import the report generation modules
-from llm_sections import (
+from backend.analysis.llm_sections import (
     GoalsStrategyRunner,
     ProtectionPlanRunner,
     DebtStrategyRunner,

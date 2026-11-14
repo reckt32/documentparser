@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from transaction_analytics import (
+from backend.extraction.transaction_analytics import (
     detect_recurring,
     detect_recurring_transactions,
     merge_recurring,

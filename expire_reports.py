@@ -31,7 +31,7 @@ from typing import Dict, List
 # db.py is the only dependency we need. It opens the same SQLite file
 # the Flask app uses, initialises the schema if missing, and exposes the
 # helpers we need for the prune logic.
-from db import (
+from backend.db import (
     list_expired_active_dashboard_reports,
     mark_aggregate_actions_status_by_report,
     mark_dashboard_report_status,
@@ -41,7 +41,7 @@ from db import (
 # Paths / config
 # ---------------------------------------------------------------------------
 
-# Resolve OUTPUT_DIR the same way app.py does, but anchored to THIS file
+# Resolve OUTPUT_DIR the same way the app does, but anchored to THIS file
 # so the script works no matter what directory cron invokes it from.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(_HERE, os.getenv("OUTPUT_DIR_NAME", "output"))

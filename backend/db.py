@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 # SQLite file path:
 # - Prefer DB_PATH env var (for persistent cloud storage mounts)
 # - Fall back to local repo output/index.db for development
-_BASE_DIR = os.path.dirname(__file__)
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root
 _DEFAULT_DB_DIR = os.path.join(_BASE_DIR, "output")
 os.makedirs(_DEFAULT_DB_DIR, exist_ok=True)
 DB_PATH = os.getenv("DB_PATH", os.path.join(_DEFAULT_DB_DIR, "index.db"))

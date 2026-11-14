@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Quick test for affordability summary verification."""
+import os
 import sys
-sys.path.insert(0, r'd:\flutter-projects\document-parser\backend')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm_sections import GoalsStrategyRunner
+from backend.analysis.llm_sections import GoalsStrategyRunner
 
 class DummyLLM: model = 'dummy'
 
