@@ -51,6 +51,7 @@ LLM_OUTPUT_BLOCKLIST = ("in-app", "nudge", "push notification", "mobile alert")
 # Single source of truth lives in assumptions.py; re-exported here under the
 # names this module already uses so SIP/retirement math stays consistent with
 # the rest of the app.
+from backend.utils import inr
 from backend.assumptions import (
     ASSUMED_RETURNS,
     INFLATION_RATE as ASSUMED_INFLATION_RATE,
@@ -506,7 +507,7 @@ def generate_bridge_recommendations(shortfall: float, current_surplus: float) ->
     recs.append({
         "option": "Reduce Expenses",
         "amount": round(expense_reduction),
-        "action": f"Reduce monthly expenses by Rs. {expense_reduction:,.0f} to fully fund all goals"
+        "action": f"Reduce monthly expenses by Rs. {inr(expense_reduction)} to fully fund all goals"
     })
     
     # Option 2: Increase income (need ~30% more gross income due to taxes/savings rate)
@@ -514,7 +515,7 @@ def generate_bridge_recommendations(shortfall: float, current_surplus: float) ->
     recs.append({
         "option": "Increase Income",
         "amount": round(income_increase),
-        "action": f"Increase monthly income by Rs. {income_increase:,.0f} (assuming current savings rate)"
+        "action": f"Increase monthly income by Rs. {inr(income_increase)} (assuming current savings rate)"
     })
     
     # Option 3: Accept partial achievement and increase over time
@@ -523,7 +524,7 @@ def generate_bridge_recommendations(shortfall: float, current_surplus: float) ->
         recs.append({
             "option": "Start Now, Increase Later",
             "amount": None,
-            "action": f"Start SIPs now at Rs. {current_surplus:,.0f}/month ({achievable_pct:.0f}% of goals) and increase contributions annually"
+            "action": f"Start SIPs now at Rs. {inr(current_surplus)}/month ({achievable_pct:.0f}% of goals) and increase contributions annually"
         })
     
     # Option 4: Extend timelines
@@ -676,7 +677,7 @@ class PriorityAllocationEngine:
             term_from_savings = 0
             term_monthly = term_premium_yearly / 12
             term_status = "Provision from Surplus"
-            term_note = f"Provision Rs. {term_monthly:,.0f}/month from surplus for the premium. Cover gap: Rs. {effective_term_gap:,.0f}"
+            term_note = f"Provision Rs. {inr(term_monthly)}/month from surplus for the premium. Cover gap: Rs. {inr(effective_term_gap)}"
         else:
             term_status = "Not Required" if not has_dependents else "Adequate"
             term_note = "Adequate coverage" if not has_dependents else "No gap exists"
@@ -702,7 +703,7 @@ class PriorityAllocationEngine:
             health_from_savings = 0
             health_monthly = health_premium_yearly / 12
             health_status = "Provision from Surplus"
-            health_note = f"Provision Rs. {health_monthly:,.0f}/month from surplus for the premium. Cover gap: Rs. {effective_health_gap:,.0f}"
+            health_note = f"Provision Rs. {inr(health_monthly)}/month from surplus for the premium. Cover gap: Rs. {inr(effective_health_gap)}"
         else:
             health_status = "Adequate"
             health_note = "Adequate coverage"
@@ -872,7 +873,7 @@ class PriorityAllocationEngine:
             "status": goal_status,
             "note": (
                 f"{PRIORITY_SURPLUS_SHARE:.0%} of surplus to Emergency Fund + Retirement first, "
-                f"rest to other goals nearest-horizon-first, locked to Rs. {SIP_ROUND_STEP:,.0f} steps"
+                f"rest to other goals nearest-horizon-first, locked to Rs. {inr(SIP_ROUND_STEP)} steps"
             )
         })
         
@@ -923,18 +924,18 @@ class PriorityAllocationEngine:
             "total_investing": round(total_investing, 0),
             "goal_funding_percent": round(goal_funding_pct, 1),
             "summary": (
-                f"With Rs. {monthly_surplus:,.0f}/month surplus: "
-                f"Rs. {total_insurance_sip_monthly:,.0f} for insurance, "
-                f"Rs. {remaining_for_goals_and_emergency:,.0f} remaining for goals. "
-                + (f"Already investing Rs. {existing_sip_commitments:,.0f}/month. " if existing_sip_commitments > 0 else "")
-                + f"Total investing: Rs. {total_investing:,.0f}/month ({goal_funding_pct:.1f}% of goal requirement)."
+                f"With Rs. {inr(monthly_surplus)}/month surplus: "
+                f"Rs. {inr(total_insurance_sip_monthly)} for insurance, "
+                f"Rs. {inr(remaining_for_goals_and_emergency)} remaining for goals. "
+                + (f"Already investing Rs. {inr(existing_sip_commitments)}/month. " if existing_sip_commitments > 0 else "")
+                + f"Total investing: Rs. {inr(total_investing)}/month ({goal_funding_pct:.1f}% of goal requirement)."
             ),
             "insurance_recommendation": {
                 "use_savings": False,
                 "savings_used": 0,
                 "savings_remaining": round(remaining_savings_after_insurance, 0),
                 "monthly_sip_for_next_year": round(total_insurance_sip_monthly, 0),
-                "note": f"Provision Rs. {total_insurance_sip_monthly:,.0f}/month from surplus for insurance premiums." if total_insurance_sip_monthly > 0 else None
+                "note": f"Provision Rs. {inr(total_insurance_sip_monthly)}/month from surplus for insurance premiums." if total_insurance_sip_monthly > 0 else None
             },
             # Keep backward compatibility
             "allocated_to_insurance": round(total_insurance_sip_monthly, 0),
@@ -1046,8 +1047,8 @@ class ProtectionPlanRunner(SectionRunner):
 
         if cover_gap > 0:
             life_instruction = (
-                f"   - Gap exists: recommend ADDITIONAL term cover of Rs.{cover_gap:,.0f} (to reach Rs.{required_cover:,.0f} total)\n"
-                f"   - Estimated premium: approx Rs.{estimated_premium:,.0f}/year (varies by age, health, insurer)\n"
+                f"   - Gap exists: recommend ADDITIONAL term cover of Rs.{inr(cover_gap)} (to reach Rs.{inr(required_cover)} total)\n"
+                f"   - Estimated premium: approx Rs.{inr(estimated_premium)}/year (varies by age, health, insurer)\n"
             )
         elif required_cover > 0 and current_life >= required_cover * OVER_INSURED_THRESHOLD:
             life_instruction = (
@@ -1061,12 +1062,12 @@ class ProtectionPlanRunner(SectionRunner):
 
         if current_health >= rec_health:
             health_instruction = (
-                f"   - Current cover meets/exceeds the recommended Rs.{rec_health:,.0f}: state it is ADEQUATE.\n"
+                f"   - Current cover meets/exceeds the recommended Rs.{inr(rec_health)}: state it is ADEQUATE.\n"
                 "   - Do NOT recommend an upgrade or a new policy; advise an annual review only.\n"
             )
         else:
             health_instruction = (
-                f"   - Recommend upgrading to a Rs.{rec_health:,.0f} family floater\n"
+                f"   - Recommend upgrading to a Rs.{inr(rec_health)} family floater\n"
                 "   - If current < Rs.5 lakh, flag as critical gap\n"
             )
 
@@ -1080,9 +1081,9 @@ class ProtectionPlanRunner(SectionRunner):
             "Section: Protection Plan\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
             "INSTRUCTIONS:\n"
-            f"1. Life Insurance: Required Rs.{required_cover:,.0f}, Current Rs.{current_life:,.0f}, Gap Rs.{cover_gap:,.0f}\n"
+            f"1. Life Insurance: Required Rs.{inr(required_cover)}, Current Rs.{inr(current_life)}, Gap Rs.{inr(cover_gap)}\n"
             f"{life_instruction}"
-            f"2. Health Insurance: Current Rs.{current_health:,.0f}, Recommended Rs.{rec_health:,.0f}\n"
+            f"2. Health Insurance: Current Rs.{inr(current_health)}, Recommended Rs.{inr(rec_health)}\n"
             f"{health_instruction}"
             "3. Priority Order: Term life first if dependents exist, then health cover\n\n"
             "Output JSON keys: title, bullets, paragraphs, actions.\n"
@@ -1168,14 +1169,14 @@ class DebtStrategyRunner(SectionRunner):
             "Section: Debt Strategy\n"
             f"FactsDigest:\n{_json_dumps(digest)}\n\n"
             "INSTRUCTIONS:\n"
-            f"1. Current EMI: Rs.{monthly_emi:,.0f}/month ({emi_pct:.1f}% of income)\n"
+            f"1. Current EMI: Rs.{inr(monthly_emi)}/month ({emi_pct:.1f}% of income)\n"
             f"   - Benchmark: Keep EMI below 30-40% of income\n"
             f"2. DEBT PRIORITY (always recommend this order):\n"
             "   - Credit card debt (18-42% interest) - Pay off FIRST\n"
             "   - Personal loans (12-20% interest) - Pay off SECOND\n"
             "   - Car loans (8-12% interest) - Pay off THIRD\n"
             "   - Home loans (7-9% interest) - Lowest priority\n"
-            f"3. PREPAYMENT: If EMI exceeds 30%, suggest monthly prepayment of Rs.{excess_emi:,.0f}\n"
+            f"3. PREPAYMENT: If EMI exceeds 30%, suggest monthly prepayment of Rs.{inr(excess_emi)}\n"
             "   - Focus prepayment on highest-interest debt first\n"
             "4. Avoid new unsecured debt until EMI < 30%\n\n"
             "JSON output keys: title, bullets, paragraphs, actions. "
@@ -1551,21 +1552,21 @@ class GoalsStrategyRunner(SectionRunner):
             # Add existing SIP context if client is already investing
             if existing_sip_running > 0:
                 user += (
-                    f"   ✓ Already investing (current SIP running): Rs. {existing_sip_running:,.0f}/month\n"
-                    f"   - Insurance provision needed: Rs. {insurance_sip:,.0f}/month\n"
-                    f"   + Available for NEW additions: Rs. {new_allocations_available:,.0f}/month\n"
-                    f"   = TOTAL investing after changes: Rs. {total_investing:,.0f}/month ({goal_funding_pct:.1f}% of goal needs)\n\n"
+                    f"   ✓ Already investing (current SIP running): Rs. {inr(existing_sip_running)}/month\n"
+                    f"   - Insurance provision needed: Rs. {inr(insurance_sip)}/month\n"
+                    f"   + Available for NEW additions: Rs. {inr(new_allocations_available)}/month\n"
+                    f"   = TOTAL investing after changes: Rs. {inr(total_investing)}/month ({goal_funding_pct:.1f}% of goal needs)\n\n"
                 )
             else:
                 user += (
-                    f"   - Available monthly budget for goals: Rs. {remaining_budget:,.0f}\n"
-                    f"   - Total IDEAL SIP needed (if unlimited funds): Rs. {total_ideal:,.0f}\n"
-                    f"   - Insurance provision needed: Rs. {insurance_sip:,.0f}/month\n"
-                    f"   - Available after insurance: Rs. {new_allocations_available:,.0f}/month\n"
+                    f"   - Available monthly budget for goals: Rs. {inr(remaining_budget)}\n"
+                    f"   - Total IDEAL SIP needed (if unlimited funds): Rs. {inr(total_ideal)}\n"
+                    f"   - Insurance provision needed: Rs. {inr(insurance_sip)}/month\n"
+                    f"   - Available after insurance: Rs. {inr(new_allocations_available)}/month\n"
                 )
             user += (
-                f"   - REQUIRED for all goals: Rs. {total_ideal:,.0f}/month\n"
-                f"   - SHORTFALL: Rs. {funding_gap:,.0f}/month\n\n"
+                f"   - REQUIRED for all goals: Rs. {inr(total_ideal)}/month\n"
+                f"   - SHORTFALL: Rs. {inr(funding_gap)}/month\n\n"
                 f"**DO NOT say 'no surplus remains' or 'Available: Rs. 0' unless truly zero.**\n"
                 f"**Acknowledge existing investments and remaining capacity accurately.**\n\n"
             )
@@ -1980,14 +1981,14 @@ def compute_regime_comparison(
         recommendation = "With income ≤ ₹12.75L, New Regime is better — full 87A rebate means zero tax."
     elif gross_income <= 1200000:
         if total_deductions_old - old_std_deduction >= 150000:
-            recommendation = f"With ₹{total_deductions_old - old_std_deduction:,.0f} in deductions, Old Regime saves ₹{savings:,.0f}." if better == "old" else f"Even with deductions, New Regime saves ₹{savings:,.0f}."
+            recommendation = f"With ₹{inr(total_deductions_old - old_std_deduction)} in deductions, Old Regime saves ₹{inr(savings)}." if better == "old" else f"Even with deductions, New Regime saves ₹{inr(savings)}."
         else:
             recommendation = "With limited deductions, New Regime is likely better."
     else:
         if total_deductions_old - old_std_deduction >= 375000:  # Max 80C + NPS + 80D + some HRA
-            recommendation = f"With significant deductions (₹{total_deductions_old - old_std_deduction:,.0f}), Old Regime saves ₹{savings:,.0f}."
+            recommendation = f"With significant deductions (₹{inr(total_deductions_old - old_std_deduction)}), Old Regime saves ₹{inr(savings)}."
         else:
-            recommendation = f"{'Old' if better == 'old' else 'New'} Regime saves ₹{savings:,.0f}. Consider maximizing deductions to review."
+            recommendation = f"{'Old' if better == 'old' else 'New'} Regime saves ₹{inr(savings)}. Consider maximizing deductions to review."
     
     return {
         "old_regime": {
@@ -2103,7 +2104,7 @@ class TaxOptimizationRunner(SectionRunner):
                     "current_ltcg": capital_gains,
                     "exemption_limit": ltcg_exemption,
                     "harvestable_room": harvestable,
-                    "recommendation": f"You can book up to ₹{harvestable:,.0f} in additional LTCG tax-free this year",
+                    "recommendation": f"You can book up to ₹{inr(harvestable)} in additional LTCG tax-free this year",
                     "action": "Redeem equity mutual funds showing gains, then reinvest to reset cost base"
                 }
             elif capital_gains > ltcg_exemption:
@@ -2140,10 +2141,10 @@ class TaxOptimizationRunner(SectionRunner):
             gap = deduction_gaps["80C"]
             action_items.append({
                 "priority": 1,
-                "action": f"Max out 80C (₹{gap['limit']:,.0f}) via ELSS/PPF",
-                "current": f"₹{gap['current_utilization']:,.0f} used",
-                "gap": f"₹{gap['gap']:,.0f} remaining",
-                "tax_saving": f"₹{gap['tax_saving_potential']:,.0f}"
+                "action": f"Max out 80C (₹{inr(gap['limit'])}) via ELSS/PPF",
+                "current": f"₹{inr(gap['current_utilization'])} used",
+                "gap": f"₹{inr(gap['gap'])} remaining",
+                "tax_saving": f"₹{inr(gap['tax_saving_potential'])}"
             })
             total_actions_saving += gap['tax_saving_potential']
         
@@ -2151,10 +2152,10 @@ class TaxOptimizationRunner(SectionRunner):
             gap = deduction_gaps["80CCD_1B"]
             action_items.append({
                 "priority": 2,
-                "action": f"Invest ₹{gap['gap']:,.0f} in NPS (80CCD-1B)",
-                "current": f"₹{gap['current_utilization']:,.0f} used",
-                "gap": f"₹{gap['gap']:,.0f} remaining",
-                "tax_saving": f"₹{gap['tax_saving_potential']:,.0f}",
+                "action": f"Invest ₹{inr(gap['gap'])} in NPS (80CCD-1B)",
+                "current": f"₹{inr(gap['current_utilization'])} used",
+                "gap": f"₹{inr(gap['gap'])} remaining",
+                "tax_saving": f"₹{inr(gap['tax_saving_potential'])}",
                 "note": "This is ADDITIONAL to 80C limit"
             })
             total_actions_saving += gap['tax_saving_potential']
@@ -2163,10 +2164,10 @@ class TaxOptimizationRunner(SectionRunner):
             gap = deduction_gaps["80D"]
             action_items.append({
                 "priority": 3,
-                "action": f"Top-up health insurance by ₹{gap['gap']:,.0f}",
-                "current": f"₹{gap['current_utilization']:,.0f} used",
-                "gap": f"₹{gap['gap']:,.0f} remaining (self + parents)",
-                "tax_saving": f"₹{gap['tax_saving_potential']:,.0f}"
+                "action": f"Top-up health insurance by ₹{inr(gap['gap'])}",
+                "current": f"₹{inr(gap['current_utilization'])} used",
+                "gap": f"₹{inr(gap['gap'])} remaining (self + parents)",
+                "tax_saving": f"₹{inr(gap['tax_saving_potential'])}"
             })
             total_actions_saving += gap['tax_saving_potential']
         
@@ -2224,8 +2225,8 @@ class TaxOptimizationRunner(SectionRunner):
             f"Client Tax Profile:\n{_json_dumps(digest)}\n\n"
             "INSTRUCTIONS - Create a comprehensive tax optimization report:\n\n"
             "1. CURRENT TAX SUMMARY (use these exact numbers):\n"
-            f"   - Gross Income: ₹{gross_income:,.0f}\n"
-            f"   - Taxable Income: ₹{taxable_income:,.0f}\n"
+            f"   - Gross Income: ₹{inr(gross_income)}\n"
+            f"   - Taxable Income: ₹{inr(taxable_income)}\n"
             f"   - Effective Tax Rate: {effective_rate}%\n"
             f"   - Marginal Tax Rate: {marginal_rate}%\n"
             f"   - Detected Regime: {regime.replace('_', ' ').title()}\n\n"
@@ -2235,7 +2236,7 @@ class TaxOptimizationRunner(SectionRunner):
         # Add specific gap details
         for section, gap_data in deduction_gaps.items():
             if isinstance(gap_data, dict):
-                user += f"   - Section {section}: Gap of ₹{gap_data.get('gap', 0):,.0f} (can save ₹{gap_data.get('tax_saving_potential', 0):,.0f} in tax)\n"
+                user += f"   - Section {section}: Gap of ₹{inr(gap_data.get('gap', 0))} (can save ₹{inr(gap_data.get('tax_saving_potential', 0))} in tax)\n"
         
         user += (
             "\n3. RECOMMENDATIONS BY PRIORITY:\n"
@@ -2254,7 +2255,7 @@ class TaxOptimizationRunner(SectionRunner):
             )
         
         user += (
-            f"5. TOTAL POTENTIAL TAX SAVING: ₹{total_saving:,.0f}\n\n"
+            f"5. TOTAL POTENTIAL TAX SAVING: ₹{inr(total_saving)}\n\n"
             "6. REGIME-SPECIFIC ADVICE:\n"
             f"   - If OLD REGIME: {digest.get('regime_advice', {}).get('old_regime', '')}\n"
             f"   - If NEW REGIME: {digest.get('regime_advice', {}).get('new_regime', '')}\n\n"

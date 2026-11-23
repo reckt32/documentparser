@@ -4,6 +4,18 @@ import math
 import re
 
 
+def inr(amount, decimals: int = 0) -> str:
+    """Indian digit grouping: 1234567.8 -> '12,34,568' (decimals=0) or '12,34,567.80'."""
+    s = f"{abs(float(amount or 0)):.{decimals}f}"
+    whole, dot, frac = s.partition(".")
+    head, tail = whole[:-3], whole[-3:]
+    while len(head) > 2:
+        tail = f"{head[-2:]},{tail}"
+        head = head[:-2]
+    whole = f"{head},{tail}" if head else tail
+    return ("-" if float(amount or 0) < 0 and s.strip("0.") else "") + whole + dot + frac
+
+
 def _format_indian_amount(amount: float) -> str:
     """Format amount in Indian currency style (lakhs/crores) for compact display in PDFs."""
     if amount is None or amount == 0:

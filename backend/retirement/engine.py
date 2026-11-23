@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Tuple
+from backend.utils import inr
 
 
 @dataclass(frozen=True)
@@ -646,7 +647,7 @@ def analyze_retirement(payload: Dict[str, Any]) -> Dict[str, Any]:
         rate_text = "undefined" if natural_rate is None else f"{natural_rate * 100:.2f}%"
         flag("critical", "plan_infeasible", f"The settled goals require a {rate_text} withdrawal rate, above the 7% cap.", "Discuss resizing or deferring a goal, reducing expenses, adding corpus or extending earned income.", shortfall_at_cap)
     if design_gap > current_gap + 1:
-        flag("critical", "design_gap_step_up", f"The monthly gap rises from Rs {current_gap:,.0f} to Rs {design_gap:,.0f} in year {design_row['year']}.", "Build the income bucket on the design gap, not only the plan-date gap.", design_gap - current_gap)
+        flag("critical", "design_gap_step_up", f"The monthly gap rises from Rs {inr(current_gap)} to Rs {inr(design_gap)} in year {design_row['year']}.", "Build the income bucket on the design gap, not only the plan-date gap.", design_gap - current_gap)
     if profile.get("will_in_place") is not True:
         flag("high", "will_missing", "A current will is not recorded.", "Complete a will and nomination review with a qualified lawyer.")
     has_health = insurance.get("has_health_insurance") is True

@@ -12,6 +12,7 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from backend.utils import inr
 from reportlab.platypus import (
     Image,
     PageBreak,
@@ -72,7 +73,7 @@ def _inr(value: Any, compact: bool = False) -> str:
         return f"Rs {amount / 10_000_000:.2f} Cr"
     if compact and abs(amount) >= 100_000:
         return f"Rs {amount / 100_000:.2f} L"
-    return f"Rs {amount:,.0f}"
+    return f"Rs {inr(amount)}"
 
 
 def _pct(value: Any, decimals: int = 1) -> str:

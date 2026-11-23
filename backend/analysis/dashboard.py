@@ -6,7 +6,7 @@ from backend.analysis.client_facts import _build_client_facts
 from backend.analysis.health_score import compute_financial_health_score
 from backend.analysis.llm_sections import compute_regime_comparison
 from backend.assumptions import recommended_health_cover
-from backend.utils import _safe_float
+from backend.utils import inr, _safe_float
 
 
 # --- Dashboard snapshot / action item builders ---
@@ -190,9 +190,9 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
             "value_num": est_premium_monthly,
             "title": "Increase life insurance cover",
             "description": (
-                f"Current cover: Rs. {life_cover_current:,.0f}. Required: Rs. {life_cover_required:,.0f}. "
-                f"Get additional Rs. {life_cover_gap:,.0f} term cover. "
-                f"Estimated premium: ~Rs. {est_premium_monthly:,.0f}/month."
+                f"Current cover: Rs. {inr(life_cover_current)}. Required: Rs. {inr(life_cover_required)}. "
+                f"Get additional Rs. {inr(life_cover_gap)} term cover. "
+                f"Estimated premium: ~Rs. {inr(est_premium_monthly)}/month."
             ),
         })
 
@@ -216,10 +216,10 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
             "value_num": health_premium_monthly,
             "title": "Get adequate health insurance",
             "description": (
-                f"Current health cover: Rs. {health_cover_current:,.0f}. "
-                f"Recommended: Rs. {recommended_health:,.0f}. "
-                f"Gap: Rs. {health_cover_gap:,.0f}. "
-                f"Estimated premium: ~Rs. {health_premium_monthly:,.0f}/month."
+                f"Current health cover: Rs. {inr(health_cover_current)}. "
+                f"Recommended: Rs. {inr(recommended_health)}. "
+                f"Gap: Rs. {inr(health_cover_gap)}. "
+                f"Estimated premium: ~Rs. {inr(health_premium_monthly)}/month."
             ),
         })
 
@@ -241,8 +241,8 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
             "title": "Build emergency fund",
             "description": (
                 f"You have {liquidity_months:.1f} months of expenses covered. "
-                f"Target: 6 months (Rs. {ef_target:,.0f}). "
-                f"Gap: Rs. {ef_gap_inr:,.0f}. "
+                f"Target: 6 months (Rs. {inr(ef_target)}). "
+                f"Gap: Rs. {inr(ef_gap_inr)}. "
                 f"Park in liquid fund or high-yield savings."
             ),
         })
@@ -262,7 +262,7 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
             "title": "Reduce debt burden",
             "description": (
                 f"EMI-to-income ratio: {emi_pct:.1f}% (above safe limit of 40%). "
-                f"Monthly EMI: Rs. {monthly_emi:,.0f}. "
+                f"Monthly EMI: Rs. {inr(monthly_emi)}. "
                 f"Refinance or accelerate repayment of high-cost debt."
             ),
         })
@@ -276,7 +276,7 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
             "title": "Prioritise unsecured debt repayment",
             "description": (
                 f"EMI-to-income ratio: {emi_pct:.1f}%. "
-                f"Monthly EMI: Rs. {monthly_emi:,.0f}. "
+                f"Monthly EMI: Rs. {inr(monthly_emi)}. "
                 f"Start reducing unsecured loans before they compound."
             ),
         })
@@ -293,7 +293,7 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
             "value_num": monthly_surplus,
             "title": "Lift your savings rate",
             "description": (
-                f"Current monthly surplus: Rs. {monthly_surplus:,.0f}. "
+                f"Current monthly surplus: Rs. {inr(monthly_surplus)}. "
                 f"Cut discretionary spending and automate an SIP to push savings above 20% of income."
             ),
         })
@@ -328,11 +328,11 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
                 "value_num": shortfall,
                 "title": f"SIP for {goal_name}",
                 "description": (
-                    f"Target: Rs. {target_amount:,.0f}" +
+                    f"Target: Rs. {inr(target_amount)}" +
                     (f" in {horizon} years" if horizon else "") +
-                    f". Ideal SIP: Rs. {ideal_sip:,.0f}/month. "
-                    f"Currently allocated: Rs. {allocated_sip:,.0f}/month. "
-                    f"Shortfall: Rs. {shortfall:,.0f}/month. "
+                    f". Ideal SIP: Rs. {inr(ideal_sip)}/month. "
+                    f"Currently allocated: Rs. {inr(allocated_sip)}/month. "
+                    f"Shortfall: Rs. {inr(shortfall)}/month. "
                     f"Recommended: {fund_type} ({risk_cat} risk)."
                 ),
             })
@@ -345,9 +345,9 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
                 "value_num": allocated_sip,
                 "title": f"SIP for {goal_name}",
                 "description": (
-                    f"Target: Rs. {target_amount:,.0f}" +
+                    f"Target: Rs. {inr(target_amount)}" +
                     (f" in {horizon} years" if horizon else "") +
-                    f". Allocated SIP: Rs. {allocated_sip:,.0f}/month ({fund_type}). "
+                    f". Allocated SIP: Rs. {inr(allocated_sip)}/month ({fund_type}). "
                     f"On track."
                 ),
             })
@@ -393,7 +393,7 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
                 "title": "Rebalance portfolio: Reduce equity",
                 "description": (
                     f"Current equity allocation: {current_equity:.1f}% is above the recommended range of {rec_min:.0f}%-{rec_max:.0f}%. "
-                    f"Consider shifting ~{shift_pct:.1f}% of your portfolio (approx. Rs. {shift_amount:,.0f}) from equity to debt."
+                    f"Consider shifting ~{shift_pct:.1f}% of your portfolio (approx. Rs. {inr(shift_amount)}) from equity to debt."
                 )
             })
         elif current_equity < rec_min:
@@ -408,7 +408,7 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
                 "title": "Rebalance portfolio: Increase equity",
                 "description": (
                     f"Current equity allocation: {current_equity:.1f}% is below the recommended range of {rec_min:.0f}%-{rec_max:.0f}%. "
-                    f"Consider shifting ~{shift_pct:.1f}% of your portfolio (approx. Rs. {shift_amount:,.0f}) from debt to equity."
+                    f"Consider shifting ~{shift_pct:.1f}% of your portfolio (approx. Rs. {inr(shift_amount)}) from debt to equity."
                 )
             })
 
@@ -426,9 +426,9 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
             "value_num": unused * 0.3,  # Approximate tax saving at 30% bracket
             "title": "Maximise tax deductions",
             "description": (
-                f"Currently claiming Rs. {total_deductions:,.0f} in deductions. "
-                f"Unutilised 80C limit: Rs. {unused:,.0f}. "
-                f"Potential tax saving: ~Rs. {unused * 0.3:,.0f}/year via ELSS, PPF, or NPS."
+                f"Currently claiming Rs. {inr(total_deductions)} in deductions. "
+                f"Unutilised 80C limit: Rs. {inr(unused)}. "
+                f"Potential tax saving: ~Rs. {inr(unused * 0.3)}/year via ELSS, PPF, or NPS."
             ),
         })
 
@@ -460,7 +460,7 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
                 "title": f"Switch to {better_regime.upper()} tax regime",
                 "description": (
                     f"Your current regime is {regime.upper()}. By switching to the {better_regime.upper()} regime, "
-                    f"you could save approx. Rs. {savings:,.0f}/year in taxes based on your current income and deductions."
+                    f"you could save approx. Rs. {inr(savings)}/year in taxes based on your current income and deductions."
                 )
             })
 
@@ -517,8 +517,8 @@ def _build_dashboard_action_items(analysis: dict, client_facts: dict = None, all
                 "value_num": monthly_sip_needed,
                 "title": "Retirement corpus SIP",
                 "description": (
-                    f"Retirement corpus needed: Rs. {corpus_required:,.0f}. "
-                    f"Required SIP: Rs. {monthly_sip_needed:,.0f}/month. "
+                    f"Retirement corpus needed: Rs. {inr(corpus_required)}. "
+                    f"Required SIP: Rs. {inr(monthly_sip_needed)}/month. "
                     f"Start early to benefit from compounding."
                 ),
             })

@@ -8,7 +8,7 @@ from backend.assumptions import (
     life_cover_status,
     recommended_health_cover,
 )
-from backend.utils import _format_indian_amount, _safe_float
+from backend.utils import inr, _format_indian_amount, _safe_float
 
 
 def _format_status(value) -> str:
@@ -23,7 +23,7 @@ def _fmt_rs(amount, compact=True):
         val = float(amount or 0)
     except Exception:
         val = 0
-    return f"Rs. {_format_indian_amount(val)}" if compact else f"Rs. {val:,.0f}"
+    return f"Rs. {_format_indian_amount(val)}" if compact else f"Rs. {inr(val)}"
 
 
 def _num(value, default=0.0):

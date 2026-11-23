@@ -13,6 +13,7 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, 
 
 from backend.config import LOGO_PATH
 from backend.reports.theme import sanitize_pdf_text
+from backend.utils import inr
 
 
 def get_custom_styles():
@@ -117,7 +118,7 @@ def build_pdf_story(story, data, doc, styles):
             story.append(Paragraph(key_title, styles['h2']))
             build_pdf_story(story, value, doc, styles)
         else:
-            formatted_value = f"Rs. {value:,.2f}" if isinstance(value, (int, float)) else value
+            formatted_value = f"Rs. {inr(value, 2)}" if isinstance(value, (int, float)) else value
             p_text = f"<b>{key_title}:</b> {formatted_value}"
             story.append(Paragraph(sanitize_pdf_text(p_text), styles["BodyText"]))
             story.append(Spacer(1, 4))
@@ -135,7 +136,7 @@ def add_dynamic_table(story, data_list, doc, styles):
         for h in headers:
             cell_value = row_dict.get(h, "")
             if isinstance(cell_value, (int, float)):
-                cell_value = f"Rs. {cell_value:,.2f}"
+                cell_value = f"Rs. {inr(cell_value, 2)}"
             row.append(Paragraph(sanitize_pdf_text(str(cell_value)), styles['TableCell']))
         table_data.append(row)
     col_count = len(headers) if headers else 1
@@ -210,7 +211,7 @@ def generate_pdf_summary(summary_data, output_path):
                         if isinstance(inflows, (int, float)) and isinstance(outflows, (int, float)):
                             net = float(inflows) - float(outflows)
                             note = "Net Cash Surplus" if net >= 0 else "Net Cash Deficit"
-                            story.append(Paragraph(f"{note}: Rs. {abs(net):,.0f}", styles['BodyText']))
+                            story.append(Paragraph(f"{note}: Rs. {inr(abs(net))}", styles['BodyText']))
                             story.append(Spacer(1, 0.1 * inch))
                     except Exception:
                         pass
