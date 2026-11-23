@@ -396,6 +396,9 @@ def test_dashboard_items_use_solver_flags():
     assert items
     assert all(item["item_id"].startswith("retirement_") for item in items)
     assert any(item["dimension"] == "protection" for item in items)
+    # Same category names as wealth actions, and notes carry no money.
+    assert {i["dimension"] for i in items} <= {"retirement_income", "estate_planning", "protection", "portfolio_health", "tax_efficiency", "cashflow", "retirement"}
+    assert all(i["value_num"] == 0 for i, f in zip(items, result["flags"]) if f["priority"] == "maintain")
 
 
 def test_validation_reports_stable_field_paths():

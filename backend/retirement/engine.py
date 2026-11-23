@@ -740,27 +740,30 @@ def dashboard_action_items(analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
     dimension_map = {
         "plan_infeasible": "retirement_income",
         "design_gap_step_up": "retirement_income",
-        "will_missing": "estate",
+        "will_missing": "estate_planning",
         "health_missing": "protection",
         "term_missing": "protection",
-        "fd_tax_review": "portfolio",
-        "fd_tax_threshold": "portfolio",
-        "tax_threshold_future": "tax",
-        "sip_review": "portfolio",
-        "opportunity_declined": "portfolio",
-        "asset_income_excluded": "portfolio",
+        "fd_tax_review": "portfolio_health",
+        "fd_tax_threshold": "portfolio_health",
+        "tax_threshold_future": "tax_efficiency",
+        "sip_review": "portfolio_health",
+        "opportunity_declined": "portfolio_health",
+        "asset_income_excluded": "portfolio_health",
         "pension_emi_match": "cashflow",
     }
     items = []
     for index, item in enumerate(analysis.get("flags") or []):
         code = item.get("code") or f"retirement_{index + 1}"
+        # "maintain" flags are notes, not money to act on; their value (e.g. the
+        # whole retained FD) would otherwise inflate the dashboard opportunity.
+        value = 0.0 if item.get("priority") == "maintain" else _money(item.get("value"))
         items.append(
             {
                 "item_id": f"retirement_{code}_{index + 1}",
                 "dimension": dimension_map.get(code, "retirement"),
                 "urgency": "IMMEDIATE" if item.get("priority") == "critical" else "HIGH" if item.get("priority") == "high" else "MAINTAIN",
-                "value_type": "INR" if _money(item.get("value")) > 0 else "NONE",
-                "value_num": _money(item.get("value")),
+                "value_type": "INR" if value > 0 else "NONE",
+                "value_num": value,
                 "description": item.get("action"),
                 "final_status": "PENDING",
                 "is_converted": False,

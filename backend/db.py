@@ -3,7 +3,7 @@ import json
 import sqlite3
 import logging
 import threading
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +328,9 @@ def init_db():
     )
     _exec("CREATE INDEX IF NOT EXISTS idx_aggregate_actions_mfd ON aggregate_actions(mfd_firebase_uid)")
     _exec("CREATE INDEX IF NOT EXISTS idx_aggregate_actions_report ON aggregate_actions(report_id)")
+    # Retirement actions used to file under different names than wealth ones.
+    for legacy, canonical in (("estate", "estate_planning"), ("portfolio", "portfolio_health"), ("tax", "tax_efficiency")):
+        _exec("UPDATE aggregate_actions SET dimension = ? WHERE dimension = ?", (canonical, legacy))
 
 
 def upsert_document(sha256: str, filename: str, page_count: int) -> int:
@@ -1056,32 +1059,43 @@ def get_category_client_breakdown(mfd_firebase_uid: str, dimension: str):
 
 
 def update_aggregate_action_status_for_mfd(
-    mfd_firebase_uid: str, item_id: str, final_status: str
+    mfd_firebase_uid: str,
+    item_id: str,
+    final_status: str,
+    client_pan: Optional[str] = None,
+    report_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Update final_status + actioned_at on a single aggregate_action row, but
-    ONLY if the row belongs to the given MFD. Returns the updated row, or None
-    if no matching row was found.
+    Update final_status + actioned_at on the given MFD's live (PENDING /
+    CONVERTED) rows for item_id. item_ids repeat across clients and reports,
+    so callers should pass report_id or client_pan to pin the one row meant;
+    SUPERSEDED / FAILED rows are never touched. Returns the updated row, or
+    None if nothing matched.
     """
+    where = "item_id = ? AND mfd_firebase_uid = ? AND final_status IN ('PENDING','CONVERTED')"
+    params: List[Any] = [item_id, mfd_firebase_uid]
+    if client_pan:
+        where += " AND client_pan = ?"
+        params.append(client_pan)
+    if report_id is not None:
+        where += " AND report_id = ?"
+        params.append(report_id)
     result = _exec(
-        """
-        UPDATE aggregate_actions
-        SET final_status = ?, actioned_at = CURRENT_TIMESTAMP
-        WHERE item_id = ? AND mfd_firebase_uid = ?
-        """,
-        (final_status, item_id, mfd_firebase_uid),
+        f"UPDATE aggregate_actions SET final_status = ?, actioned_at = CURRENT_TIMESTAMP WHERE {where}",
+        (final_status, *params),
     )
     if result.rowcount == 0:
         return None
     rows = _query(
-        """
+        f"""
         SELECT id, mfd_firebase_uid, client_pan, report_id, item_id, dimension,
                urgency, value_type, value_num, final_status, report_generated_at,
                actioned_at, created_at
         FROM aggregate_actions
-        WHERE item_id = ? AND mfd_firebase_uid = ?
+        WHERE {where}
+        ORDER BY actioned_at DESC
         """,
-        (item_id, mfd_firebase_uid),
+        tuple(params),
     )
     return dict(rows[0]) if rows else None
 

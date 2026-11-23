@@ -401,10 +401,21 @@ def update_action(item_id: str):
             400,
         )
 
+    # item_ids repeat across clients; report_id / client_pan (body or query)
+    # pin the update to one client. Without them the old behaviour applies.
+    raw_report_id = payload.get("report_id", request.args.get("report_id"))
+    try:
+        report_id = int(raw_report_id) if raw_report_id not in (None, "") else None
+    except (TypeError, ValueError):
+        return _bad_request("report_id must be an integer.")
+    client_pan = (payload.get("client_pan") or request.args.get("client_pan") or "").strip().upper() or None
+
     updated = update_aggregate_action_status_for_mfd(
         mfd_firebase_uid=mfd_uid,
         item_id=item_id.strip(),
         final_status=new_status,
+        client_pan=client_pan,
+        report_id=report_id,
     )
     if not updated:
         return jsonify({
