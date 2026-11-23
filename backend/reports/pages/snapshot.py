@@ -21,7 +21,9 @@ from backend.reports.helpers import (
     _recommended_equity_band,
     _urgency,
 )
+from backend.assumptions import SIP_ROUND_STEP
 from backend.reports.theme import _report_styles, sanitize_pdf_text
+from backend.utils import inr
 
 
 def build_page_snapshot(client_facts, allocation_output):
@@ -51,8 +53,17 @@ def build_page_snapshot(client_facts, allocation_output):
 
     # Compute actual SIP amount from normalized CAS/manual facts.
     active_sip = _num(portfolio.get("total_monthly_sip"), 0)
-    active_sip_text = f"Rs.{active_sip:,.0f}/mo" if active_sip > 0 else "Rs.0/mo"
-    active_sip_color = green if active_sip > 0 else red
+    active_sip_text = f"Rs.{inr(active_sip)}/mo" if active_sip > 0 else "Rs.0/mo"
+    # Judge the SIP against what the goals need, not just "is it non-zero".
+    required_sip = _num(allocation_output.get("goal_total_required"), 0)
+    sip_shortfall = max(0.0, required_sip - active_sip)
+    sip_on_track = sip_shortfall < SIP_ROUND_STEP
+    if sip_on_track:
+        sip_tag, active_sip_color, sip_note = "GOOD", green, "On track"
+    else:
+        sip_tag = "HIGH" if active_sip <= 0 or sip_shortfall >= 0.5 * required_sip else "GAP"
+        active_sip_color = red if sip_tag == "HIGH" else orange
+        sip_note = f"Gap {kpi_fmt(_fmt_rs(sip_shortfall, False))}/mo"
 
     # Goal status from allocation output. "Funded" means the current SIP covers
     # the requirement; a gap the surplus could absorb is only "feasible".
@@ -95,7 +106,7 @@ def build_page_snapshot(client_facts, allocation_output):
         ["Emergency Fund", ctext(emergency_text, orange if not ef_metrics["known"] else blue), ctext(f"6 months expenses ({kpi_fmt(_fmt_rs(ef_target))})", green), _tag(emergency_tag)],
         ["Equity Allocation", ctext(f"{equity:.0f}%", equity_color), ctext(_recommended_band_text(ar), green), _tag(equity_tag)],
         ["EMI / Income", ctext(f"{_num(diag.get('emiPct'), 0):.1f}%", blue), ctext("<40%", green), _tag(analysis.get("debtStress") or "-")],
-        ["Active SIP", ctext(active_sip_text, active_sip_color), ctext(f"Need {kpi_fmt(_fmt_rs(allocation_output.get('goal_total_required'), False))}/mo", green), _tag("HIGH" if active_sip <= 0 else "GOOD")],
+        ["Active SIP", ctext(active_sip_text, active_sip_color), ctext(f"Need {kpi_fmt(_fmt_rs(allocation_output.get('goal_total_required'), False))}/mo", green), _tag(sip_tag)],
         ["Goals Funded", ctext(f"{funded_goals} of {total_goals}", funded_color), ctext(f"{total_goals} of {total_goals}", green), _tag(goals_tag)],
     ]
     profile = [
@@ -130,7 +141,7 @@ def build_page_snapshot(client_facts, allocation_output):
         {"label": "Annual Income (Gross)", "value": kpi_fmt(_fmt_rs(income.get("annualIncome"))), "note": f"{kpi_fmt(_fmt_rs(monthly_inc, False))}/month" if monthly_inc > 0 else ""},
         {"label": "Monthly Surplus", "value": kpi_fmt(_fmt_rs(monthly_surplus)), "note": f"Savings rate: {savings_rate:.0f}%" if savings_rate > 0 else ""},
         {"label": "Current Portfolio", "value": kpi_fmt(_fmt_rs(portfolio_val)) if portfolio_val > 0 else "—", "note": portfolio_note},
-        {"label": "Active SIP", "value": f"Rs.{active_sip_val:,.0f}/mo" if active_sip_val > 0 else "Rs.0", "note": f"Need {kpi_fmt(_fmt_rs(allocation_output.get('goal_total_required'), False))}/mo" if active_sip_val <= 0 else "On track", "note_color": "orange" if active_sip_val <= 0 else "green"},
+        {"label": "Active SIP", "value": f"Rs.{inr(active_sip_val)}/mo" if active_sip_val > 0 else "Rs.0", "note": sip_note, "note_color": "green" if sip_on_track else "orange"},
     ]
     current_vs_ideal = _styled_table(rows, [74, 56, 76, 104], style_type="light")
     profile_tbl = _styled_table(profile, [64, 96], header=False, style_type="light_right")

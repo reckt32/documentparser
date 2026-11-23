@@ -170,3 +170,24 @@ def test_in_band_equity_gets_positive_consistent_copy():
     assert "GOOD" in snapshot_text
     assert "70% equity is within the recommended 55-70% band" in executive_text
     assert "Equity allocation far outside your risk band" not in executive_text
+
+
+def test_inr_uses_indian_digit_grouping():
+    from backend.utils import inr
+
+    assert inr(999) == "999"
+    assert inr(123456) == "1,23,456"
+    assert inr(-12345678) == "-1,23,45,678"
+    assert inr(1234567.8, 2) == "12,34,567.80"
+    assert helpers._fmt_rs(2_500_000, False) == "Rs. 25,00,000"
+
+
+def test_large_sip_gap_is_not_reported_as_on_track():
+    facts = _facts()  # active SIP 8,500/mo
+    alloc = {**_allocation(), "goal_total_required": 60_000}
+    text = _paragraph_text(pages.snapshot.build_page_snapshot(facts, alloc))
+    assert "Active SIP | Rs.8,500/mo | Need Rs.60,000/mo | HIGH" in text
+
+    alloc = {**_allocation(), "goal_total_required": 8_500}
+    text = _paragraph_text(pages.snapshot.build_page_snapshot(facts, alloc))
+    assert "Active SIP | Rs.8,500/mo | Need Rs.8,500/mo | GOOD" in text
